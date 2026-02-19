@@ -3,6 +3,9 @@
 /retyc-*
 *.exe
 
+# Config
+/.retyc
+
 # Dependency cache
 vendor/
 
