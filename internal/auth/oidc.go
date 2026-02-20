@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/internal/ui"
 	"golang.org/x/oauth2"
 )
 
@@ -59,7 +60,11 @@ func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Cli
 
 	// Prompt the user to visit the verification URI
 	fmt.Printf("\nOpen the following URL in your browser:\n\n  %s\n\n", devResp.VerificationURIComplete)
-	fmt.Printf("Enter code: %s\n\nWaiting for authentication...\n", devResp.UserCode)
+	fmt.Printf("Enter code: %s\n\n", devResp.UserCode)
+
+	spinner := ui.New("Waiting for authentication…")
+	spinner.Start()
+	defer spinner.Stop()
 
 	// Step 2: poll the token endpoint
 	interval := time.Duration(devResp.Interval) * time.Second
@@ -72,13 +77,10 @@ func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Cli
 	}
 	deadline := time.Now().Add(time.Duration(expiresIn) * time.Second)
 
+	// Poll first, then wait: RFC 8628 requires waiting between *subsequent*
+	// requests, so the initial poll can happen immediately. This makes the
+	// response feel instantaneous when the user authenticates right away.
 	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(interval):
-		}
-
 		tok, err := pollToken(cfg, devResp.DeviceCode, httpClient)
 		if err != nil {
 			return nil, err
@@ -86,7 +88,13 @@ func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Cli
 		if tok != nil {
 			return tok, nil
 		}
-		// nil token means authorization_pending — keep polling
+
+		// authorization_pending — wait before next poll
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(interval):
+		}
 	}
 
 	return nil, fmt.Errorf("device code expired")
