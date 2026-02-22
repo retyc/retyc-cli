@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"text/tabwriter"
+	"time"
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/keyring"
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 	"golang.org/x/term"
@@ -424,6 +426,35 @@ var transferCreateCmd = &cobra.Command{
 	},
 }
 
+// newTransferBar creates a consistently styled progress bar for file transfers.
+// It is used for both uploads and downloads.
+func newTransferBar(name string, sizeBytes int64) *progressbar.ProgressBar {
+	const descWidth = 24
+	desc := name
+	if len(desc) > descWidth {
+		desc = desc[:descWidth-1] + "…"
+	}
+	return progressbar.NewOptions64(
+		sizeBytes,
+		progressbar.OptionSetDescription(fmt.Sprintf("  %-*s", descWidth, desc)),
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionSetWidth(28),
+		progressbar.OptionThrottle(100*time.Millisecond),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[green]=[reset]",
+			SaucerHead:    "[green]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+		progressbar.OptionOnCompletion(func() {
+			fmt.Fprintln(os.Stderr)
+		}),
+	)
+}
+
 // uploadTransferFile encrypts and uploads a single file in chunks to shareID.
 func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePath, sessionPubKey string) error {
 	f, err := os.Open(filePath)
@@ -458,6 +489,8 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 		return fmt.Errorf("registering file: %w", err)
 	}
 
+	bar := newTransferBar(name, info.Size())
+
 	// Read and encrypt the file in chunks, uploading each immediately.
 	buf := make([]byte, uploadChunkSize)
 	chunkID := 0
@@ -471,6 +504,7 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 			if uploadErr := client.UploadChunk(ctx, fileModel.ID, chunkID, encrypted); uploadErr != nil {
 				return fmt.Errorf("uploading chunk %d: %w", chunkID, uploadErr)
 			}
+			_ = bar.Add(n)
 			chunkID++
 		}
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
@@ -481,7 +515,7 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "  ✓ %s (%s, %d chunk(s))\n", name, formatSize(info.Size()), chunkID)
+	_ = bar.Finish()
 	return nil
 }
 
