@@ -190,17 +190,17 @@ var transferInfoCmd = &cobra.Command{
 
 		if identityStr == "" {
 			// Prompt passphrase without echo, then erase the prompt line.
-			fmt.Fprint(os.Stderr, "Passphrase: ")
+			fmt.Fprint(os.Stderr, "Key passphrase: ")
 			passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 			fmt.Fprint(os.Stderr, "\r\033[2K")
 			if err != nil {
-				return fmt.Errorf("reading passphrase: %w", err)
+				return fmt.Errorf("reading key passphrase: %w", err)
 			}
 
 			// Decrypt user's AGE private key (scrypt).
 			identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, string(passphraseBytes))
 			if err != nil {
-				return fmt.Errorf("wrong passphrase")
+				return fmt.Errorf("wrong key passphrase")
 			}
 
 			// Cache in the kernel keyring if enabled.
@@ -707,15 +707,15 @@ var transferDownloadCmd = &cobra.Command{
 				identityStr, _ = keyring.Load()
 			}
 			if identityStr == "" {
-				fmt.Fprint(os.Stderr, "Passphrase: ")
+				fmt.Fprint(os.Stderr, "Key passphrase: ")
 				pb, err := term.ReadPassword(int(os.Stdin.Fd()))
 				fmt.Fprint(os.Stderr, "\r\033[2K")
 				if err != nil {
-					return fmt.Errorf("reading passphrase: %w", err)
+					return fmt.Errorf("reading key passphrase: %w", err)
 				}
 				identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, string(pb))
 				if err != nil {
-					return fmt.Errorf("wrong passphrase")
+					return fmt.Errorf("wrong key passphrase")
 				}
 				if cfg.Keyring.Enabled {
 					if err := keyring.Store(identityStr, cfg.Keyring.TTL); err != nil {
