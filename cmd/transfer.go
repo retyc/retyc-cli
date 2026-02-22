@@ -11,6 +11,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/keyring"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 	"golang.org/x/term"
@@ -168,19 +169,39 @@ var transferInfoCmd = &cobra.Command{
 			return fmt.Errorf("no active encryption key found — set up your key in the web interface first")
 		}
 
-		// Prompt passphrase without echo, then erase the prompt line.
-		fmt.Fprint(os.Stderr, "Passphrase: ")
-		passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Fprint(os.Stderr, "\r\033[2K")
-		if err != nil {
-			return fmt.Errorf("reading passphrase: %w", err)
+		// Try the kernel keyring cache first (skippable via config).
+		var identityStr string
+		if cfg.Keyring.Enabled {
+			var err error
+			identityStr, err = keyring.Load()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: keyring load: %v\n", err)
+			}
 		}
 
-		// Decrypt user's AGE private key (scrypt).
-		identityStr, err := crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, string(passphraseBytes))
-		if err != nil {
-			return fmt.Errorf("wrong passphrase")
+		if identityStr == "" {
+			// Prompt passphrase without echo, then erase the prompt line.
+			fmt.Fprint(os.Stderr, "Passphrase: ")
+			passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprint(os.Stderr, "\r\033[2K")
+			if err != nil {
+				return fmt.Errorf("reading passphrase: %w", err)
+			}
+
+			// Decrypt user's AGE private key (scrypt).
+			identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, string(passphraseBytes))
+			if err != nil {
+				return fmt.Errorf("wrong passphrase")
+			}
+
+			// Cache in the kernel keyring if enabled.
+			if cfg.Keyring.Enabled {
+				if err := keyring.Store(identityStr, cfg.Keyring.TTL); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: keyring store: %v\n", err)
+				}
+			}
 		}
+
 		identity, err := crypto.ParseIdentity(identityStr)
 		if err != nil {
 			return fmt.Errorf("parsing AGE identity: %w", err)

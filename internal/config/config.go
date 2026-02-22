@@ -47,10 +47,17 @@ type APIConfig struct {
 	BaseURL string `yaml:"base_url" mapstructure:"base_url"`
 }
 
+// KeyringConfig controls the kernel keyring cache for the decrypted AGE identity.
+type KeyringConfig struct {
+	Enabled bool `yaml:"enabled" mapstructure:"enabled"`
+	TTL     int  `yaml:"ttl" mapstructure:"ttl"`
+}
+
 // Config is the top-level configuration structure.
 type Config struct {
-	OIDC OIDCConfig `yaml:"oidc" mapstructure:"oidc"`
-	API  APIConfig  `yaml:"api" mapstructure:"api"`
+	OIDC    OIDCConfig    `yaml:"oidc" mapstructure:"oidc"`
+	API     APIConfig     `yaml:"api" mapstructure:"api"`
+	Keyring KeyringConfig `yaml:"keyring" mapstructure:"keyring"`
 }
 
 // SetDefaults registers the default configuration values in viper.
@@ -65,6 +72,8 @@ func SetDefaults() {
 	viper.SetDefault("oidc.device_auth_url", realmBase+"/protocol/openid-connect/auth/device")
 	viper.SetDefault("oidc.token_url", realmBase+"/protocol/openid-connect/token")
 	viper.SetDefault("api.base_url", defaultAPIBaseURL)
+	viper.SetDefault("keyring.enabled", true)
+	viper.SetDefault("keyring.ttl", 60)
 }
 
 // Load reads the active viper configuration and returns a Config struct.
