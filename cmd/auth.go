@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/spf13/cobra"
@@ -28,7 +29,14 @@ var authLoginCmd = &cobra.Command{
 		}
 
 		ctx := context.Background()
-		token, err := auth.DeviceFlow(ctx, cfg.OIDC, newHTTPClient(insecure))
+		httpClient := newHTTPClient(insecure)
+
+		oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+		if err != nil {
+			return fmt.Errorf("fetching OIDC config: %w", err)
+		}
+
+		token, err := auth.DeviceFlow(ctx, *oidcCfg, httpClient)
 		if err != nil {
 			return fmt.Errorf("device flow: %w", err)
 		}
@@ -71,7 +79,14 @@ var authStatusCmd = &cobra.Command{
 		}
 
 		ctx := context.Background()
-		tok, err := auth.GetValidToken(ctx, cfg.OIDC, newHTTPClient(insecure))
+		httpClient := newHTTPClient(insecure)
+
+		oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+		if err != nil {
+			return fmt.Errorf("fetching OIDC config: %w", err)
+		}
+
+		tok, err := auth.GetValidToken(ctx, *oidcCfg, httpClient)
 		if err != nil {
 			switch {
 			case errors.Is(err, auth.ErrNoToken):

@@ -268,7 +268,14 @@ var transferInfoCmd = &cobra.Command{
 // mustGetToken retrieves a valid OAuth2 token, returning a user-friendly error
 // if authentication is missing or expired.
 func mustGetToken(ctx context.Context, cfg *config.Config) (*oauth2.Token, error) {
-	tok, err := auth.GetValidToken(ctx, cfg.OIDC, newHTTPClient(insecure))
+	httpClient := newHTTPClient(insecure)
+
+	oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("fetching OIDC config: %w", err)
+	}
+
+	tok, err := auth.GetValidToken(ctx, *oidcCfg, httpClient)
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrNoRefreshToken):

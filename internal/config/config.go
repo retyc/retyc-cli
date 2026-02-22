@@ -20,15 +20,6 @@ func ConfigDir() (string, error) {
 }
 
 const (
-	// defaultKeycloakBase is the base URL of the Keycloak instance.
-	defaultKeycloakBase = "https://keycloak.triplesfer.traefik.me"
-
-	// defaultRealm is the default Keycloak realm.
-	defaultRealm = "triplesfer"
-
-	// defaultClientID is the default OIDC client identifier.
-	defaultClientID = "device"
-
 	// defaultAPIBaseURL is the default base URL of the RETYC REST API.
 	defaultAPIBaseURL = "https://api.triplesfer.traefik.me"
 )
@@ -55,7 +46,6 @@ type KeyringConfig struct {
 
 // Config is the top-level configuration structure.
 type Config struct {
-	OIDC    OIDCConfig    `yaml:"oidc" mapstructure:"oidc"`
 	API     APIConfig     `yaml:"api" mapstructure:"api"`
 	Keyring KeyringConfig `yaml:"keyring" mapstructure:"keyring"`
 }
@@ -64,13 +54,6 @@ type Config struct {
 // Must be called before viper.ReadInConfig so that defaults are applied
 // when a key is absent from the config file.
 func SetDefaults() {
-	realmBase := defaultKeycloakBase + "/realms/" + defaultRealm
-
-	viper.SetDefault("oidc.issuer", realmBase)
-	viper.SetDefault("oidc.client_id", defaultClientID)
-	viper.SetDefault("oidc.scopes", []string{"openid", "profile", "email"})
-	viper.SetDefault("oidc.device_auth_url", realmBase+"/protocol/openid-connect/auth/device")
-	viper.SetDefault("oidc.token_url", realmBase+"/protocol/openid-connect/token")
 	viper.SetDefault("api.base_url", defaultAPIBaseURL)
 	viper.SetDefault("keyring.enabled", true)
 	viper.SetDefault("keyring.ttl", 60)
