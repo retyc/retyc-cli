@@ -1,6 +1,10 @@
 // Package crypto provides helpers for encrypting and decrypting data using AGE.
 // AGE (Actually Good Encryption) is a simple, modern file encryption tool.
 // See https://age-encryption.org for the specification.
+//
+// All keys use the post-quantum hybrid MLKEM768-X25519 scheme:
+//   - Private keys: AGE-SECRET-KEY-PQ-1… (HybridIdentity)
+//   - Public keys:  age1pq1…              (HybridRecipient)
 package crypto
 
 import (
@@ -13,29 +17,27 @@ import (
 	"filippo.io/age/armor"
 )
 
-// GenerateKeyPair creates a new X25519 AGE key pair and returns the recipient
-// (public key) and the identity (private key).
-func GenerateKeyPair() (*age.X25519Identity, error) {
-	identity, err := age.GenerateX25519Identity()
+// GenerateKeyPair generates a new post-quantum hybrid MLKEM768-X25519 key pair.
+func GenerateKeyPair() (*age.HybridIdentity, error) {
+	identity, err := age.GenerateHybridIdentity()
 	if err != nil {
 		return nil, fmt.Errorf("generating AGE identity: %w", err)
 	}
 	return identity, nil
 }
 
-// ParseIdentity parses an AGE private key from its string representation
-// (AGE-SECRET-KEY-1…).
-func ParseIdentity(privateKey string) (*age.X25519Identity, error) {
-	id, err := age.ParseX25519Identity(strings.TrimSpace(privateKey))
+// ParseIdentity parses a post-quantum AGE private key (AGE-SECRET-KEY-PQ-1…).
+func ParseIdentity(privateKey string) (*age.HybridIdentity, error) {
+	id, err := age.ParseHybridIdentity(strings.TrimSpace(privateKey))
 	if err != nil {
 		return nil, fmt.Errorf("parsing AGE identity: %w", err)
 	}
 	return id, nil
 }
 
-// ParseRecipient parses an AGE public key (age1…).
-func ParseRecipient(publicKey string) (*age.X25519Recipient, error) {
-	rec, err := age.ParseX25519Recipient(strings.TrimSpace(publicKey))
+// ParseRecipient parses a post-quantum AGE public key (age1pq1…).
+func ParseRecipient(publicKey string) (*age.HybridRecipient, error) {
+	rec, err := age.ParseHybridRecipient(strings.TrimSpace(publicKey))
 	if err != nil {
 		return nil, fmt.Errorf("parsing AGE recipient: %w", err)
 	}
@@ -72,12 +74,12 @@ func Decrypt(ciphertext string, identities ...age.Identity) ([]byte, error) {
 
 	r, err := age.Decrypt(armorReader, identities...)
 	if err != nil {
-		return nil, fmt.Errorf("creating AGE decryptor: %w", err)
+		return nil, fmt.Errorf("decrypting: %w", err)
 	}
 
 	plaintext, err := io.ReadAll(r)
 	if err != nil {
-		return nil, fmt.Errorf("decrypting data: %w", err)
+		return nil, fmt.Errorf("reading decrypted data: %w", err)
 	}
 	return plaintext, nil
 }
@@ -90,6 +92,25 @@ func EncryptToString(value string, recipients ...age.Recipient) (string, error) 
 // DecryptToString is a convenience wrapper that decrypts to a string value.
 func DecryptToString(ciphertext string, identities ...age.Identity) (string, error) {
 	b, err := Decrypt(ciphertext, identities...)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// DecryptWithPassphrase decrypts an armored AGE ciphertext that was encrypted
+// with a passphrase (scrypt recipient).
+func DecryptWithPassphrase(ciphertext string, passphrase string) ([]byte, error) {
+	identity, err := age.NewScryptIdentity(passphrase)
+	if err != nil {
+		return nil, fmt.Errorf("creating scrypt identity: %w", err)
+	}
+	return Decrypt(ciphertext, identity)
+}
+
+// DecryptToStringWithPassphrase is a convenience wrapper for passphrase-based decryption.
+func DecryptToStringWithPassphrase(ciphertext string, passphrase string) (string, error) {
+	b, err := DecryptWithPassphrase(ciphertext, passphrase)
 	if err != nil {
 		return "", err
 	}
