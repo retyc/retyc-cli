@@ -117,6 +117,19 @@ func DecryptToStringWithPassphrase(ciphertext string, passphrase string) (string
 	return string(b), nil
 }
 
+// DecryptBinary decrypts raw (non-armored) binary AGE data using the provided identities.
+func DecryptBinary(data []byte, identities ...age.Identity) ([]byte, error) {
+	r, err := age.Decrypt(bytes.NewReader(data), identities...)
+	if err != nil {
+		return nil, fmt.Errorf("decrypting: %w", err)
+	}
+	plaintext, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("reading decrypted data: %w", err)
+	}
+	return plaintext, nil
+}
+
 // EncryptStringForKeys encrypts value as armored AGE for the given list of public keys.
 func EncryptStringForKeys(value string, publicKeys []string) (string, error) {
 	recipients := make([]age.Recipient, 0, len(publicKeys))

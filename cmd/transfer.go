@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"bufio"
+	cryptorand "crypto/rand"
 	"mime"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"filippo.io/age"
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
@@ -644,6 +646,257 @@ var transferEnableCmd = &cobra.Command{
 	},
 }
 
+var transferDownloadCmd = &cobra.Command{
+	Use:   "download <transfer_id>",
+	Short: "Download and decrypt a transfer",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		shareID := args[0]
+		outputDir, _ := cmd.Flags().GetString("output")
+		yes, _ := cmd.Flags().GetBool("yes")
+
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		ctx := context.Background()
+		tok, err := mustGetToken(ctx, cfg)
+		if err != nil {
+			return err
+		}
+
+		client := api.New(cfg.API.BaseURL, tok, insecure)
+
+		// Fetch transfer details and user key in parallel.
+		type detailsResult struct {
+			v   *api.TransferDetails
+			err error
+		}
+		type keyResult struct {
+			v   *api.UserKey
+			err error
+		}
+		detailsCh := make(chan detailsResult, 1)
+		keyCh := make(chan keyResult, 1)
+		go func() { v, err := client.GetTransferDetails(ctx, shareID); detailsCh <- detailsResult{v, err} }()
+		go func() { v, err := client.GetActiveKey(ctx); keyCh <- keyResult{v, err} }()
+
+		dr := <-detailsCh
+		if dr.err != nil {
+			return fmt.Errorf("fetching transfer: %w", dr.err)
+		}
+		details := dr.v
+
+		kr := <-keyCh
+		if kr.err != nil {
+			return fmt.Errorf("fetching encryption key: %w", kr.err)
+		}
+		userKey := kr.v
+
+		if details.SessionPrivateKeyEnc == nil && details.SessionPrivateKeyEncForPassphrase == nil {
+			return fmt.Errorf("transfer not yet completed — no encrypted content available")
+		}
+
+		// Resolve session private key: try user key path first, then transfer passphrase.
+		var identityStr string
+
+		if userKey != nil && details.SessionPrivateKeyEnc != nil {
+			// Try keyring cache first.
+			if cfg.Keyring.Enabled {
+				identityStr, _ = keyring.Load()
+			}
+			if identityStr == "" {
+				fmt.Fprint(os.Stderr, "Passphrase: ")
+				pb, err := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Fprint(os.Stderr, "\r\033[2K")
+				if err != nil {
+					return fmt.Errorf("reading passphrase: %w", err)
+				}
+				identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, string(pb))
+				if err != nil {
+					return fmt.Errorf("wrong passphrase")
+				}
+				if cfg.Keyring.Enabled {
+					if err := keyring.Store(identityStr, cfg.Keyring.TTL); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: keyring store: %v\n", err)
+					}
+				}
+			}
+			identity, err := crypto.ParseIdentity(identityStr)
+			if err != nil {
+				return fmt.Errorf("parsing identity: %w", err)
+			}
+			sessionPrivKey, err := crypto.DecryptToString(*details.SessionPrivateKeyEnc, identity)
+			if err != nil {
+				return fmt.Errorf("decrypting session key (key mismatch?): %w", err)
+			}
+			identityStr = sessionPrivKey
+		} else {
+			// Ephemeral path: use transfer passphrase.
+			if details.EphemeralPrivateKeyEnc == nil || details.SessionPrivateKeyEncForPassphrase == nil {
+				return fmt.Errorf("no decryption path available — neither user key nor passphrase data found")
+			}
+			fmt.Fprint(os.Stderr, "Transfer passphrase: ")
+			pb, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprint(os.Stderr, "\r\033[2K")
+			if err != nil {
+				return fmt.Errorf("reading passphrase: %w", err)
+			}
+			ephemeralPrivKey, err := crypto.DecryptToStringWithPassphrase(*details.EphemeralPrivateKeyEnc, string(pb))
+			if err != nil {
+				return fmt.Errorf("wrong transfer passphrase")
+			}
+			ephemeralIdentity, err := crypto.ParseIdentity(ephemeralPrivKey)
+			if err != nil {
+				return fmt.Errorf("parsing ephemeral identity: %w", err)
+			}
+			sessionPrivKey, err := crypto.DecryptToString(*details.SessionPrivateKeyEncForPassphrase, ephemeralIdentity)
+			if err != nil {
+				return fmt.Errorf("decrypting session key: %w", err)
+			}
+			identityStr = sessionPrivKey
+		}
+
+		sessionIdentity, err := crypto.ParseIdentity(identityStr)
+		if err != nil {
+			return fmt.Errorf("parsing session identity: %w", err)
+		}
+
+		// Fetch all files (paginate).
+		var allFiles []api.TransferFile
+		for page := 1; ; page++ {
+			p, err := client.ListFiles(ctx, shareID, page)
+			if err != nil {
+				return fmt.Errorf("listing files: %w", err)
+			}
+			allFiles = append(allFiles, p.Items...)
+			if page >= p.Pages {
+				break
+			}
+		}
+		if len(allFiles) == 0 {
+			return fmt.Errorf("no files in this transfer")
+		}
+
+		// Decrypt file names up front (needed for conflict check and confirmation).
+		type decryptedFile struct {
+			api.TransferFile
+			name string
+		}
+		decFiles := make([]decryptedFile, 0, len(allFiles))
+		var totalSize int64
+		for _, f := range allFiles {
+			name, err := crypto.DecryptToString(f.NameEnc, sessionIdentity)
+			if err != nil {
+				name = f.ID // fallback
+			}
+			decFiles = append(decFiles, decryptedFile{f, name})
+			totalSize += f.OriginalSize
+		}
+
+		// Determine destination directory.
+		if outputDir == "" {
+			outputDir = "transfer-" + randomLetters(8)
+		}
+
+		// Fail-fast: if destination exists, check for file name conflicts.
+		if _, err := os.Stat(outputDir); err == nil {
+			for _, f := range decFiles {
+				dest := filepath.Join(outputDir, f.name)
+				if _, err := os.Stat(dest); err == nil {
+					return fmt.Errorf("file already exists: %s", dest)
+				}
+			}
+		}
+
+		// Confirmation prompt (skip with --yes / -y).
+		if !yes {
+			const lineWidth = 44
+			fmt.Fprintln(os.Stderr)
+			for _, f := range decFiles {
+				name := f.name
+				if len(name) > lineWidth-10 {
+					name = name[:lineWidth-13] + "…"
+				}
+				fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, name, formatSize(f.OriginalSize))
+			}
+			fmt.Fprintf(os.Stderr, "  %s\n", strings.Repeat("─", lineWidth))
+			noun := "file"
+			if len(decFiles) > 1 {
+				noun = "files"
+			}
+			fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, fmt.Sprintf("%d %s", len(decFiles), noun), formatSize(totalSize))
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprintf(os.Stderr, "  Destination:  %s/\n", outputDir)
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprint(os.Stderr, "Proceed? [y/N] ")
+			answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			fmt.Fprintln(os.Stderr)
+			if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+				fmt.Fprintln(os.Stderr, "Aborted.")
+				return nil
+			}
+		}
+
+		// Create destination directory.
+		if err := os.MkdirAll(outputDir, 0700); err != nil {
+			return fmt.Errorf("creating destination directory: %w", err)
+		}
+
+		// Download and decrypt each file.
+		for _, f := range decFiles {
+			if err := downloadTransferFile(ctx, client, outputDir, f.TransferFile, f.name, sessionIdentity); err != nil {
+				return fmt.Errorf("%s: %w", f.name, err)
+			}
+		}
+
+		fmt.Fprintf(os.Stderr, "\nDownloaded to %s/\n", outputDir)
+		return nil
+	},
+}
+
+// downloadTransferFile downloads all chunks of a file, decrypts them, and writes to disk.
+func downloadTransferFile(ctx context.Context, client *api.Client, outputDir string, f api.TransferFile, name string, identity *age.HybridIdentity) error {
+	dest := filepath.Join(outputDir, name)
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	bar := newTransferBar(name, f.OriginalSize)
+
+	for chunkID := 0; chunkID < f.ChunkCount; chunkID++ {
+		encrypted, err := client.DownloadChunk(ctx, f.ID, chunkID)
+		if err != nil {
+			return fmt.Errorf("downloading chunk %d: %w", chunkID, err)
+		}
+		plaintext, err := crypto.DecryptBinary(encrypted, identity)
+		if err != nil {
+			return fmt.Errorf("decrypting chunk %d: %w", chunkID, err)
+		}
+		if _, err := out.Write(plaintext); err != nil {
+			return fmt.Errorf("writing chunk %d: %w", chunkID, err)
+		}
+		_ = bar.Add(len(plaintext))
+	}
+
+	_ = bar.Finish()
+	return nil
+}
+
+// randomLetters returns a string of n random lowercase ASCII letters.
+func randomLetters(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyz"
+	b := make([]byte, n)
+	_, _ = cryptorand.Read(b)
+	for i, c := range b {
+		b[i] = letters[int(c)%len(letters)]
+	}
+	return string(b)
+}
+
 func init() {
 	transferLsCmd.Flags().Bool("sent", false, "List sent transfers (default)")
 	transferLsCmd.Flags().Bool("received", false, "List received transfers")
@@ -654,9 +907,13 @@ func init() {
 	transferCreateCmd.Flags().String("passphrase", "", "Transfer passphrase for recipient access (prompted if omitted)")
 	transferCreateCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 
+	transferDownloadCmd.Flags().StringP("output", "o", "", "Destination directory (default: transfer-<random>)")
+	transferDownloadCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
+
 	transferCmd.AddCommand(transferLsCmd)
 	transferCmd.AddCommand(transferInfoCmd)
 	transferCmd.AddCommand(transferCreateCmd)
+	transferCmd.AddCommand(transferDownloadCmd)
 	transferCmd.AddCommand(transferDisableCmd)
 	transferCmd.AddCommand(transferEnableCmd)
 	rootCmd.AddCommand(transferCmd)

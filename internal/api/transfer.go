@@ -59,19 +59,22 @@ type TransferRecipient struct {
 
 // TransferDetails is the full view of a transfer returned by GET /share/{id}/details.
 type TransferDetails struct {
-	ID                   *string             `json:"id"`
-	Title                *string             `json:"title"`
-	Status               TransferStatus      `json:"status"`
-	CreatedAt            *time.Time          `json:"created_at"`
-	EnabledAt            *time.Time          `json:"enabled_at"`
-	ExpiresAt            *time.Time          `json:"expires_at"`
-	DisabledAt           *time.Time          `json:"disabled_at"`
-	Slug                 string              `json:"slug"`
-	UsePassphrase        bool                `json:"use_passphrase"`
-	MessageEnc           *string             `json:"message_enc"`
-	SessionPrivateKeyEnc *string             `json:"session_private_key_enc"`
-	SessionPublicKey     *string             `json:"session_public_key"`
-	Recipients           []TransferRecipient `json:"recipients"`
+	ID                              *string             `json:"id"`
+	Title                           *string             `json:"title"`
+	Status                          TransferStatus      `json:"status"`
+	CreatedAt                       *time.Time          `json:"created_at"`
+	EnabledAt                       *time.Time          `json:"enabled_at"`
+	ExpiresAt                       *time.Time          `json:"expires_at"`
+	DisabledAt                      *time.Time          `json:"disabled_at"`
+	Slug                            string              `json:"slug"`
+	UsePassphrase                   bool                `json:"use_passphrase"`
+	MessageEnc                      *string             `json:"message_enc"`
+	SessionPrivateKeyEnc            *string             `json:"session_private_key_enc"`
+	SessionPublicKey                *string             `json:"session_public_key"`
+	EphemeralPrivateKeyEnc          *string             `json:"ephemeral_private_key_enc"`
+	EphemeralPublicKey              *string             `json:"ephemeral_public_key"`
+	SessionPrivateKeyEncForPassphrase *string           `json:"session_private_key_enc_for_passphrase"`
+	Recipients                      []TransferRecipient `json:"recipients"`
 }
 
 // TransferFile is a single encrypted file within a transfer.
@@ -175,6 +178,12 @@ func (c *Client) CreateFile(ctx context.Context, shareID, nameEnc, typeEnc strin
 func (c *Client) UploadChunk(ctx context.Context, fileID string, chunkID int, data []byte) error {
 	path := fmt.Sprintf("/file/%s/%d", fileID, chunkID)
 	return c.PostMultipartChunk(ctx, path, data)
+}
+
+// DownloadChunk downloads a single encrypted file chunk (raw binary AGE).
+func (c *Client) DownloadChunk(ctx context.Context, fileID string, chunkID int) ([]byte, error) {
+	path := fmt.Sprintf("/file/%s/%d", fileID, chunkID)
+	return c.GetBytes(ctx, path)
 }
 
 // CompleteTransfer finalizes a transfer after all files have been uploaded.

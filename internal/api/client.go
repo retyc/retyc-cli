@@ -110,6 +110,24 @@ func (c *Client) Delete(ctx context.Context, path string) error {
 	return c.do(req, nil)
 }
 
+// GetBytes performs an authenticated GET and returns the raw response body.
+func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+	return io.ReadAll(resp.Body)
+}
+
 // do executes the request and decodes the response body into dst (if non-nil).
 // It returns an error for non-2xx status codes.
 func (c *Client) do(req *http.Request, dst any) error {
