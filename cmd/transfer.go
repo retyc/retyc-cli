@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"bufio"
 	"mime"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -309,6 +311,59 @@ var transferCreateCmd = &cobra.Command{
 		expire, _ := cmd.Flags().GetInt("expire")
 		message, _ := cmd.Flags().GetString("message")
 		passphrase, _ := cmd.Flags().GetString("passphrase")
+		yes, _ := cmd.Flags().GetBool("yes")
+
+		// Stat all files up front — needed for the summary and to fail early.
+		type fileEntry struct {
+			path string
+			name string
+			size int64
+		}
+		entries := make([]fileEntry, 0, len(args))
+		var totalSize int64
+		for _, p := range args {
+			info, err := os.Stat(p)
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return fmt.Errorf("%s: directories are not supported", p)
+			}
+			entries = append(entries, fileEntry{p, info.Name(), info.Size()})
+			totalSize += info.Size()
+		}
+
+		// Confirmation prompt (skip with --yes / -y).
+		if !yes {
+			const lineWidth = 44
+			fmt.Fprintln(os.Stderr)
+			for _, e := range entries {
+				name := e.name
+				if len(name) > lineWidth-10 {
+					name = name[:lineWidth-13] + "…"
+				}
+				fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, name, formatSize(e.size))
+			}
+			fmt.Fprintf(os.Stderr, "  %s\n", strings.Repeat("─", lineWidth))
+			noun := "file"
+			if len(entries) > 1 {
+				noun = "files"
+			}
+			fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, fmt.Sprintf("%d %s", len(entries), noun), formatSize(totalSize))
+			fmt.Fprintln(os.Stderr)
+			if title != "" {
+				fmt.Fprintf(os.Stderr, "  Title:    %s\n", title)
+			}
+			fmt.Fprintf(os.Stderr, "  Expires:  %s\n", formatExpiry(expire))
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprint(os.Stderr, "Proceed? [y/N] ")
+			answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			fmt.Fprintln(os.Stderr)
+			if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+				fmt.Fprintln(os.Stderr, "Aborted.")
+				return nil
+			}
+		}
 
 		cfg, err := config.Load()
 		if err != nil {
@@ -392,9 +447,9 @@ var transferCreateCmd = &cobra.Command{
 		}
 
 		// Upload each file.
-		for _, filePath := range args {
-			if err := uploadTransferFile(ctx, client, share.ID, filePath, sessionPubKey); err != nil {
-				return fmt.Errorf("%s: %w", filePath, err)
+		for _, e := range entries {
+			if err := uploadTransferFile(ctx, client, share.ID, e.path, sessionPubKey); err != nil {
+				return fmt.Errorf("%s: %w", e.name, err)
 			}
 		}
 
@@ -424,6 +479,20 @@ var transferCreateCmd = &cobra.Command{
 		fmt.Printf("Transfer %s ready.\n", share.ID)
 		return nil
 	},
+}
+
+// formatExpiry returns a human-readable description of an expiry duration in seconds.
+func formatExpiry(seconds int) string {
+	if seconds == 0 {
+		return "never"
+	}
+	if seconds < 3600 {
+		return fmt.Sprintf("in %dm", seconds/60)
+	}
+	if seconds < 86400 {
+		return fmt.Sprintf("in %dh", seconds/3600)
+	}
+	return fmt.Sprintf("in %dd", seconds/86400)
 }
 
 // newTransferBar creates a consistently styled progress bar for file transfers.
@@ -583,6 +652,7 @@ func init() {
 	transferCreateCmd.Flags().Int("expire", 3600, "Expiration in seconds (0 = no expiration)")
 	transferCreateCmd.Flags().String("message", "", "Optional message to include")
 	transferCreateCmd.Flags().String("passphrase", "", "Transfer passphrase for recipient access (prompted if omitted)")
+	transferCreateCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 
 	transferCmd.AddCommand(transferLsCmd)
 	transferCmd.AddCommand(transferInfoCmd)
