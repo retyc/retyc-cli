@@ -116,3 +116,52 @@ func DecryptToStringWithPassphrase(ciphertext string, passphrase string) (string
 	}
 	return string(b), nil
 }
+
+// EncryptStringForKeys encrypts value as armored AGE for the given list of public keys.
+func EncryptStringForKeys(value string, publicKeys []string) (string, error) {
+	recipients := make([]age.Recipient, 0, len(publicKeys))
+	for _, pk := range publicKeys {
+		if pk == "" {
+			continue
+		}
+		rec, err := ParseRecipient(pk)
+		if err != nil {
+			return "", fmt.Errorf("invalid public key %q: %w", pk, err)
+		}
+		recipients = append(recipients, rec)
+	}
+	if len(recipients) == 0 {
+		return "", fmt.Errorf("no valid recipients")
+	}
+	return EncryptToString(value, recipients...)
+}
+
+// EncryptBinaryForKey encrypts plaintext as raw (non-armored) binary AGE using publicKey.
+// Binary format (no armor) is required for file chunk uploads.
+func EncryptBinaryForKey(plaintext []byte, publicKey string) ([]byte, error) {
+	rec, err := ParseRecipient(publicKey)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	w, err := age.Encrypt(&buf, rec)
+	if err != nil {
+		return nil, fmt.Errorf("creating AGE encryptor: %w", err)
+	}
+	if _, err := w.Write(plaintext); err != nil {
+		return nil, fmt.Errorf("encrypting data: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("finalizing encryption: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// EncryptWithPassphrase encrypts plaintext as armored AGE with a scrypt (passphrase) recipient.
+func EncryptWithPassphrase(plaintext []byte, passphrase string) (string, error) {
+	recipient, err := age.NewScryptRecipient(passphrase)
+	if err != nil {
+		return "", fmt.Errorf("creating scrypt recipient: %w", err)
+	}
+	return Encrypt(plaintext, recipient)
+}

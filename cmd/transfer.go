@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 
 	"github.com/retyc/retyc-cli/internal/api"
@@ -292,11 +295,207 @@ func formatSize(bytes int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
+// uploadChunkSize is the size of each file chunk for upload (matches the frontend default).
+const uploadChunkSize = 50 * 1024 * 1024 // 50 MB
+
+var transferCreateCmd = &cobra.Command{
+	Use:   "create [flags] file...",
+	Short: "Create and upload a new transfer",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		title, _ := cmd.Flags().GetString("title")
+		expire, _ := cmd.Flags().GetInt("expire")
+		message, _ := cmd.Flags().GetString("message")
+		passphrase, _ := cmd.Flags().GetString("passphrase")
+
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		ctx := context.Background()
+		tok, err := mustGetToken(ctx, cfg)
+		if err != nil {
+			return err
+		}
+
+		client := api.New(cfg.API.BaseURL, tok, insecure)
+
+		// Prompt for transfer passphrase if not given as a flag.
+		if passphrase == "" {
+			fmt.Fprint(os.Stderr, "Transfer passphrase: ")
+			pb, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprint(os.Stderr, "\r\033[2K")
+			if err != nil {
+				return fmt.Errorf("reading passphrase: %w", err)
+			}
+			passphrase = string(pb)
+		}
+		if passphrase == "" {
+			return fmt.Errorf("transfer passphrase is required")
+		}
+
+		// Fetch the user's own public key so recipients of transfer info can decrypt it later.
+		userKey, err := client.GetActiveKey(ctx)
+		if err != nil {
+			return fmt.Errorf("fetching encryption key: %w", err)
+		}
+		if userKey == nil {
+			return fmt.Errorf("no active encryption key — set up your key in the web interface first")
+		}
+
+		// Create the share on the server.
+		var titlePtr *string
+		if title != "" {
+			titlePtr = &title
+		}
+		share, err := client.CreateShare(ctx, expire, titlePtr, true)
+		if err != nil {
+			return fmt.Errorf("creating transfer: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Transfer %s created, uploading…\n", share.ID)
+
+		// Generate session keypair — used to encrypt file content and metadata.
+		sessionIdentity, err := crypto.GenerateKeyPair()
+		if err != nil {
+			return fmt.Errorf("generating session key: %w", err)
+		}
+		sessionPrivKey := sessionIdentity.String()
+		sessionPubKey := sessionIdentity.Recipient().String()
+
+		// Encrypt session private key for the user's own key (enables transfer info).
+		sessionPrivKeyEnc, err := crypto.EncryptStringForKeys(sessionPrivKey, []string{userKey.PublicKey})
+		if err != nil {
+			return fmt.Errorf("encrypting session key: %w", err)
+		}
+
+		// Generate an ephemeral keypair for passphrase-based recipient access.
+		ephemeralIdentity, err := crypto.GenerateKeyPair()
+		if err != nil {
+			return fmt.Errorf("generating ephemeral key: %w", err)
+		}
+		ephemeralPrivKey := ephemeralIdentity.String()
+		ephemeralPubKey := ephemeralIdentity.Recipient().String()
+
+		// Encrypt the ephemeral private key with the transfer passphrase (scrypt).
+		ephemeralPrivKeyEnc, err := crypto.EncryptWithPassphrase([]byte(ephemeralPrivKey), passphrase)
+		if err != nil {
+			return fmt.Errorf("encrypting ephemeral key: %w", err)
+		}
+
+		// Encrypt session private key for the ephemeral public key (passphrase access path).
+		sessionPrivKeyEncForPassphrase, err := crypto.EncryptStringForKeys(sessionPrivKey, []string{ephemeralPubKey})
+		if err != nil {
+			return fmt.Errorf("encrypting session key for passphrase access: %w", err)
+		}
+
+		// Upload each file.
+		for _, filePath := range args {
+			if err := uploadTransferFile(ctx, client, share.ID, filePath, sessionPubKey); err != nil {
+				return fmt.Errorf("%s: %w", filePath, err)
+			}
+		}
+
+		// Encrypt message if provided.
+		var messageEnc *string
+		if message != "" {
+			enc, err := crypto.EncryptStringForKeys(message, []string{sessionPubKey})
+			if err != nil {
+				return fmt.Errorf("encrypting message: %w", err)
+			}
+			messageEnc = &enc
+		}
+
+		// Complete the transfer.
+		req := api.CompleteTransferRequest{
+			SessionPrivateKeyEnc:              sessionPrivKeyEnc,
+			SessionPublicKey:                  sessionPubKey,
+			EphemeralPrivateKeyEnc:            &ephemeralPrivKeyEnc,
+			EphemeralPublicKey:                &ephemeralPubKey,
+			SessionPrivateKeyEncForPassphrase: &sessionPrivKeyEncForPassphrase,
+			MessageEnc:                        messageEnc,
+		}
+		if err := client.CompleteTransfer(ctx, share.ID, req); err != nil {
+			return fmt.Errorf("completing transfer: %w", err)
+		}
+
+		fmt.Printf("Transfer %s ready.\n", share.ID)
+		return nil
+	},
+}
+
+// uploadTransferFile encrypts and uploads a single file in chunks to shareID.
+func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePath, sessionPubKey string) error {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+
+	name := filepath.Base(filePath)
+	mimeType := mime.TypeByExtension(filepath.Ext(filePath))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	// Encrypt file metadata (name and MIME type) with the session public key.
+	nameEnc, err := crypto.EncryptStringForKeys(name, []string{sessionPubKey})
+	if err != nil {
+		return fmt.Errorf("encrypting filename: %w", err)
+	}
+	typeEnc, err := crypto.EncryptStringForKeys(mimeType, []string{sessionPubKey})
+	if err != nil {
+		return fmt.Errorf("encrypting MIME type: %w", err)
+	}
+
+	fileModel, err := client.CreateFile(ctx, shareID, nameEnc, typeEnc, info.Size())
+	if err != nil {
+		return fmt.Errorf("registering file: %w", err)
+	}
+
+	// Read and encrypt the file in chunks, uploading each immediately.
+	buf := make([]byte, uploadChunkSize)
+	chunkID := 0
+	for {
+		n, err := io.ReadFull(f, buf)
+		if n > 0 {
+			encrypted, encErr := crypto.EncryptBinaryForKey(buf[:n], sessionPubKey)
+			if encErr != nil {
+				return fmt.Errorf("encrypting chunk %d: %w", chunkID, encErr)
+			}
+			if uploadErr := client.UploadChunk(ctx, fileModel.ID, chunkID, encrypted); uploadErr != nil {
+				return fmt.Errorf("uploading chunk %d: %w", chunkID, uploadErr)
+			}
+			chunkID++
+		}
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("reading file: %w", err)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "  ✓ %s (%s, %d chunk(s))\n", name, formatSize(info.Size()), chunkID)
+	return nil
+}
+
 func init() {
 	transferLsCmd.Flags().Bool("sent", false, "List sent transfers (default)")
 	transferLsCmd.Flags().Bool("received", false, "List received transfers")
 
+	transferCreateCmd.Flags().String("title", "", "Title of the transfer")
+	transferCreateCmd.Flags().Int("expire", 3600, "Expiration in seconds (0 = no expiration)")
+	transferCreateCmd.Flags().String("message", "", "Optional message to include")
+	transferCreateCmd.Flags().String("passphrase", "", "Transfer passphrase for recipient access (prompted if omitted)")
+
 	transferCmd.AddCommand(transferLsCmd)
 	transferCmd.AddCommand(transferInfoCmd)
+	transferCmd.AddCommand(transferCreateCmd)
 	rootCmd.AddCommand(transferCmd)
 }

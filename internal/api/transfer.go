@@ -2,7 +2,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -108,4 +110,78 @@ func (c *Client) ListFiles(ctx context.Context, shareID string, page int) (*Tran
 		return nil, err
 	}
 	return &result, nil
+}
+
+// ShareCreateResponse is the response from POST /share.
+type ShareCreateResponse struct {
+	ID   string `json:"id"`
+	Slug string `json:"slug"`
+}
+
+// FileModel is the response from POST /share/{id}/file.
+type FileModel struct {
+	ID         string `json:"id"`
+	ChunkCount int    `json:"chunk_count"`
+}
+
+// CompleteTransferRequest is the body for PUT /share/{id}/complete.
+type CompleteTransferRequest struct {
+	SessionPrivateKeyEnc              string  `json:"session_private_key_enc"`
+	SessionPublicKey                  string  `json:"session_public_key"`
+	EphemeralPrivateKeyEnc            *string `json:"ephemeral_private_key_enc,omitempty"`
+	EphemeralPublicKey                *string `json:"ephemeral_public_key,omitempty"`
+	SessionPrivateKeyEncForPassphrase *string `json:"session_private_key_enc_for_passphrase,omitempty"`
+	MessageEnc                        *string `json:"message_enc,omitempty"`
+}
+
+// CreateShare creates a new transfer on the server.
+func (c *Client) CreateShare(ctx context.Context, expires int, title *string, usePassphrase bool) (*ShareCreateResponse, error) {
+	body := map[string]any{
+		"emails":         []string{},
+		"expires":        expires,
+		"title":          title,
+		"use_passphrase": usePassphrase,
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	var result ShareCreateResponse
+	if err := c.Post(ctx, "/share", bytes.NewReader(data), &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// CreateFile registers an encrypted file within a transfer and returns its metadata.
+func (c *Client) CreateFile(ctx context.Context, shareID, nameEnc, typeEnc string, originalSize int64) (*FileModel, error) {
+	body := map[string]any{
+		"name_enc":      nameEnc,
+		"type_enc":      typeEnc,
+		"original_size": originalSize,
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	var result FileModel
+	if err := c.Post(ctx, "/share/"+shareID+"/file", bytes.NewReader(data), &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// UploadChunk uploads a single encrypted file chunk (binary AGE, multipart/form-data).
+func (c *Client) UploadChunk(ctx context.Context, fileID string, chunkID int, data []byte) error {
+	path := fmt.Sprintf("/file/%s/%d", fileID, chunkID)
+	return c.PostMultipartChunk(ctx, path, data)
+}
+
+// CompleteTransfer finalizes a transfer after all files have been uploaded.
+func (c *Client) CompleteTransfer(ctx context.Context, shareID string, req CompleteTransferRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	return c.Put(ctx, "/share/"+shareID+"/complete", bytes.NewReader(data), nil)
 }

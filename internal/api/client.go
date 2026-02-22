@@ -2,11 +2,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"time"
 
@@ -62,6 +64,41 @@ func (c *Client) Post(ctx context.Context, path string, body io.Reader, dst any)
 	req.Header.Set("Accept", "application/json")
 
 	return c.do(req, dst)
+}
+
+// Put performs an authenticated PUT request with a JSON body and decodes the response.
+func (c *Client) Put(ctx context.Context, path string, body io.Reader, dst any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+path, body)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "application/json")
+	return c.do(req, dst)
+}
+
+// PostMultipartChunk uploads binary data as multipart/form-data with field "upload_file".
+func (c *Client) PostMultipartChunk(ctx context.Context, path string, data []byte) error {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, err := mw.CreateFormFile("upload_file", "chunk.age")
+	if err != nil {
+		return fmt.Errorf("creating multipart field: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return fmt.Errorf("writing chunk data: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return fmt.Errorf("closing multipart writer: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	return c.do(req, nil)
 }
 
 // Delete performs an authenticated DELETE request.
