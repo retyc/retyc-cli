@@ -1,6 +1,7 @@
 # Build output
 /retyc
 /retyc-*
+/main
 *.exe
 
 # Config
