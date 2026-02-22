@@ -485,6 +485,62 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 	return nil
 }
 
+var transferDisableCmd = &cobra.Command{
+	Use:   "disable <transfer_id>",
+	Short: "Disable a transfer",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		shareID := args[0]
+
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		ctx := context.Background()
+		tok, err := mustGetToken(ctx, cfg)
+		if err != nil {
+			return err
+		}
+
+		client := api.New(cfg.API.BaseURL, tok, insecure)
+		if err := client.DisableTransfer(ctx, shareID); err != nil {
+			return fmt.Errorf("disabling transfer: %w", err)
+		}
+
+		fmt.Printf("Transfer %s disabled.\n", shareID)
+		return nil
+	},
+}
+
+var transferEnableCmd = &cobra.Command{
+	Use:   "enable <transfer_id>",
+	Short: "Re-enable a disabled transfer",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		shareID := args[0]
+
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		ctx := context.Background()
+		tok, err := mustGetToken(ctx, cfg)
+		if err != nil {
+			return err
+		}
+
+		client := api.New(cfg.API.BaseURL, tok, insecure)
+		if err := client.EnableTransfer(ctx, shareID); err != nil {
+			return fmt.Errorf("enabling transfer: %w", err)
+		}
+
+		fmt.Printf("Transfer %s enabled.\n", shareID)
+		return nil
+	},
+}
+
 func init() {
 	transferLsCmd.Flags().Bool("sent", false, "List sent transfers (default)")
 	transferLsCmd.Flags().Bool("received", false, "List received transfers")
@@ -497,5 +553,7 @@ func init() {
 	transferCmd.AddCommand(transferLsCmd)
 	transferCmd.AddCommand(transferInfoCmd)
 	transferCmd.AddCommand(transferCreateCmd)
+	transferCmd.AddCommand(transferDisableCmd)
+	transferCmd.AddCommand(transferEnableCmd)
 	rootCmd.AddCommand(transferCmd)
 }

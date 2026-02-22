@@ -185,3 +185,13 @@ func (c *Client) CompleteTransfer(ctx context.Context, shareID string, req Compl
 	}
 	return c.Put(ctx, "/share/"+shareID+"/complete", bytes.NewReader(data), nil)
 }
+
+// DisableTransfer disables (soft-deletes) a transfer by its ID.
+func (c *Client) DisableTransfer(ctx context.Context, shareID string) error {
+	return c.Delete(ctx, "/share/"+shareID)
+}
+
+// EnableTransfer re-enables a previously disabled transfer.
+func (c *Client) EnableTransfer(ctx context.Context, shareID string) error {
+	return c.Put(ctx, "/share/"+shareID+"/re-enable", nil, nil)
+}
