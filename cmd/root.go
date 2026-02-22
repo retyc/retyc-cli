@@ -18,9 +18,11 @@ var (
 
 // rootCmd is the base command when called without any subcommands.
 var rootCmd = &cobra.Command{
-	Use:   "retyc",
-	Short: "RETYC CLI",
-	Long:  `RETYC command-line interface for interacting with the RETYC platform.`,
+	Use:           "retyc",
+	Short:         "RETYC CLI",
+	Long:          `RETYC command-line interface for interacting with the RETYC platform.`,
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 // Execute runs the root command and exits on error.
