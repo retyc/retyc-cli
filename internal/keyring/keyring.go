@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package keyring caches the decrypted AGE identity in the Linux kernel session keyring.
 // The key lives only in kernel memory, is shared across all processes in the same
 // terminal session, and is automatically wiped after TTL seconds.
