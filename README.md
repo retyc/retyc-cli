@@ -93,10 +93,10 @@ api:
 
 | Feature | Status |
 |---|---|
-| Create | ❌ |
-| Info | ❌ |
-| List (inbox / sent) | ❌ |
-| Download | ❌ |
+| Create | ✅ |
+| Info | ✅ |
+| List (inbox / sent) | ✅ |
+| Download | ✅ |
 
 ### Dataroom
 
