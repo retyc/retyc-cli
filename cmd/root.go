@@ -14,6 +14,7 @@ import (
 var (
 	cfgFile  string
 	insecure bool
+	debug    bool
 )
 
 // rootCmd is the base command when called without any subcommands.
@@ -45,6 +46,7 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: "+defaultCfgHint+")")
 	rootCmd.PersistentFlags().BoolVarP(&insecure, "insecure", "k", false, "skip TLS certificate verification (useful for self-signed certificates)")
+	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "print raw API responses to stderr")
 }
 
 // initConfig reads the configuration file and environment variables.

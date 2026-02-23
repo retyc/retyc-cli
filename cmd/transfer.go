@@ -58,7 +58,7 @@ var transferLsCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure)
+		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
 		result, err := client.ListTransfers(ctx, listType, 1)
 		if err != nil {
 			return fmt.Errorf("listing transfers: %w", err)
@@ -111,7 +111,7 @@ var transferInfoCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure)
+		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
 
 		// Fetch transfer details and user key in parallel.
 		type detailsResult struct {
@@ -271,7 +271,7 @@ var transferInfoCmd = &cobra.Command{
 // mustGetToken retrieves a valid OAuth2 token, returning a user-friendly error
 // if authentication is missing or expired.
 func mustGetToken(ctx context.Context, cfg *config.Config) (*oauth2.Token, error) {
-	httpClient := newHTTPClient(insecure)
+	httpClient := newHTTPClient(insecure, debug)
 
 	oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
 	if err != nil {
@@ -388,7 +388,7 @@ var transferCreateCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure)
+		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
 
 		// Prompt for transfer passphrase if not given as a flag.
 		if passphrase == "" {
@@ -628,7 +628,7 @@ var transferDisableCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure)
+		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
 		if err := client.DisableTransfer(ctx, shareID); err != nil {
 			return fmt.Errorf("disabling transfer: %w", err)
 		}
@@ -656,7 +656,7 @@ var transferEnableCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure)
+		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
 		if err := client.EnableTransfer(ctx, shareID); err != nil {
 			return fmt.Errorf("enabling transfer: %w", err)
 		}
@@ -686,7 +686,7 @@ var transferDownloadCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure)
+		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
 
 		// Fetch transfer details and user key in parallel.
 		type detailsResult struct {

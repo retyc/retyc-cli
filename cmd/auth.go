@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/retyc/retyc-cli/internal/api"
@@ -29,7 +33,7 @@ var authLoginCmd = &cobra.Command{
 		}
 
 		ctx := context.Background()
-		httpClient := newHTTPClient(insecure)
+		httpClient := newHTTPClient(insecure, debug)
 
 		oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
 		if err != nil {
@@ -79,7 +83,7 @@ var authStatusCmd = &cobra.Command{
 		}
 
 		ctx := context.Background()
-		httpClient := newHTTPClient(insecure)
+		httpClient := newHTTPClient(insecure, debug)
 
 		oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
 		if err != nil {
@@ -109,19 +113,55 @@ var authStatusCmd = &cobra.Command{
 	},
 }
 
-// newHTTPClient returns an HTTP client configured according to the insecure flag.
+// newHTTPClient returns an HTTP client configured according to the insecure and debug flags.
 // When insecure is true, TLS certificate verification is disabled to allow
 // connections to servers using self-signed certificates.
-func newHTTPClient(insecure bool) *http.Client {
+// When debug is true, all requests and responses are printed to stderr.
+func newHTTPClient(insecure, debug bool) *http.Client {
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: insecure, // #nosec G402 — intentional, controlled by --insecure flag
 	}
-	return &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: tlsCfg,
-		},
+	var transport http.RoundTripper = &http.Transport{TLSClientConfig: tlsCfg}
+	if debug {
+		transport = &debugTransport{wrapped: transport}
 	}
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
+	}
+}
+
+// debugTransport is an http.RoundTripper that logs requests and responses to stderr.
+type debugTransport struct {
+	wrapped http.RoundTripper
+}
+
+func (t *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	fmt.Fprintf(os.Stderr, "> %s %s\n", req.Method, req.URL)
+
+	resp, err := t.wrapped.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "< %s\n", resp.Status)
+	if len(body) > 0 {
+		var buf bytes.Buffer
+		if json.Indent(&buf, body, "  ", "  ") == nil {
+			fmt.Fprintf(os.Stderr, "  %s\n", buf.String())
+		} else {
+			fmt.Fprintf(os.Stderr, "  (%d bytes, binary)\n", len(body))
+		}
+	}
+
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
 }
 
 func init() {
