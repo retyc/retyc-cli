@@ -318,6 +318,9 @@ const uploadChunkSize = 8 * 1024 * 1024 // 8 MB
 // uploadConcurrency is the number of chunks uploaded simultaneously per file.
 const uploadConcurrency = 4
 
+// downloadConcurrency is the number of chunks downloaded simultaneously per file.
+const downloadConcurrency = 4
+
 var transferCreateCmd = &cobra.Command{
 	Use:   "create [flags] file...",
 	Short: "Create and upload a new transfer",
@@ -936,7 +939,12 @@ var transferDownloadCmd = &cobra.Command{
 	},
 }
 
-// downloadTransferFile downloads all chunks of a file, decrypts them, and writes to disk.
+// downloadTransferFile downloads all chunks of a file in parallel, decrypts them,
+// and writes them to disk in the correct order.
+//
+// Workers download and decrypt concurrently. A reorder buffer holds chunks that
+// arrive ahead of the next expected write position, so disk writes always happen
+// sequentially (chunk 0 → 1 → 2 → …) regardless of network arrival order.
 func downloadTransferFile(ctx context.Context, client *api.Client, outputDir string, f api.TransferFile, name string, identity *age.HybridIdentity) error {
 	dest := filepath.Join(outputDir, name)
 	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
@@ -947,19 +955,90 @@ func downloadTransferFile(ctx context.Context, client *api.Client, outputDir str
 
 	bar := newTransferBar(name, f.OriginalSize)
 
-	for chunkID := 0; chunkID < f.ChunkCount; chunkID++ {
-		encrypted, err := client.DownloadChunk(ctx, f.ID, chunkID)
-		if err != nil {
-			return fmt.Errorf("downloading chunk %d: %w", chunkID, err)
+	type chunkResult struct {
+		id   int
+		data []byte
+		err  error
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	concurrency := downloadConcurrency
+	if f.ChunkCount < concurrency {
+		concurrency = f.ChunkCount
+	}
+
+	jobs := make(chan int, concurrency)
+	results := make(chan chunkResult, concurrency*2)
+
+	// Workers: download + decrypt concurrently.
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range jobs {
+				encrypted, err := client.DownloadChunk(ctx, f.ID, id)
+				if err != nil {
+					results <- chunkResult{id: id, err: fmt.Errorf("downloading chunk %d: %w", id, err)}
+					return
+				}
+				plaintext, err := crypto.DecryptBinary(encrypted, identity)
+				if err != nil {
+					results <- chunkResult{id: id, err: fmt.Errorf("decrypting chunk %d: %w", id, err)}
+					return
+				}
+				results <- chunkResult{id: id, data: plaintext}
+			}
+		}()
+	}
+
+	// Feed chunk IDs to workers; stop early if context is cancelled.
+	go func() {
+		defer close(jobs)
+		for i := 0; i < f.ChunkCount; i++ {
+			select {
+			case jobs <- i:
+			case <-ctx.Done():
+				return
+			}
 		}
-		plaintext, err := crypto.DecryptBinary(encrypted, identity)
-		if err != nil {
-			return fmt.Errorf("decrypting chunk %d: %w", chunkID, err)
+	}()
+
+	// Close results once all workers have exited.
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Reorder buffer: chunks may arrive out of order; only write when the next
+	// expected chunk is available so the file is always composed correctly.
+	reorder := make(map[int][]byte)
+	nextWrite := 0
+
+	for r := range results {
+		if r.err != nil {
+			cancel()
+			for range results {} // drain so workers can unblock and exit
+			return r.err
 		}
-		if _, err := out.Write(plaintext); err != nil {
-			return fmt.Errorf("writing chunk %d: %w", chunkID, err)
+		reorder[r.id] = r.data
+
+		for {
+			data, ok := reorder[nextWrite]
+			if !ok {
+				break
+			}
+			if _, err := out.Write(data); err != nil {
+				cancel()
+				for range results {}
+				return fmt.Errorf("writing chunk %d: %w", nextWrite, err)
+			}
+			_ = bar.Add(len(data))
+			delete(reorder, nextWrite)
+			nextWrite++
 		}
-		_ = bar.Add(len(plaintext))
 	}
 
 	_ = bar.Finish()
