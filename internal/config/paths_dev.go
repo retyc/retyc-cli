@@ -12,6 +12,9 @@ import "os"
 // BuildMode identifies the active build configuration.
 const BuildMode = "dev"
 
+// defaultAPIBaseURL is the default REST API base URL for development builds.
+const defaultAPIBaseURL = "https://api.triplesfer.traefik.me"
+
 // configDir returns the config directory for development builds.
 func configDir() (string, error) {
 	if dir := os.Getenv("RETYC_CONFIG_DIR"); dir != "" {

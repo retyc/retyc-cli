@@ -19,11 +19,6 @@ func ConfigDir() (string, error) {
 	return configDir()
 }
 
-const (
-	// defaultAPIBaseURL is the default base URL of the RETYC REST API.
-	defaultAPIBaseURL = "https://api.triplesfer.traefik.me"
-)
-
 // OIDCConfig holds the parameters needed to perform an OIDC device flow.
 type OIDCConfig struct {
 	Issuer        string   `yaml:"issuer" mapstructure:"issuer"`

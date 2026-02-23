@@ -15,6 +15,9 @@ import (
 // BuildMode identifies the active build configuration.
 const BuildMode = "prod"
 
+// defaultAPIBaseURL is the default REST API base URL for production builds.
+const defaultAPIBaseURL = "https://api.retyc.com"
+
 // configDir returns the config directory for production builds.
 func configDir() (string, error) {
 	if dir := os.Getenv("RETYC_CONFIG_DIR"); dir != "" {
