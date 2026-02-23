@@ -31,10 +31,10 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./...
 
       - name: Build (dev)
-        run: go build ./...
+        run: CGO_ENABLED=0 go build ./...
 
       - name: Build (prod)
-        run: go build -tags prod ./...
+        run: CGO_ENABLED=0 go build -tags prod ./...
 
   release:
     name: Release
@@ -53,17 +53,28 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build release binary
+      - name: Build release binaries
         run: |
-          go build -tags prod \
-            -ldflags "-X github.com/retyc/retyc-cli/cmd.Version=${{ github.ref_name }}" \
-            -o retyc \
-            .
+          LDFLAGS="-s -w -X github.com/retyc/retyc-cli/cmd.Version=${{ github.ref_name }}"
+          TARGETS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 freebsd/amd64 freebsd/arm64 openbsd/amd64 netbsd/amd64"
+          mkdir dist
+          for TARGET in $TARGETS; do
+            GOOS=${TARGET%/*}
+            GOARCH=${TARGET#*/}
+            OUT="dist/retyc-${GOOS}-${GOARCH}"
+            [ "$GOOS" = "windows" ] && OUT="${OUT}.exe"
+            echo "Building $OUT…"
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build \
+              -tags prod \
+              -ldflags "$LDFLAGS" \
+              -o "$OUT" \
+              .
+          done
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create ${{ github.ref_name }} retyc \
+          gh release create ${{ github.ref_name }} dist/* \
             --title "${{ github.ref_name }}" \
             --generate-notes
