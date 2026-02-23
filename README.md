@@ -68,14 +68,8 @@ Override at any time with the `RETYC_CONFIG_DIR` environment variable.
 Create `config.yaml` in your config directory to override defaults:
 
 ```yaml
-oidc:
-  issuer:          https://keycloak.triplesfer.traefik.me/realms/triplesfer
-  client_id:       device
-  device_auth_url: https://keycloak.triplesfer.traefik.me/realms/triplesfer/protocol/openid-connect/auth/device
-  token_url:       https://keycloak.triplesfer.traefik.me/realms/triplesfer/protocol/openid-connect/token
-
 api:
-  base_url: https://api.triplesfer.traefik.me
+  base_url: https://retyc-api.dev
 ```
 
 ### Global flags
