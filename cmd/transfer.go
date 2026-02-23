@@ -1,16 +1,17 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
 	"io"
-	"bufio"
-	cryptorand "crypto/rand"
 	"mime"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -311,8 +312,11 @@ func formatSize(bytes int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
-// uploadChunkSize is the size of each file chunk for upload (matches the frontend default).
-const uploadChunkSize = 50 * 1024 * 1024 // 50 MB
+// uploadChunkSize is the size of each plaintext chunk before encryption.
+const uploadChunkSize = 8 * 1024 * 1024 // 8 MB
+
+// uploadConcurrency is the number of chunks uploaded simultaneously per file.
+const uploadConcurrency = 4
 
 var transferCreateCmd = &cobra.Command{
 	Use:   "create [flags] file...",
@@ -547,6 +551,11 @@ func newTransferBar(name string, sizeBytes int64) *progressbar.ProgressBar {
 }
 
 // uploadTransferFile encrypts and uploads a single file in chunks to shareID.
+//
+// The main goroutine reads and encrypts chunks sequentially (sequential disk reads
+// are optimal). Each encrypted chunk is immediately dispatched to its own upload
+// goroutine. A semaphore limits the number of in-flight uploads to uploadConcurrency,
+// keeping multiple HTTP connections busy in parallel.
 func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePath, sessionPubKey string) error {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -582,28 +591,79 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 
 	bar := newTransferBar(name, info.Size())
 
-	// Read and encrypt the file in chunks, uploading each immediately.
+	// sem limits the number of concurrent upload goroutines.
+	sem := make(chan struct{}, uploadConcurrency)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+
+	setErr := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		mu.Unlock()
+	}
+	hasErr := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return firstErr != nil
+	}
+
 	buf := make([]byte, uploadChunkSize)
-	chunkID := 0
-	for {
-		n, err := io.ReadFull(f, buf)
+	for chunkID := 0; ; chunkID++ {
+		// Stop reading if an upload has already failed.
+		if hasErr() {
+			break
+		}
+
+		n, readErr := io.ReadFull(f, buf)
 		if n > 0 {
 			encrypted, encErr := crypto.EncryptBinaryForKey(buf[:n], sessionPubKey)
 			if encErr != nil {
-				return fmt.Errorf("encrypting chunk %d: %w", chunkID, encErr)
+				setErr(fmt.Errorf("encrypting chunk %d: %w", chunkID, encErr))
+				break
 			}
-			if uploadErr := client.UploadChunk(ctx, fileModel.ID, chunkID, encrypted); uploadErr != nil {
-				return fmt.Errorf("uploading chunk %d: %w", chunkID, uploadErr)
+
+			// Acquire a semaphore slot — blocks when uploadConcurrency uploads are in flight.
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				setErr(ctx.Err())
+				break
 			}
-			_ = bar.Add(n)
-			chunkID++
+			if hasErr() {
+				break
+			}
+
+			id, enc, sz := chunkID, encrypted, n
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				if err := client.UploadChunk(ctx, fileModel.ID, id, enc); err != nil {
+					setErr(fmt.Errorf("uploading chunk %d: %w", id, err))
+					return
+				}
+				_ = bar.Add(sz)
+			}()
 		}
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
+
+		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
 			break
 		}
-		if err != nil {
-			return fmt.Errorf("reading file: %w", err)
+		if readErr != nil {
+			setErr(fmt.Errorf("reading file: %w", readErr))
+			break
 		}
+	}
+
+	wg.Wait()
+
+	if firstErr != nil {
+		return firstErr
 	}
 
 	_ = bar.Finish()
