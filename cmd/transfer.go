@@ -156,6 +156,9 @@ var transferInfoCmd = &cobra.Command{
 		if details.ExpiresAt != nil {
 			fmt.Printf("Expires: %s\n", details.ExpiresAt.Format("2006-01-02 15:04"))
 		}
+		if details.WebURL != "" {
+			fmt.Printf("URL:     %s\n", details.WebURL)
+		}
 
 		if len(details.Recipients) > 0 {
 			fmt.Println("\nRecipients:")
@@ -485,7 +488,17 @@ var transferCreateCmd = &cobra.Command{
 			return fmt.Errorf("completing transfer: %w", err)
 		}
 
+		details, err := client.GetTransferDetails(ctx, share.ID)
+		if err != nil {
+			// Non-fatal: the transfer is complete even if we can't fetch the URL.
+			fmt.Printf("Transfer %s ready.\n", share.ID)
+			return nil
+		}
+
 		fmt.Printf("Transfer %s ready.\n", share.ID)
+		if details.WebURL != "" {
+			fmt.Printf("URL: %s\n", details.WebURL)
+		}
 		return nil
 	},
 }

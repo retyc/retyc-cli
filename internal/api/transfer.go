@@ -59,22 +59,23 @@ type TransferRecipient struct {
 
 // TransferDetails is the full view of a transfer returned by GET /share/{id}/details.
 type TransferDetails struct {
-	ID                              *string             `json:"id"`
-	Title                           *string             `json:"title"`
-	Status                          TransferStatus      `json:"status"`
-	CreatedAt                       *time.Time          `json:"created_at"`
-	EnabledAt                       *time.Time          `json:"enabled_at"`
-	ExpiresAt                       *time.Time          `json:"expires_at"`
-	DisabledAt                      *time.Time          `json:"disabled_at"`
-	Slug                            string              `json:"slug"`
-	UsePassphrase                   bool                `json:"use_passphrase"`
-	MessageEnc                      *string             `json:"message_enc"`
-	SessionPrivateKeyEnc            *string             `json:"session_private_key_enc"`
-	SessionPublicKey                *string             `json:"session_public_key"`
-	EphemeralPrivateKeyEnc          *string             `json:"ephemeral_private_key_enc"`
-	EphemeralPublicKey              *string             `json:"ephemeral_public_key"`
-	SessionPrivateKeyEncForPassphrase *string           `json:"session_private_key_enc_for_passphrase"`
-	Recipients                      []TransferRecipient `json:"recipients"`
+	ID                                *string             `json:"id"`
+	Title                             *string             `json:"title"`
+	Status                            TransferStatus      `json:"status"`
+	CreatedAt                         *time.Time          `json:"created_at"`
+	EnabledAt                         *time.Time          `json:"enabled_at"`
+	ExpiresAt                         *time.Time          `json:"expires_at"`
+	DisabledAt                        *time.Time          `json:"disabled_at"`
+	Slug                              string              `json:"slug"`
+	WebURL                            string              `json:"web_url"`
+	UsePassphrase                     bool                `json:"use_passphrase"`
+	MessageEnc                        *string             `json:"message_enc"`
+	SessionPrivateKeyEnc              *string             `json:"session_private_key_enc"`
+	SessionPublicKey                  *string             `json:"session_public_key"`
+	EphemeralPrivateKeyEnc            *string             `json:"ephemeral_private_key_enc"`
+	EphemeralPublicKey                *string             `json:"ephemeral_public_key"`
+	SessionPrivateKeyEncForPassphrase *string             `json:"session_private_key_enc_for_passphrase"`
+	Recipients                        []TransferRecipient `json:"recipients"`
 }
 
 // TransferFile is a single encrypted file within a transfer.
