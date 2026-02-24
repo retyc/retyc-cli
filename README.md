@@ -1,75 +1,119 @@
 # retyc-cli
 
-> Official command-line interface for the [RETYC](https://retyc.com) platform — manage transfers, datarooms and your organization directly from your terminal.
+> Official command-line interface for [RETYC](https://retyc.com) - send and manage file transfers directly from your terminal.
 
 [![CI](https://github.com/retyc/retyc-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/retyc/retyc-cli/actions/workflows/ci.yml)
-![Go](https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white)
-![Status](https://img.shields.io/badge/status-experimental-orange)
+[![Go](https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Release](https://img.shields.io/github/v/release/retyc/retyc-cli)](https://github.com/retyc/retyc-cli/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+![demo](.media/demo.gif)
 
 ---
 
-> [WARNING]
-> **Experimental — pre-release software.**
-> `retyc-cli` is under active development. APIs, configuration formats and command interfaces may change without notice until the first stable release (`v1.0.0`). Do not use in production.
+## What is RETYC?
+
+[RETYC](https://retyc.com) is a European sovereign file-sharing platform with end-to-end post-quantum encryption. Data stays in Europe, GDPR-compliant by design.
+
+`retyc-cli` lets you integrate RETYC transfers into your scripts, pipelines and workflows - no browser required.
 
 ---
-
-## Overview
-
-`retyc-cli` lets you interact with the [RETYC](https://retyc.com) platform from your terminal. It authenticates via **OIDC device flow** (no password stored), communicates with the RETYC REST API, and stores credentials securely using **AGE encryption**.
-
-## Requirements
-
-- Go 1.24+ (for building from source)
-- A RETYC account — [retyc.com](https://retyc.com)
 
 ## Installation
 
+### Pre-compiled binaries (recommended)
+
+Download the binary for your platform from the [latest release](https://github.com/retyc/retyc-cli/releases/latest):
+
+```sh
+# Linux (amd64)
+curl -L https://github.com/retyc/retyc-cli/releases/latest/download/retyc_linux_amd64 -o retyc
+chmod +x retyc
+sudo mv retyc /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -L https://github.com/retyc/retyc-cli/releases/latest/download/retyc_darwin_arm64 -o retyc
+chmod +x retyc
+sudo mv retyc /usr/local/bin/
+```
+
+### With `go install`
+
+```sh
+go install -tags prod github.com/retyc/retyc-cli@latest
+```
+
 ### From source
 
-```bash
+```sh
 git clone https://github.com/retyc/retyc-cli.git
 cd retyc-cli
 go build -tags prod -ldflags "-X github.com/retyc/retyc-cli/cmd.Version=$(git describe --tags --always)" -o retyc .
 ```
 
-### With `go install`
-
-```bash
-go install -tags prod github.com/retyc/retyc-cli@latest
-```
+---
 
 ## Quick start
 
-```bash
-# Authenticate — opens a browser URL and waits
+```sh
+# 1. Authenticate (opens a browser tab, no password stored)
 retyc auth login
 
-# Check authentication status (silently refreshes an expired token)
-retyc auth status
+# 2. Send a file
+retyc transfer create report.pdf
 
-# Sign out
-retyc auth logout
+# 3. List your transfers
+retyc transfer ls
+
+# 4. Download a transfer
+retyc transfer download <transfer-id>
 ```
+
+---
+
+## Commands
+
+### Auth
+
+| Command | Description |
+|---|---|
+| `retyc auth login` | Authenticate via OIDC device flow |
+| `retyc auth status` | Check authentication status (silently refreshes token) |
+| `retyc auth logout` | Sign out |
+
+### Transfer
+
+| Command | Description |
+|---|---|
+| `retyc transfer create <file>` | Create and send a new transfer |
+| `retyc transfer info <id>` | Get transfer details |
+| `retyc transfer ls` | List sent and received transfers |
+| `retyc transfer download <id>` | Download a transfer |
+| `retyc transfer enable <id>` | Enable a transfer |
+| `retyc transfer disable <id>` | Disable a transfer |
+
+---
 
 ## Configuration
 
-The CLI looks for a configuration file and stores credentials in a platform-specific directory.
+Credentials and config are stored in a platform-specific directory:
 
 | Build | Config directory |
 |---|---|
 | Production (`-tags prod`) | `~/.config/retyc/` (XDG Base Dir) |
 | Development (default) | `.retyc/` in the current directory |
 
-Override at any time with the `RETYC_CONFIG_DIR` environment variable.
+Override at any time:
 
-### Config file
+```sh
+export RETYC_CONFIG_DIR=/path/to/config
+```
 
-Create `config.yaml` in your config directory to override defaults:
+Create `config.yaml` to override defaults:
 
 ```yaml
 api:
-  base_url: https://retyc-api.dev
+  base_url: https://api.retyc.com
 ```
 
 ### Global flags
@@ -77,63 +121,60 @@ api:
 | Flag | Short | Description |
 |---|---|---|
 | `--config <file>` | | Use a specific config file |
-| `--insecure` | `-k` | Skip TLS certificate verification (self-signed certs) |
+| `--insecure` | `-k` | Skip TLS certificate verification |
+| `--debug` | | Enable debug mode |
+
+---
+
+## Security
+
+- **Authentication**: OIDC device flow - no password ever stored locally
+- **File data + metadata**: end to end encrypted with [AGE](https://github.com/FiloSottile/age) post-quantum hybrid keys
+- **Private key caching** (Linux only): the decrypted AGE identity in the kernel session keyring (never written to disk). It is scoped to the current terminal session, isolated from other users and sessions, and automatically wiped after a configurable TTL (default: 60sec).
+- **Transport**: TLS enforced by default
+
+---
 
 ## Roadmap
 
-### Auth
-
-| Feature | Status |
-|---|---|
-| Login via OIDC device flow | ✅ |
-| Logout | ✅ |
-| Silent token refresh | ✅ |
-
 ### Transfer
-
 | Feature | Status |
 |---|---|
 | Create | ✅ |
 | Info | ✅ |
 | List (inbox / sent) | ✅ |
 | Download | ✅ |
+| Enable/Disable | ✅ |
 
 ### Dataroom
-
 | Feature | Status |
 |---|---|
-| Create | ❌ |
-| Info | ❌ |
-| List | ❌ |
-| User management (add, delete, grants) | ❌ |
-| Delete | ❌ |
-| File management (CRUD + versions) | ❌ |
+| Create / Info / List | 🔜 |
+| User management | 🔜 |
+| File management (CRUD + versions) | 🔜 |
 
 ### Organization
-
 | Feature | Status |
 |---|---|
-| User management (invitations, delete, grants) | ❌ |
+| User management (invitations, roles) | 🔜 |
 
-### Misc
-
-| Feature | Status |
-|---|---|
-| API / Auth status | ❌ |
+---
 
 ## Development
 
-```bash
-# Run in dev mode (config stored in .retyc/ of the current directory)
+```sh
+# Run in dev mode
 go run . --help
 
 # Run tests
 go test -race ./...
 
-# Production build with version
+# Production build
 go build -tags prod -ldflags "-X github.com/retyc/retyc-cli/cmd.Version=v0.1.0" -o retyc .
 ```
 
+---
+
 ## License
 
-See [LICENSE](./LICENSE).
+[MIT](LICENSE) - © RETYC / TripleStack SAS
