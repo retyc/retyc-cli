@@ -1,0 +1,16 @@
+---
+
+services:
+  retyc-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: dev
+    volumes:
+      - retyc-config:/home/retyc/.config/retyc
+    stdin_open: true
+    tty: true
+
+volumes:
+  retyc-config:
