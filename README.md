@@ -39,6 +39,12 @@ cd retyc-cli
 go build -tags prod -ldflags "-X github.com/retyc/retyc-cli/cmd.Version=$(git describe --tags --always)" -o retyc .
 ```
 
+### With Docker
+
+```sh
+docker pull ghcr.io/retyc/retyc-cli:latest
+```
+
 ---
 
 ## Quick start
@@ -79,6 +85,25 @@ retyc transfer download <transfer-id>
 | `retyc transfer download <id>` | Download a transfer |
 | `retyc transfer enable <id>` | Enable a transfer |
 | `retyc transfer disable <id>` | Disable a transfer |
+
+---
+
+## Docker
+
+Config and tokens are persisted in a named volume. The `-it` flags are required for interactive prompts (device flow, passphrase).
+
+```sh
+# Authenticate
+docker run -it --rm -v retyc-config:/home/retyc/.config/retyc ghcr.io/retyc/retyc-cli:latest auth login
+
+# Send / list / download (mount current directory for file access)
+docker run -it --rm \
+  -v retyc-config:/home/retyc/.config/retyc \
+  -v "$(pwd)":/data \
+  ghcr.io/retyc/retyc-cli:latest transfer create /data/report.pdf
+```
+
+> **Tip:** `alias retyc='docker run -it --rm -v retyc-config:/home/retyc/.config/retyc -v "$(pwd)":/data ghcr.io/retyc/retyc-cli:latest'`
 
 ---
 
