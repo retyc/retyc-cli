@@ -42,6 +42,9 @@ go build -tags prod -ldflags "-X github.com/retyc/retyc-cli/cmd.Version=$(git de
 ### With Docker
 
 ```sh
+# Docker Hub
+docker pull retyc/retyc-cli:latest
+# GitHub Container Registry
 docker pull ghcr.io/retyc/retyc-cli:latest
 ```
 
@@ -94,16 +97,16 @@ Config and tokens are persisted in a named volume. The `-it` flags are required 
 
 ```sh
 # Authenticate
-docker run -it --rm -v retyc-config:/home/retyc/.config/retyc ghcr.io/retyc/retyc-cli:latest auth login
+docker run -it --rm -v retyc-config:/home/retyc/.config/retyc retyc/retyc-cli:latest auth login
 
 # Send / list / download (mount current directory for file access)
 docker run -it --rm \
   -v retyc-config:/home/retyc/.config/retyc \
   -v "$(pwd)":/data \
-  ghcr.io/retyc/retyc-cli:latest transfer create /data/report.pdf
+  retyc/retyc-cli:latest transfer create /data/report.pdf
 ```
 
-> **Tip:** `alias retyc='docker run -it --rm -v retyc-config:/home/retyc/.config/retyc -v "$(pwd)":/data ghcr.io/retyc/retyc-cli:latest'`
+> **Tip:** `alias retyc='docker run -it --rm -v retyc-config:/home/retyc/.config/retyc -v "$(pwd)":/data retyc/retyc-cli:latest'`
 
 ---
 
