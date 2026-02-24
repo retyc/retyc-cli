@@ -1,0 +1,23 @@
+---
+
+services:
+  retyc-cli:
+    extends:
+      file: compose.yaml
+      service: retyc-cli
+    configs:
+      - source: retyc-local-config
+        target: /home/retyc/.config/retyc/config.yaml
+    extra_hosts:
+      - "api.triplesfer.traefik.me:host-gateway"
+      - "auth.triplesfer.traefik.me:host-gateway"
+
+configs:
+  retyc-local-config:
+    content: |
+      ---
+      api:
+        base_url: https://api.triplesfer.traefik.me
+
+volumes:
+  retyc-config:
