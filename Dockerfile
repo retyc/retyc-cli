@@ -26,6 +26,10 @@ COPY --from=builder --chown=1000:1000 /home/retyc /home/retyc
 COPY --from=builder /retyc /retyc
 
 USER 1000:1000
+ENV HOME=/home/retyc \
+    XDG_CONFIG_HOME=/home/retyc/.config \
+    XDG_CACHE_HOME=/home/retyc/.cache \
+    XDG_DATA_HOME=/home/retyc/.local/share
 
 VOLUME ["/home/retyc/.config/retyc"]
 
