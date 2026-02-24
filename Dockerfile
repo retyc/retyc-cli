@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 go build \
     -ldflags "-s -w -X github.com/retyc/retyc-cli/cmd.Version=${VERSION}" \
     -o /retyc .
 
-RUN useradd -u 1000 -m retyc && \
+RUN useradd --no-log-init -u 1000 -U -m retyc && \
     mkdir -p /home/retyc/.config/retyc
 
 # ---
@@ -21,10 +21,15 @@ FROM scratch
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /etc/passwd /etc/passwd
+COPY --from=builder /etc/group /etc/group
 COPY --from=builder --chown=1000:1000 /home/retyc /home/retyc
 COPY --from=builder /retyc /retyc
 
-USER retyc
+USER 1000:1000
+ENV HOME=/home/retyc \
+    XDG_CONFIG_HOME=/home/retyc/.config \
+    XDG_CACHE_HOME=/home/retyc/.cache \
+    XDG_DATA_HOME=/home/retyc/.local/share
 
 VOLUME ["/home/retyc/.config/retyc"]
 
