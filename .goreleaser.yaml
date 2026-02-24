@@ -1,0 +1,45 @@
+version: 2
+
+project_name: retyc
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - main: .
+    binary: retyc
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -tags=prod
+    ldflags:
+      - -s -w -X github.com/retyc/retyc-cli/cmd.Version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+      - openbsd
+      - netbsd
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+      - goos: openbsd
+        goarch: arm64
+      - goos: netbsd
+        goarch: arm64
+
+archives:
+  - formats: [binary]
+    name_template: "retyc-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: '{{ .ProjectName }}_sha256_checksums.txt'
+  algorithm: sha256
+
+changelog:
+  use: github-native

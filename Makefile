@@ -27,7 +27,12 @@ vet:
 ## Remove built binary
 clean:
 	rm -f $(BINARY)
+	rm -fr ./dist
 
 ## Install prod binary to GOBIN (defaults to ~/go/bin)
 install:
 	go install -tags prod -ldflags "$(LDFLAGS)" .
+
+## Simple local release
+goreleaser:
+	goreleaser release --snapshot --clean

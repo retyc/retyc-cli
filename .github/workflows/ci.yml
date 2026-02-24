@@ -46,6 +46,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -53,28 +55,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build release binaries
-        run: |
-          LDFLAGS="-s -w -X github.com/retyc/retyc-cli/cmd.Version=${{ github.ref_name }}"
-          TARGETS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 freebsd/amd64 freebsd/arm64 openbsd/amd64 netbsd/amd64"
-          mkdir dist
-          for TARGET in $TARGETS; do
-            GOOS=${TARGET%/*}
-            GOARCH=${TARGET#*/}
-            OUT="dist/retyc-${GOOS}-${GOARCH}"
-            [ "$GOOS" = "windows" ] && OUT="${OUT}.exe"
-            echo "Building $OUT…"
-            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build \
-              -tags prod \
-              -ldflags "$LDFLAGS" \
-              -o "$OUT" \
-              .
-          done
-
-      - name: Create GitHub Release
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create ${{ github.ref_name }} dist/* \
-            --title "${{ github.ref_name }}" \
-            --generate-notes
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
