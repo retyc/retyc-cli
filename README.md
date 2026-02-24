@@ -23,19 +23,7 @@
 
 ### Pre-compiled binaries (recommended)
 
-Download the binary for your platform from the [latest release](https://github.com/retyc/retyc-cli/releases/latest):
-
-```sh
-# Linux (amd64)
-curl -L https://github.com/retyc/retyc-cli/releases/latest/download/retyc_linux_amd64 -o retyc
-chmod +x retyc
-sudo mv retyc /usr/local/bin/
-
-# macOS (Apple Silicon)
-curl -L https://github.com/retyc/retyc-cli/releases/latest/download/retyc_darwin_arm64 -o retyc
-chmod +x retyc
-sudo mv retyc /usr/local/bin/
-```
+Download the binary for your platform from the [latest release](https://github.com/retyc/retyc-cli/releases/latest).
 
 ### With `go install`
 
