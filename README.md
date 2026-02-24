@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/retyc/retyc-cli)](https://github.com/retyc/retyc-cli/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-![demo](.media/demo.gif)
+![demo](https://raw.githubusercontent.com/retyc/retyc-cli/main/.media/demo.gif)
 
 ---
 
