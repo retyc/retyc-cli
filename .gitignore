@@ -3,6 +3,7 @@
 /retyc-*
 /main
 *.exe
+/dist
 
 # Config
 /.retyc
