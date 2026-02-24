@@ -2,7 +2,7 @@
 
 > Official command-line interface for [RETYC](https://retyc.com) - send and manage file transfers directly from your terminal.
 
-[![CI](https://github.com/retyc/retyc-cli/actions/workflows/main.yml/badge.svg)](https://github.com/retyc/retyc-cli/actions/workflows/ci.yml)
+[![CI](https://github.com/retyc/retyc-cli/actions/workflows/main.yml/badge.svg)](https://github.com/retyc/retyc-cli/actions/workflows/main.yml)
 [![Go](https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Release](https://img.shields.io/github/v/release/retyc/retyc-cli)](https://github.com/retyc/retyc-cli/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
