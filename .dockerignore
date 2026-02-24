@@ -8,4 +8,3 @@ vendor/
 *.swo
 .DS_Store
 Thumbs.db
-.docker/
