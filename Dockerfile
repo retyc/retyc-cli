@@ -29,7 +29,8 @@ USER 1000:1000
 ENV HOME=/home/retyc \
     XDG_CONFIG_HOME=/home/retyc/.config \
     XDG_CACHE_HOME=/home/retyc/.cache \
-    XDG_DATA_HOME=/home/retyc/.local/share
+    XDG_DATA_HOME=/home/retyc/.local/share \
+    RETYC_CONFIG_DIR=/home/retyc/.config/retyc
 
 VOLUME ["/home/retyc/.config/retyc"]
 
