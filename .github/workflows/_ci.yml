@@ -1,0 +1,33 @@
+name: _CI
+
+on:
+  workflow_call:
+
+jobs:
+  ci:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Build (dev)
+        run: CGO_ENABLED=0 go build ./...
+
+      - name: Build (prod)
+        run: CGO_ENABLED=0 go build -tags prod ./...

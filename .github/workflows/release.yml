@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/_ci.yml
+
+  docker:
+    name: Docker
+    needs: ci
+    uses: ./.github/workflows/_docker.yml
+    with:
+      tags: |
+        ghcr.io/retyc/retyc-cli:${{ github.ref_name }}
+        ghcr.io/retyc/retyc-cli:latest
+        retyc/retyc-cli:${{ github.ref_name }}
+        retyc/retyc-cli:latest
+      version: ${{ github.ref_name }}
+    secrets: inherit
+
+  goreleaser:
+    name: GoReleaser
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
