@@ -402,46 +402,25 @@ var transferCreateCmd = &cobra.Command{
 
 		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 
-		// Fetch the user's own public key and create the share in parallel.
+		// Fetch the user's own public key first, before creating the share,
+		// to avoid leaving an orphan transfer on the server if the key fetch fails.
 		var titlePtr *string
 		if title != "" {
 			titlePtr = &title
 		}
 
-		type keyResult struct {
-			v   *api.UserKey
-			err error
+		userKey, err := client.GetActiveKey(ctx)
+		if err != nil {
+			return fmt.Errorf("fetching encryption key: %w", err)
 		}
-		type shareResult struct {
-			v   *api.ShareCreateResponse
-			err error
-		}
-		keyCh := make(chan keyResult, 1)
-		shareCh := make(chan shareResult, 1)
-
-		go func() {
-			v, err := client.GetActiveKey(ctx)
-			keyCh <- keyResult{v, err}
-		}()
-		go func() {
-			v, err := client.CreateShare(ctx, expire, titlePtr, true, toEmails)
-			shareCh <- shareResult{v, err}
-		}()
-
-		kr := <-keyCh
-		if kr.err != nil {
-			return fmt.Errorf("fetching encryption key: %w", kr.err)
-		}
-		userKey := kr.v
 		if userKey == nil {
 			return fmt.Errorf("no active encryption key — set up your key in the web interface first")
 		}
 
-		sr := <-shareCh
-		if sr.err != nil {
-			return fmt.Errorf("creating transfer: %w", sr.err)
+		share, err := client.CreateShare(ctx, expire, titlePtr, true, toEmails)
+		if err != nil {
+			return fmt.Errorf("creating transfer: %w", err)
 		}
-		share := sr.v
 		fmt.Fprintf(os.Stderr, "Transfer %s created, uploading…\n", share.ID)
 
 		// Decide whether a transfer passphrase is needed.
@@ -456,16 +435,20 @@ var transferCreateCmd = &cobra.Command{
 		}
 
 		// Prompt for transfer passphrase if required and not provided via flag.
+		// On any failure here the share has already been created, so disable it to
+		// avoid leaving an orphan transfer on the server.
 		if needPassphrase && passphrase == "" {
 			fmt.Fprint(os.Stderr, "Transfer passphrase: ")
 			pb, err := term.ReadPassword(int(os.Stdin.Fd()))
 			fmt.Fprint(os.Stderr, "\r\033[2K")
 			if err != nil {
+				_ = client.DisableTransfer(ctx, share.ID)
 				return fmt.Errorf("reading passphrase: %w", err)
 			}
 			passphrase = string(pb)
 		}
 		if needPassphrase && passphrase == "" {
+			_ = client.DisableTransfer(ctx, share.ID)
 			return fmt.Errorf("transfer passphrase is required")
 		}
 
