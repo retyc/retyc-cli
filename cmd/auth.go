@@ -125,6 +125,7 @@ func newHTTPClient(insecure, debug bool) *http.Client {
 	if debug {
 		transport = &debugTransport{wrapped: transport}
 	}
+	transport = &api.UserAgentTransport{UserAgent: cliUserAgent(), Base: transport}
 	return &http.Client{
 		Timeout:   30 * time.Second,
 		Transport: transport,

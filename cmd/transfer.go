@@ -59,7 +59,7 @@ var transferLsCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
+		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 		result, err := client.ListTransfers(ctx, listType, 1)
 		if err != nil {
 			return fmt.Errorf("listing transfers: %w", err)
@@ -112,7 +112,7 @@ var transferInfoCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
+		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 
 		// Fetch transfer details and user key in parallel.
 		type detailsResult struct {
@@ -395,7 +395,7 @@ var transferCreateCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
+		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 
 		// Prompt for transfer passphrase if not given as a flag.
 		if passphrase == "" {
@@ -691,7 +691,7 @@ var transferDisableCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
+		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 		if err := client.DisableTransfer(ctx, shareID); err != nil {
 			return fmt.Errorf("disabling transfer: %w", err)
 		}
@@ -719,7 +719,7 @@ var transferEnableCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
+		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 		if err := client.EnableTransfer(ctx, shareID); err != nil {
 			return fmt.Errorf("enabling transfer: %w", err)
 		}
@@ -749,7 +749,7 @@ var transferDownloadCmd = &cobra.Command{
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, tok, insecure, debug)
+		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 
 		// Fetch transfer details and user key in parallel.
 		type detailsResult struct {

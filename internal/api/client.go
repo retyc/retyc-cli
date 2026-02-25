@@ -16,6 +16,24 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// UserAgentTransport is an http.RoundTripper that injects a User-Agent header into every request.
+type UserAgentTransport struct {
+	UserAgent string
+	Base      http.RoundTripper
+}
+
+// RoundTrip clones the request, sets the User-Agent header, and delegates to the wrapped transport.
+// Falls back to http.DefaultTransport when Base is nil.
+func (t *UserAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("User-Agent", t.UserAgent)
+	base := t.Base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(req)
+}
+
 // Client is an authenticated HTTP client for the RETYC API.
 type Client struct {
 	baseURL    string
@@ -24,17 +42,21 @@ type Client struct {
 }
 
 // New creates a Client that attaches the provided OAuth2 token to every request.
+// userAgent is sent as the User-Agent header on all requests.
 // When insecure is true, TLS certificate verification is skipped, which allows
 // connecting to servers using self-signed certificates.
 // When debug is true, raw API responses are printed to stderr.
-func New(baseURL string, tok *oauth2.Token, insecure, debug bool) *Client {
+func New(baseURL, userAgent string, tok *oauth2.Token, insecure, debug bool) *Client {
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: insecure, // #nosec G402 — intentional, controlled by --insecure flag
 	}
-	transport := &oauth2.Transport{
-		Source: oauth2.StaticTokenSource(tok),
-		Base: &http.Transport{
-			TLSClientConfig: tlsCfg,
+	transport := &UserAgentTransport{
+		UserAgent: userAgent,
+		Base: &oauth2.Transport{
+			Source: oauth2.StaticTokenSource(tok),
+			Base: &http.Transport{
+				TLSClientConfig: tlsCfg,
+			},
 		},
 	}
 	return &Client{

@@ -4,6 +4,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/spf13/cobra"
@@ -47,6 +48,11 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: "+defaultCfgHint+")")
 	rootCmd.PersistentFlags().BoolVarP(&insecure, "insecure", "k", false, "skip TLS certificate verification (useful for self-signed certificates)")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "print raw API responses to stderr")
+}
+
+// cliUserAgent returns the User-Agent string used for all outgoing HTTP requests.
+func cliUserAgent() string {
+	return fmt.Sprintf("retyc-cli/%s (%s/%s)", Version, runtime.GOOS, runtime.GOARCH)
 }
 
 // initConfig reads the configuration file and environment variables.
