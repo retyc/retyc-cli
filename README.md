@@ -108,6 +108,8 @@ docker run -it --rm \
 
 > **Tip:** `alias retyc='docker run -it --rm -v retyc-config:/home/retyc/.config/retyc -v "$(pwd)":/data retyc/retyc-cli:latest'`
 
+> **Note:** kernel keyring caching is not available in Docker (blocked by the default seccomp profile). The passphrase will be prompted on each invocation.
+
 ---
 
 ## Configuration
