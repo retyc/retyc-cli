@@ -118,8 +118,9 @@ func (c *Client) ListFiles(ctx context.Context, shareID string, page int) (*Tran
 
 // ShareCreateResponse is the response from POST /share.
 type ShareCreateResponse struct {
-	ID   string `json:"id"`
-	Slug string `json:"slug"`
+	ID         string   `json:"id"`
+	Slug       string   `json:"slug"`
+	PublicKeys []string `json:"public_keys"`
 }
 
 // FileModel is the response from POST /share/{id}/file.
@@ -139,9 +140,13 @@ type CompleteTransferRequest struct {
 }
 
 // CreateShare creates a new transfer on the server.
-func (c *Client) CreateShare(ctx context.Context, expires int, title *string, usePassphrase bool) (*ShareCreateResponse, error) {
+// emails is the list of recipient email addresses; pass nil or empty for no recipients.
+func (c *Client) CreateShare(ctx context.Context, expires int, title *string, usePassphrase bool, emails []string) (*ShareCreateResponse, error) {
+	if emails == nil {
+		emails = []string{}
+	}
 	body := map[string]any{
-		"emails":         []string{},
+		"emails":         emails,
 		"expires":        expires,
 		"title":          title,
 		"use_passphrase": usePassphrase,
