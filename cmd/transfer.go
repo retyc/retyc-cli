@@ -315,6 +315,9 @@ func formatSize(bytes int64) string {
 // uploadChunkSize is the size of each plaintext chunk before encryption.
 const uploadChunkSize = 8 * 1024 * 1024 // 8 MB
 
+// minPassphraseLen is the minimum number of characters required for a transfer passphrase.
+const minPassphraseLen = 8
+
 // uploadConcurrency is the number of chunks uploaded simultaneously per file.
 const uploadConcurrency = 4
 
@@ -333,6 +336,11 @@ var transferCreateCmd = &cobra.Command{
 		yes, _ := cmd.Flags().GetBool("yes")
 		toEmails, _ := cmd.Flags().GetStringArray("to")
 		passphraseExplicit := cmd.Flags().Changed("passphrase")
+
+		// Fail fast if --passphrase was provided explicitly but is too short.
+		if passphraseExplicit && len(passphrase) < minPassphraseLen {
+			return fmt.Errorf("transfer passphrase must be at least %d characters", minPassphraseLen)
+		}
 
 		// Stat all files up front — needed for the summary and to fail early.
 		type fileEntry struct {
@@ -456,17 +464,22 @@ var transferCreateCmd = &cobra.Command{
 		}
 
 		// Prompt for transfer passphrase if required and not provided via flag.
+		// Re-prompt on invalid input.
 		if needPassphrase && passphrase == "" {
-			fmt.Fprint(os.Stderr, "Transfer passphrase: ")
-			pb, err := term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprint(os.Stderr, "\r\033[2K")
-			if err != nil {
-				return fmt.Errorf("reading passphrase: %w", err)
+			for {
+				fmt.Fprint(os.Stderr, "Transfer passphrase: ")
+				pb, err := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Fprint(os.Stderr, "\r\033[2K")
+				if err != nil {
+					return fmt.Errorf("reading passphrase: %w", err)
+				}
+				if len(pb) < minPassphraseLen {
+					fmt.Fprintf(os.Stderr, "Passphrase must be at least %d characters.\n", minPassphraseLen)
+					continue
+				}
+				passphrase = string(pb)
+				break
 			}
-			passphrase = string(pb)
-		}
-		if needPassphrase && passphrase == "" {
-			return fmt.Errorf("transfer passphrase is required")
 		}
 
 		// Generate session keypair — used to encrypt file content and metadata.
