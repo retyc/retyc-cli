@@ -331,6 +331,8 @@ var transferCreateCmd = &cobra.Command{
 		message, _ := cmd.Flags().GetString("message")
 		passphrase, _ := cmd.Flags().GetString("passphrase")
 		yes, _ := cmd.Flags().GetBool("yes")
+		toEmails, _ := cmd.Flags().GetStringArray("to")
+		passphraseExplicit := cmd.Flags().Changed("passphrase")
 
 		// Stat all files up front — needed for the summary and to fail early.
 		type fileEntry struct {
@@ -373,6 +375,9 @@ var transferCreateCmd = &cobra.Command{
 			if title != "" {
 				fmt.Fprintf(os.Stderr, "  Title:    %s\n", title)
 			}
+			if len(toEmails) > 0 {
+				fmt.Fprintf(os.Stderr, "  To:       %s\n", strings.Join(toEmails, ", "))
+			}
 			fmt.Fprintf(os.Stderr, "  Expires:  %s\n", formatExpiry(expire))
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprint(os.Stderr, "Proceed? [y/N] ")
@@ -397,8 +402,61 @@ var transferCreateCmd = &cobra.Command{
 
 		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 
-		// Prompt for transfer passphrase if not given as a flag.
-		if passphrase == "" {
+		// Fetch the user's own public key and create the share in parallel.
+		var titlePtr *string
+		if title != "" {
+			titlePtr = &title
+		}
+
+		type keyResult struct {
+			v   *api.UserKey
+			err error
+		}
+		type shareResult struct {
+			v   *api.ShareCreateResponse
+			err error
+		}
+		keyCh := make(chan keyResult, 1)
+		shareCh := make(chan shareResult, 1)
+
+		go func() {
+			v, err := client.GetActiveKey(ctx)
+			keyCh <- keyResult{v, err}
+		}()
+		go func() {
+			v, err := client.CreateShare(ctx, expire, titlePtr, true, toEmails)
+			shareCh <- shareResult{v, err}
+		}()
+
+		kr := <-keyCh
+		if kr.err != nil {
+			return fmt.Errorf("fetching encryption key: %w", kr.err)
+		}
+		userKey := kr.v
+		if userKey == nil {
+			return fmt.Errorf("no active encryption key — set up your key in the web interface first")
+		}
+
+		sr := <-shareCh
+		if sr.err != nil {
+			return fmt.Errorf("creating transfer: %w", sr.err)
+		}
+		share := sr.v
+		fmt.Fprintf(os.Stderr, "Transfer %s created, uploading…\n", share.ID)
+
+		// Decide whether a transfer passphrase is needed.
+		// A passphrase is not needed only when all specified recipients already have a key.
+		allHaveKeys := len(toEmails) > 0 && len(share.PublicKeys) == len(toEmails)
+		needPassphrase := !allHaveKeys || passphraseExplicit
+
+		// Inform the user if some recipients have no key and a passphrase is therefore required.
+		if len(toEmails) > 0 && len(share.PublicKeys) < len(toEmails) {
+			fmt.Fprintf(os.Stderr, "Note: %d recipient(s) have no encryption key — a transfer passphrase is required.\n",
+				len(toEmails)-len(share.PublicKeys))
+		}
+
+		// Prompt for transfer passphrase if required and not provided via flag.
+		if needPassphrase && passphrase == "" {
 			fmt.Fprint(os.Stderr, "Transfer passphrase: ")
 			pb, err := term.ReadPassword(int(os.Stdin.Fd()))
 			fmt.Fprint(os.Stderr, "\r\033[2K")
@@ -407,29 +465,9 @@ var transferCreateCmd = &cobra.Command{
 			}
 			passphrase = string(pb)
 		}
-		if passphrase == "" {
+		if needPassphrase && passphrase == "" {
 			return fmt.Errorf("transfer passphrase is required")
 		}
-
-		// Fetch the user's own public key so recipients of transfer info can decrypt it later.
-		userKey, err := client.GetActiveKey(ctx)
-		if err != nil {
-			return fmt.Errorf("fetching encryption key: %w", err)
-		}
-		if userKey == nil {
-			return fmt.Errorf("no active encryption key — set up your key in the web interface first")
-		}
-
-		// Create the share on the server.
-		var titlePtr *string
-		if title != "" {
-			titlePtr = &title
-		}
-		share, err := client.CreateShare(ctx, expire, titlePtr, true)
-		if err != nil {
-			return fmt.Errorf("creating transfer: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "Transfer %s created, uploading…\n", share.ID)
 
 		// Generate session keypair — used to encrypt file content and metadata.
 		sessionIdentity, err := crypto.GenerateKeyPair()
@@ -439,30 +477,37 @@ var transferCreateCmd = &cobra.Command{
 		sessionPrivKey := sessionIdentity.String()
 		sessionPubKey := sessionIdentity.Recipient().String()
 
-		// Encrypt session private key for the user's own key (enables transfer info).
-		sessionPrivKeyEnc, err := crypto.EncryptStringForKeys(sessionPrivKey, []string{userKey.PublicKey})
+		// Encrypt session private key for the owner and all recipients who have a key.
+		allPubKeys := append([]string{userKey.PublicKey}, share.PublicKeys...)
+		sessionPrivKeyEnc, err := crypto.EncryptStringForKeys(sessionPrivKey, allPubKeys)
 		if err != nil {
 			return fmt.Errorf("encrypting session key: %w", err)
 		}
 
-		// Generate an ephemeral keypair for passphrase-based recipient access.
-		ephemeralIdentity, err := crypto.GenerateKeyPair()
-		if err != nil {
-			return fmt.Errorf("generating ephemeral key: %w", err)
-		}
-		ephemeralPrivKey := ephemeralIdentity.String()
-		ephemeralPubKey := ephemeralIdentity.Recipient().String()
+		// Generate ephemeral keypair only when a passphrase is required.
+		// The backend now accepts nil ephemeral fields (updated API), so we omit them
+		// entirely when all recipients have a key — no passphrase path needed.
+		var ephemeralPrivKeyEnc, ephemeralPubKey, sessionPrivKeyEncForPassphrase string
+		if needPassphrase {
+			ephemeralIdentity, err := crypto.GenerateKeyPair()
+			if err != nil {
+				return fmt.Errorf("generating ephemeral key: %w", err)
+			}
+			ephPubKey := ephemeralIdentity.Recipient().String()
+			ephPrivKey := ephemeralIdentity.String()
 
-		// Encrypt the ephemeral private key with the transfer passphrase (scrypt).
-		ephemeralPrivKeyEnc, err := crypto.EncryptWithPassphrase([]byte(ephemeralPrivKey), passphrase)
-		if err != nil {
-			return fmt.Errorf("encrypting ephemeral key: %w", err)
-		}
+			enc, err := crypto.EncryptWithPassphrase([]byte(ephPrivKey), passphrase)
+			if err != nil {
+				return fmt.Errorf("encrypting ephemeral key: %w", err)
+			}
+			sesEnc, err := crypto.EncryptStringForKeys(sessionPrivKey, []string{ephPubKey})
+			if err != nil {
+				return fmt.Errorf("encrypting session key for passphrase access: %w", err)
+			}
 
-		// Encrypt session private key for the ephemeral public key (passphrase access path).
-		sessionPrivKeyEncForPassphrase, err := crypto.EncryptStringForKeys(sessionPrivKey, []string{ephemeralPubKey})
-		if err != nil {
-			return fmt.Errorf("encrypting session key for passphrase access: %w", err)
+			ephemeralPrivKeyEnc = enc
+			ephemeralPubKey = ephPubKey
+			sessionPrivKeyEncForPassphrase = sesEnc
 		}
 
 		// Upload each file.
@@ -482,14 +527,16 @@ var transferCreateCmd = &cobra.Command{
 			messageEnc = &enc
 		}
 
-		// Complete the transfer.
+		// Complete the transfer — ephemeral fields included only when a passphrase is used.
 		req := api.CompleteTransferRequest{
-			SessionPrivateKeyEnc:              sessionPrivKeyEnc,
-			SessionPublicKey:                  sessionPubKey,
-			EphemeralPrivateKeyEnc:            &ephemeralPrivKeyEnc,
-			EphemeralPublicKey:                &ephemeralPubKey,
-			SessionPrivateKeyEncForPassphrase: &sessionPrivKeyEncForPassphrase,
-			MessageEnc:                        messageEnc,
+			SessionPrivateKeyEnc: sessionPrivKeyEnc,
+			SessionPublicKey:     sessionPubKey,
+			MessageEnc:           messageEnc,
+		}
+		if needPassphrase {
+			req.EphemeralPrivateKeyEnc = &ephemeralPrivKeyEnc
+			req.EphemeralPublicKey = &ephemeralPubKey
+			req.SessionPrivateKeyEncForPassphrase = &sessionPrivKeyEncForPassphrase
 		}
 		if err := client.CompleteTransfer(ctx, share.ID, req); err != nil {
 			return fmt.Errorf("completing transfer: %w", err)
@@ -1063,7 +1110,8 @@ func init() {
 	transferCreateCmd.Flags().String("title", "", "Title of the transfer")
 	transferCreateCmd.Flags().Int("expire", 3600, "Expiration in seconds (0 = no expiration)")
 	transferCreateCmd.Flags().String("message", "", "Optional message to include")
-	transferCreateCmd.Flags().String("passphrase", "", "Transfer passphrase for recipient access (prompted if omitted)")
+	transferCreateCmd.Flags().String("passphrase", "", "Transfer passphrase (prompted if required and omitted)")
+	transferCreateCmd.Flags().StringArray("to", nil, "Recipient email address (repeatable)")
 	transferCreateCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 
 	transferDownloadCmd.Flags().StringP("output", "o", "", "Destination directory (default: transfer-<random>)")
