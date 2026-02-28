@@ -18,6 +18,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/spf13/cobra"
+	"golang.org/x/oauth2"
 )
 
 var authCmd = &cobra.Command{
@@ -55,19 +56,21 @@ var authLoginCmd = &cobra.Command{
 			return fmt.Errorf("device flow: %w", err)
 		}
 
-		if err := config.SaveToken(token); err != nil {
-			return fmt.Errorf("saving token: %w", err)
-		}
-
 		if offlineLogin {
 			if token.RefreshToken == "" {
 				return fmt.Errorf("server did not return an offline token (check that offline_access scope is supported)")
 			}
+			// Do not persist to disk: the offline token is intended to be copied
+			// into RETYC_TOKEN and used non-interactively in CI/CD pipelines.
 			fmt.Println("Authentication successful.")
 			fmt.Println()
 			fmt.Println("Offline token (set as RETYC_TOKEN in CI):")
 			fmt.Println(token.RefreshToken)
 			return nil
+		}
+
+		if err := config.SaveToken(token); err != nil {
+			return fmt.Errorf("saving token: %w", err)
 		}
 
 		fmt.Println("Authentication successful.")
@@ -115,11 +118,17 @@ var authStatusCmd = &cobra.Command{
 			return fmt.Errorf("loading config: %w", err)
 		}
 
-		// Load the raw token first to detect whether a refresh occurred.
-		stored, err := config.LoadToken()
-		if err != nil {
-			fmt.Println("Not authenticated. Run `retyc auth login`.")
-			return nil
+		envToken := os.Getenv("RETYC_TOKEN")
+
+		// Load the stored token from disk to detect silent refreshes and token type.
+		// Skipped when RETYC_TOKEN is set (no local credentials in that mode).
+		var stored *oauth2.Token
+		if envToken == "" {
+			stored, err = config.LoadToken()
+			if err != nil {
+				fmt.Println("Not authenticated. Run `retyc auth login`.")
+				return nil
+			}
 		}
 
 		ctx := context.Background()
@@ -143,12 +152,18 @@ var authStatusCmd = &cobra.Command{
 			return nil
 		}
 
-		// Inform the user when a silent refresh happened.
-		if !stored.Valid() {
+		// Inform the user when a silent refresh happened (disk token path only).
+		if stored != nil && !stored.Valid() {
 			fmt.Println("Token was expired and has been refreshed silently.")
 		}
 
-		if isOfflineToken(stored.RefreshToken) {
+		// Determine the refresh token to inspect: disk token or RETYC_TOKEN env var.
+		refreshToken := envToken
+		if stored != nil {
+			refreshToken = stored.RefreshToken
+		}
+
+		if isOfflineToken(refreshToken) {
 			fmt.Printf("Authenticated — offline token (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))
 		} else {
 			fmt.Printf("Authenticated (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))
