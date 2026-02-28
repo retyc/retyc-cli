@@ -23,6 +23,8 @@ var authCmd = &cobra.Command{
 	Short: "Manage authentication",
 }
 
+var offlineLogin bool
+
 var authLoginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate using OIDC device flow",
@@ -40,6 +42,12 @@ var authLoginCmd = &cobra.Command{
 			return fmt.Errorf("fetching OIDC config: %w", err)
 		}
 
+		// In offline mode, request a long-lived offline token (refresh token)
+		// suitable for non-interactive use in CI/CD pipelines.
+		if offlineLogin {
+			oidcCfg.Scopes = append(oidcCfg.Scopes, "offline_access")
+		}
+
 		token, err := auth.DeviceFlow(ctx, *oidcCfg, httpClient)
 		if err != nil {
 			return fmt.Errorf("device flow: %w", err)
@@ -47,6 +55,17 @@ var authLoginCmd = &cobra.Command{
 
 		if err := config.SaveToken(token); err != nil {
 			return fmt.Errorf("saving token: %w", err)
+		}
+
+		if offlineLogin {
+			if token.RefreshToken == "" {
+				return fmt.Errorf("server did not return an offline token (check that offline_access scope is supported)")
+			}
+			fmt.Println("Authentication successful.")
+			fmt.Println()
+			fmt.Println("Offline token (set as RETYC_TOKEN in CI):")
+			fmt.Println(token.RefreshToken)
+			return nil
 		}
 
 		fmt.Println("Authentication successful.")
@@ -166,6 +185,7 @@ func (t *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func init() {
+	authLoginCmd.Flags().BoolVar(&offlineLogin, "offline", false, "Request an offline token for non-interactive use (CI/CD)")
 	authCmd.AddCommand(authLoginCmd)
 	authCmd.AddCommand(authLogoutCmd)
 	authCmd.AddCommand(authStatusCmd)
