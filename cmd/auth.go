@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/retyc/retyc-cli/internal/api"
@@ -146,7 +148,11 @@ var authStatusCmd = &cobra.Command{
 			fmt.Println("Token was expired and has been refreshed silently.")
 		}
 
-		fmt.Printf("Authenticated (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))
+		if isOfflineToken(stored.RefreshToken) {
+			fmt.Printf("Authenticated — offline token (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))
+		} else {
+			fmt.Printf("Authenticated (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))
+		}
 		return nil
 	},
 }
@@ -201,6 +207,37 @@ func (t *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	return resp, nil
+}
+
+// isOfflineToken reports whether the given JWT refresh token is a Keycloak
+// offline token by decoding its payload and checking for typ == "Offline".
+// Returns false on any parse error.
+func isOfflineToken(refreshToken string) bool {
+	parts := strings.SplitN(refreshToken, ".", 3)
+	if len(parts) != 3 {
+		return false
+	}
+	// base64url → base64 standard, add padding
+	payload := parts[1]
+	payload = strings.ReplaceAll(payload, "-", "+")
+	payload = strings.ReplaceAll(payload, "_", "/")
+	switch len(payload) % 4 {
+	case 2:
+		payload += "=="
+	case 3:
+		payload += "="
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return false
+	}
+	var claims struct {
+		Typ string `json:"typ"`
+	}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return false
+	}
+	return strings.EqualFold(claims.Typ, "Offline")
 }
 
 func init() {
