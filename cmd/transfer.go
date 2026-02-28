@@ -193,16 +193,13 @@ var transferInfoCmd = &cobra.Command{
 		}
 
 		if identityStr == "" {
-			// Prompt passphrase without echo, then erase the prompt line.
-			fmt.Fprint(os.Stderr, "Key passphrase: ")
-			passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprint(os.Stderr, "\r\033[2K")
+			passphrase, err := readKeyPassphrase()
 			if err != nil {
-				return fmt.Errorf("reading key passphrase: %w", err)
+				return err
 			}
 
 			// Decrypt user's AGE private key (scrypt).
-			identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, string(passphraseBytes))
+			identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, passphrase)
 			if err != nil {
 				return fmt.Errorf("wrong key passphrase")
 			}
@@ -267,6 +264,21 @@ var transferInfoCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// readKeyPassphrase returns the key passphrase from the RETYC_KEY_PASSPHRASE
+// environment variable, or prompts the user interactively if the variable is not set.
+func readKeyPassphrase() (string, error) {
+	if v := os.Getenv("RETYC_KEY_PASSPHRASE"); v != "" {
+		return v, nil
+	}
+	fmt.Fprint(os.Stderr, "Key passphrase: ")
+	pb, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprint(os.Stderr, "\r\033[2K")
+	if err != nil {
+		return "", fmt.Errorf("reading key passphrase: %w", err)
+	}
+	return string(pb), nil
 }
 
 // mustGetToken retrieves a valid OAuth2 token, returning a user-friendly error
@@ -850,13 +862,11 @@ var transferDownloadCmd = &cobra.Command{
 				identityStr, _ = keyring.Load()
 			}
 			if identityStr == "" {
-				fmt.Fprint(os.Stderr, "Key passphrase: ")
-				pb, err := term.ReadPassword(int(os.Stdin.Fd()))
-				fmt.Fprint(os.Stderr, "\r\033[2K")
+				passphrase, err := readKeyPassphrase()
 				if err != nil {
-					return fmt.Errorf("reading key passphrase: %w", err)
+					return err
 				}
-				identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, string(pb))
+				identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, passphrase)
 				if err != nil {
 					return fmt.Errorf("wrong key passphrase")
 				}
