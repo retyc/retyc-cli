@@ -23,6 +23,7 @@ type publicLoginConfig struct {
 type oidcDiscovery struct {
 	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint"`
 	TokenEndpoint               string `json:"token_endpoint"`
+	EndSessionEndpoint          string `json:"end_session_endpoint"`
 }
 
 // FetchOIDCConfig retrieves the public OIDC configuration from POST /login/config/public
@@ -82,5 +83,6 @@ func FetchOIDCConfig(ctx context.Context, baseURL string, httpClient *http.Clien
 		Scopes:        pub.Scopes,
 		DeviceAuthURL: disc.DeviceAuthorizationEndpoint,
 		TokenURL:      disc.TokenEndpoint,
+		EndSessionURL: disc.EndSessionEndpoint,
 	}, nil
 }

@@ -229,6 +229,40 @@ func Refresh(ctx context.Context, cfg config.OIDCConfig, refreshToken string, ht
 	return tok, nil
 }
 
+// Revoke terminates the server-side session by calling the OIDC end_session
+// endpoint with the refresh token (Keycloak backchannel logout).
+// Unlike RFC 7009 token revocation, this actually closes the session visible
+// in the identity provider's admin panel.
+func Revoke(ctx context.Context, cfg config.OIDCConfig, refreshToken string, httpClient *http.Client) error {
+	if cfg.EndSessionURL == "" {
+		return fmt.Errorf("OIDC end_session endpoint not available")
+	}
+
+	data := url.Values{
+		"client_id":     {cfg.ClientID},
+		"refresh_token": {refreshToken},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.EndSessionURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("end_session endpoint returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 // GetValidToken returns a valid token for the current session.
 //
 // If the RETYC_TOKEN environment variable is set, it is treated as an offline

@@ -75,8 +75,27 @@ var authLoginCmd = &cobra.Command{
 
 var authLogoutCmd = &cobra.Command{
 	Use:   "logout",
-	Short: "Remove stored credentials",
+	Short: "Revoke server-side token and remove stored credentials",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Attempt server-side revocation before deleting the local token.
+		// Failures are non-fatal: local credentials are always cleaned up.
+		tok, err := config.LoadToken()
+		if err == nil && tok.RefreshToken != "" {
+			cfg, err := config.Load()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: loading config: %v\n", err)
+			} else {
+				ctx := context.Background()
+				httpClient := newHTTPClient(insecure, debug)
+				oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warning: fetching OIDC config: %v\n", err)
+				} else if err := auth.Revoke(ctx, *oidcCfg, tok.RefreshToken, httpClient); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: revoking token: %v\n", err)
+				}
+			}
+		}
+
 		if err := config.DeleteToken(); err != nil {
 			return fmt.Errorf("removing token: %w", err)
 		}
