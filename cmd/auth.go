@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -37,7 +36,7 @@ var authLoginCmd = &cobra.Command{
 			return fmt.Errorf("loading config: %w", err)
 		}
 
-		ctx := context.Background()
+		ctx := cmd.Context()
 		httpClient := newHTTPClient(insecure, debug)
 
 		oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
@@ -90,7 +89,7 @@ var authLogoutCmd = &cobra.Command{
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: loading config: %v\n", err)
 			} else {
-				ctx := context.Background()
+				ctx := cmd.Context()
 				httpClient := newHTTPClient(insecure, debug)
 				oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
 				if err != nil {
@@ -131,7 +130,7 @@ var authStatusCmd = &cobra.Command{
 			}
 		}
 
-		ctx := context.Background()
+		ctx := cmd.Context()
 		httpClient := newHTTPClient(insecure, debug)
 
 		oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
