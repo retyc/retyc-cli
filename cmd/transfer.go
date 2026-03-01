@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"mime"
 	"os"
 	"path/filepath"
@@ -351,11 +352,21 @@ var transferCreateCmd = &cobra.Command{
 		passphrase, _ := cmd.Flags().GetString("passphrase")
 		yes, _ := cmd.Flags().GetBool("yes")
 		toEmails, _ := cmd.Flags().GetStringArray("to")
+		genPassphrase, _ := cmd.Flags().GetBool("generate-passphrase")
 		passphraseExplicit := cmd.Flags().Changed("passphrase")
 
 		// Fail fast if --passphrase was provided explicitly but is too short.
 		if passphraseExplicit && len(passphrase) < minPassphraseLen {
 			return fmt.Errorf("transfer passphrase must be at least %d characters", minPassphraseLen)
+		}
+
+		// Generate a random passphrase if requested.
+		if genPassphrase {
+			var err error
+			passphrase, err = generateTransferPassphrase()
+			if err != nil {
+				return fmt.Errorf("generating passphrase: %w", err)
+			}
 		}
 
 		// Stat all files up front — needed for the summary and to fail early.
@@ -471,7 +482,7 @@ var transferCreateCmd = &cobra.Command{
 		// Decide whether a transfer passphrase is needed.
 		// A passphrase is not needed only when all specified recipients already have a key.
 		allHaveKeys := len(toEmails) > 0 && len(share.PublicKeys) == len(toEmails)
-		needPassphrase := !allHaveKeys || passphraseExplicit
+		needPassphrase := !allHaveKeys || passphraseExplicit || genPassphrase
 
 		// Inform the user if some recipients have no key and a passphrase is therefore required.
 		if len(toEmails) > 0 && len(share.PublicKeys) < len(toEmails) {
@@ -585,12 +596,18 @@ var transferCreateCmd = &cobra.Command{
 		if err != nil {
 			// Non-fatal: the transfer is complete even if we can't fetch the URL.
 			fmt.Printf("Transfer %s ready.\n", share.ID)
+			if genPassphrase {
+				fmt.Printf("Passphrase: %s\n", passphrase)
+			}
 			return nil
 		}
 
 		fmt.Printf("Transfer %s ready.\n", share.ID)
 		if details.WebURL != "" {
 			fmt.Printf("URL: %s\n", details.WebURL)
+		}
+		if genPassphrase {
+			fmt.Printf("Passphrase: %s\n", passphrase)
 		}
 		return nil
 	},
@@ -1129,6 +1146,23 @@ func downloadTransferFile(ctx context.Context, client *api.Client, outputDir str
 	return nil
 }
 
+// generateTransferPassphrase generates a cryptographically secure 32-character
+// passphrase drawn uniformly from the 94 printable non-space ASCII characters (0x21–0x7E).
+// crypto/rand.Int is used to avoid modulo bias.
+func generateTransferPassphrase() (string, error) {
+	const chars = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+	max := big.NewInt(int64(len(chars)))
+	result := make([]byte, 32)
+	for i := range result {
+		n, err := cryptorand.Int(cryptorand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		result[i] = chars[n.Int64()]
+	}
+	return string(result), nil
+}
+
 // randomLetters returns a string of n random lowercase ASCII letters.
 func randomLetters(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz"
@@ -1149,6 +1183,8 @@ func init() {
 	transferCreateCmd.Flags().Int("expire", 3600, "Expiration in seconds (0 = no expiration)")
 	transferCreateCmd.Flags().String("message", "", "Optional message to include")
 	transferCreateCmd.Flags().String("passphrase", "", "Transfer passphrase (prompted if required and omitted)")
+	transferCreateCmd.Flags().Bool("generate-passphrase", false, "Generate and display a random transfer passphrase")
+	transferCreateCmd.MarkFlagsMutuallyExclusive("passphrase", "generate-passphrase")
 	transferCreateCmd.Flags().StringArray("to", nil, "Recipient email address (repeatable)")
 	transferCreateCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 
