@@ -83,7 +83,7 @@ retyc transfer download <transfer-id>
 
 | Command | Description |
 |---|---|
-| `retyc transfer create <file>` | Create and send a new transfer |
+| `retyc transfer create <file>` | Create and send a new transfer (`--generate-passphrase` to auto-generate a secure passphrase) |
 | `retyc transfer info <id>` | Get transfer details |
 | `retyc transfer ls` | List sent and received transfers |
 | `retyc transfer download <id>` | Download a transfer |
