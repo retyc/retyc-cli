@@ -480,7 +480,7 @@ var transferCreateCmd = &cobra.Command{
 		}
 
 		// Prompt for transfer passphrase if required and not provided via flag.
-		// Re-prompt on invalid input.
+		// Re-prompt on invalid input or mismatched confirmation.
 		if needPassphrase && passphrase == "" {
 			for {
 				fmt.Fprint(os.Stderr, "Transfer passphrase: ")
@@ -491,6 +491,16 @@ var transferCreateCmd = &cobra.Command{
 				}
 				if len(pb) < minPassphraseLen {
 					fmt.Fprintf(os.Stderr, "Passphrase must be at least %d characters.\n", minPassphraseLen)
+					continue
+				}
+				fmt.Fprint(os.Stderr, "Confirm passphrase: ")
+				pb2, err := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Fprint(os.Stderr, "\r\033[2K")
+				if err != nil {
+					return fmt.Errorf("reading passphrase confirmation: %w", err)
+				}
+				if string(pb) != string(pb2) {
+					fmt.Fprintln(os.Stderr, "Passphrases do not match.")
 					continue
 				}
 				passphrase = string(pb)
@@ -1129,6 +1139,7 @@ func randomLetters(n int) string {
 	}
 	return string(b)
 }
+
 
 func init() {
 	transferLsCmd.Flags().Bool("sent", false, "List sent transfers (default)")
