@@ -268,9 +268,13 @@ var transferInfoCmd = &cobra.Command{
 
 // readKeyPassphrase returns the key passphrase from the RETYC_KEY_PASSPHRASE
 // environment variable, or prompts the user interactively if the variable is not set.
+// Returns a clear error when stdin is not a terminal and RETYC_KEY_PASSPHRASE is unset.
 func readKeyPassphrase() (string, error) {
 	if v := os.Getenv("RETYC_KEY_PASSPHRASE"); v != "" {
 		return v, nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", fmt.Errorf("no TTY detected and RETYC_KEY_PASSPHRASE is not set")
 	}
 	fmt.Fprint(os.Stderr, "Key passphrase: ")
 	pb, err := term.ReadPassword(int(os.Stdin.Fd()))
