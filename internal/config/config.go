@@ -21,11 +21,12 @@ func ConfigDir() (string, error) {
 
 // OIDCConfig holds the parameters needed to perform an OIDC device flow.
 type OIDCConfig struct {
-	Issuer        string   `yaml:"issuer" mapstructure:"issuer"`
-	ClientID      string   `yaml:"client_id" mapstructure:"client_id"`
-	Scopes        []string `yaml:"scopes" mapstructure:"scopes"`
-	DeviceAuthURL string   `yaml:"device_auth_url" mapstructure:"device_auth_url"`
-	TokenURL      string   `yaml:"token_url" mapstructure:"token_url"`
+	Issuer         string   `yaml:"issuer" mapstructure:"issuer"`
+	ClientID       string   `yaml:"client_id" mapstructure:"client_id"`
+	Scopes         []string `yaml:"scopes" mapstructure:"scopes"`
+	DeviceAuthURL  string   `yaml:"device_auth_url" mapstructure:"device_auth_url"`
+	TokenURL       string   `yaml:"token_url" mapstructure:"token_url"`
+	EndSessionURL  string   `yaml:"end_session_url" mapstructure:"end_session_url"`
 }
 
 // APIConfig holds REST API connection parameters.

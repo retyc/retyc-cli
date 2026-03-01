@@ -2,26 +2,30 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/spf13/cobra"
+	"golang.org/x/oauth2"
 )
 
 var authCmd = &cobra.Command{
 	Use:   "auth",
 	Short: "Manage authentication",
 }
+
+var offlineLogin bool
 
 var authLoginCmd = &cobra.Command{
 	Use:   "login",
@@ -32,7 +36,7 @@ var authLoginCmd = &cobra.Command{
 			return fmt.Errorf("loading config: %w", err)
 		}
 
-		ctx := context.Background()
+		ctx := cmd.Context()
 		httpClient := newHTTPClient(insecure, debug)
 
 		oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
@@ -40,9 +44,28 @@ var authLoginCmd = &cobra.Command{
 			return fmt.Errorf("fetching OIDC config: %w", err)
 		}
 
+		// In offline mode, request a long-lived offline token (refresh token)
+		// suitable for non-interactive use in CI/CD pipelines.
+		if offlineLogin {
+			oidcCfg.Scopes = append(oidcCfg.Scopes, "offline_access")
+		}
+
 		token, err := auth.DeviceFlow(ctx, *oidcCfg, httpClient)
 		if err != nil {
 			return fmt.Errorf("device flow: %w", err)
+		}
+
+		if offlineLogin {
+			if token.RefreshToken == "" {
+				return fmt.Errorf("server did not return an offline token (check that offline_access scope is supported)")
+			}
+			// Do not persist to disk: the offline token is intended to be copied
+			// into RETYC_TOKEN and used non-interactively in CI/CD pipelines.
+			fmt.Println("Authentication successful.")
+			fmt.Println()
+			fmt.Println("Offline token (set as RETYC_TOKEN in CI):")
+			fmt.Println(token.RefreshToken)
+			return nil
 		}
 
 		if err := config.SaveToken(token); err != nil {
@@ -56,8 +79,27 @@ var authLoginCmd = &cobra.Command{
 
 var authLogoutCmd = &cobra.Command{
 	Use:   "logout",
-	Short: "Remove stored credentials",
+	Short: "Revoke server-side token and remove stored credentials",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Attempt server-side revocation before deleting the local token.
+		// Failures are non-fatal: local credentials are always cleaned up.
+		tok, err := config.LoadToken()
+		if err == nil && tok.RefreshToken != "" {
+			cfg, err := config.Load()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: loading config: %v\n", err)
+			} else {
+				ctx := cmd.Context()
+				httpClient := newHTTPClient(insecure, debug)
+				oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warning: fetching OIDC config: %v\n", err)
+				} else if err := auth.Revoke(ctx, *oidcCfg, tok.RefreshToken, httpClient); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: revoking token: %v\n", err)
+				}
+			}
+		}
+
 		if err := config.DeleteToken(); err != nil {
 			return fmt.Errorf("removing token: %w", err)
 		}
@@ -75,14 +117,20 @@ var authStatusCmd = &cobra.Command{
 			return fmt.Errorf("loading config: %w", err)
 		}
 
-		// Load the raw token first to detect whether a refresh occurred.
-		stored, err := config.LoadToken()
-		if err != nil {
-			fmt.Println("Not authenticated. Run `retyc auth login`.")
-			return nil
+		envToken := os.Getenv("RETYC_TOKEN")
+
+		// Load the stored token from disk to detect silent refreshes and token type.
+		// Skipped when RETYC_TOKEN is set (no local credentials in that mode).
+		var stored *oauth2.Token
+		if envToken == "" {
+			stored, err = config.LoadToken()
+			if err != nil {
+				fmt.Println("Not authenticated. Run `retyc auth login`.")
+				return nil
+			}
 		}
 
-		ctx := context.Background()
+		ctx := cmd.Context()
 		httpClient := newHTTPClient(insecure, debug)
 
 		oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
@@ -103,12 +151,22 @@ var authStatusCmd = &cobra.Command{
 			return nil
 		}
 
-		// Inform the user when a silent refresh happened.
-		if !stored.Valid() {
+		// Inform the user when a silent refresh happened (disk token path only).
+		if stored != nil && !stored.Valid() {
 			fmt.Println("Token was expired and has been refreshed silently.")
 		}
 
-		fmt.Printf("Authenticated (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))
+		// Determine the refresh token to inspect: disk token or RETYC_TOKEN env var.
+		refreshToken := envToken
+		if stored != nil {
+			refreshToken = stored.RefreshToken
+		}
+
+		if isOfflineToken(refreshToken) {
+			fmt.Printf("Authenticated — offline token (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))
+		} else {
+			fmt.Printf("Authenticated (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))
+		}
 		return nil
 	},
 }
@@ -165,7 +223,29 @@ func (t *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
+// isOfflineToken reports whether the given JWT refresh token is a Keycloak
+// offline token by decoding its payload and checking for typ == "Offline".
+// Returns false on any parse error.
+func isOfflineToken(refreshToken string) bool {
+	parts := strings.SplitN(refreshToken, ".", 3)
+	if len(parts) != 3 {
+		return false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	var claims struct {
+		Typ string `json:"typ"`
+	}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return false
+	}
+	return strings.EqualFold(claims.Typ, "Offline")
+}
+
 func init() {
+	authLoginCmd.Flags().BoolVar(&offlineLogin, "offline", false, "Request an offline token for non-interactive use (CI/CD)")
 	authCmd.AddCommand(authLoginCmd)
 	authCmd.AddCommand(authLogoutCmd)
 	authCmd.AddCommand(authStatusCmd)

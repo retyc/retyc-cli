@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -228,15 +229,66 @@ func Refresh(ctx context.Context, cfg config.OIDCConfig, refreshToken string, ht
 	return tok, nil
 }
 
+// Revoke terminates the server-side session by calling the OIDC end_session
+// endpoint with the refresh token (Keycloak backchannel logout).
+// Unlike RFC 7009 token revocation, this actually closes the session visible
+// in the identity provider's admin panel.
+func Revoke(ctx context.Context, cfg config.OIDCConfig, refreshToken string, httpClient *http.Client) error {
+	if cfg.EndSessionURL == "" {
+		return fmt.Errorf("OIDC end_session endpoint not available")
+	}
+
+	data := url.Values{
+		"client_id":     {cfg.ClientID},
+		"refresh_token": {refreshToken},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.EndSessionURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("end_session endpoint returned %d (could not read body: %w)", resp.StatusCode, readErr)
+		}
+		return fmt.Errorf("end_session endpoint returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 // GetValidToken returns a valid token for the current session.
 //
-// It loads the stored token from disk and returns it immediately if it is
-// still valid. If it has expired and a refresh token is available, it
+// If the RETYC_TOKEN environment variable is set, it is treated as an offline
+// refresh token: it is exchanged for a fresh access token without reading from
+// or writing to disk. This is the intended path for non-interactive CI/CD use.
+//
+// Otherwise it loads the stored token from disk and returns it immediately if
+// it is still valid. If it has expired and a refresh token is available, it
 // attempts a silent refresh and persists the new token before returning it.
 //
 // Callers should handle ErrNoToken (not authenticated) and ErrNoRefreshToken
 // (expired, must re-authenticate via DeviceFlow) as non-fatal states.
 func GetValidToken(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client) (*oauth2.Token, error) {
+	// CI/CD path: RETYC_TOKEN holds an offline refresh token.
+	// Exchange it for a fresh access token without touching disk.
+	if envToken := os.Getenv("RETYC_TOKEN"); envToken != "" {
+		tok, err := Refresh(ctx, cfg, envToken, httpClient)
+		if err != nil {
+			return nil, fmt.Errorf("RETYC_TOKEN refresh failed: %w", err)
+		}
+		return tok, nil
+	}
+
 	tok, err := config.LoadToken()
 	if err != nil {
 		return nil, ErrNoToken

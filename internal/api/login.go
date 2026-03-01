@@ -23,6 +23,7 @@ type publicLoginConfig struct {
 type oidcDiscovery struct {
 	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint"`
 	TokenEndpoint               string `json:"token_endpoint"`
+	EndSessionEndpoint          string `json:"end_session_endpoint"`
 }
 
 // FetchOIDCConfig retrieves the public OIDC configuration from POST /login/config/public
@@ -43,7 +44,10 @@ func FetchOIDCConfig(ctx context.Context, baseURL string, httpClient *http.Clien
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("public login config: API error %d (could not read body: %w)", resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("public login config: API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -67,7 +71,10 @@ func FetchOIDCConfig(ctx context.Context, baseURL string, httpClient *http.Clien
 	defer resp2.Body.Close()
 
 	if resp2.StatusCode < 200 || resp2.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp2.Body)
+		body, readErr := io.ReadAll(resp2.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("OIDC discovery: API error %d (could not read body: %w)", resp2.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("OIDC discovery: API error %d: %s", resp2.StatusCode, string(body))
 	}
 
@@ -82,5 +89,6 @@ func FetchOIDCConfig(ctx context.Context, baseURL string, httpClient *http.Clien
 		Scopes:        pub.Scopes,
 		DeviceAuthURL: disc.DeviceAuthorizationEndpoint,
 		TokenURL:      disc.TokenEndpoint,
+		EndSessionURL: disc.EndSessionEndpoint,
 	}, nil
 }
