@@ -232,17 +232,7 @@ func isOfflineToken(refreshToken string) bool {
 	if len(parts) != 3 {
 		return false
 	}
-	// base64url → base64 standard, add padding
-	payload := parts[1]
-	payload = strings.ReplaceAll(payload, "-", "+")
-	payload = strings.ReplaceAll(payload, "_", "/")
-	switch len(payload) % 4 {
-	case 2:
-		payload += "=="
-	case 3:
-		payload += "="
-	}
-	decoded, err := base64.StdEncoding.DecodeString(payload)
+	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return false
 	}
