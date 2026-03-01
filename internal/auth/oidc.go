@@ -256,7 +256,10 @@ func Revoke(ctx context.Context, cfg config.OIDCConfig, refreshToken string, htt
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("end_session endpoint returned %d (could not read body: %w)", resp.StatusCode, readErr)
+		}
 		return fmt.Errorf("end_session endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
 
