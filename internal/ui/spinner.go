@@ -54,12 +54,12 @@ func (s *Spinner) Start() {
 		for {
 			select {
 			case <-s.stop:
-				fmt.Fprint(os.Stderr, clearLine)
+				fmt.Fprint(os.Stderr, clearLine+ansiReset)
 				return
 			case <-ticker.C:
 				color := spinColors[i%len(spinColors)]
 				frame := frames[i%len(frames)]
-				fmt.Fprintf(os.Stderr, "\r%s%s %s ", color, frame, s.label)
+				fmt.Fprintf(os.Stderr, "\r%s%s %s %s", color, frame, s.label, ansiReset)
 				i++
 			}
 		}
