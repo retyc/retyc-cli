@@ -202,6 +202,7 @@ api:
 ## Roadmap
 
 ### Transfer
+
 | Feature | Status |
 |---|---|
 | Create | ✅ |
@@ -211,13 +212,22 @@ api:
 | Enable/Disable | ✅ |
 
 ### Dataroom
+
 | Feature | Status |
 |---|---|
 | Create / Info / List | 🔜 |
 | User management | 🔜 |
 | File management (CRUD + versions) | 🔜 |
 
+### User
+
+| Feature | Status |
+|---|---|
+| Get data | 🔜 |
+| Get quota / capabilities | 🔜 |
+
 ### Organization
+
 | Feature | Status |
 |---|---|
 | User management (invitations, roles) | 🔜 |
