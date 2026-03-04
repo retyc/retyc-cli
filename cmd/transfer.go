@@ -437,46 +437,24 @@ var transferCreateCmd = &cobra.Command{
 
 		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 
-		// Fetch the user's own public key and create the share in parallel.
 		var titlePtr *string
 		if title != "" {
 			titlePtr = &title
 		}
 
-		type keyResult struct {
-			v   *api.UserKey
-			err error
+		// Fetch the user's key first — no point creating the share if there is no key.
+		userKey, err := client.GetActiveKey(ctx)
+		if err != nil {
+			return fmt.Errorf("fetching encryption key: %w", err)
 		}
-		type shareResult struct {
-			v   *api.ShareCreateResponse
-			err error
-		}
-		keyCh := make(chan keyResult, 1)
-		shareCh := make(chan shareResult, 1)
-
-		go func() {
-			v, err := client.GetActiveKey(ctx)
-			keyCh <- keyResult{v, err}
-		}()
-		go func() {
-			v, err := client.CreateShare(ctx, expire, titlePtr, true, toEmails)
-			shareCh <- shareResult{v, err}
-		}()
-
-		kr := <-keyCh
-		if kr.err != nil {
-			return fmt.Errorf("fetching encryption key: %w", kr.err)
-		}
-		userKey := kr.v
 		if userKey == nil {
 			return fmt.Errorf("no active encryption key — set up your key in the web interface first")
 		}
 
-		sr := <-shareCh
-		if sr.err != nil {
-			return fmt.Errorf("creating transfer: %w", sr.err)
+		share, err := client.CreateShare(ctx, expire, titlePtr, true, toEmails)
+		if err != nil {
+			return fmt.Errorf("creating transfer: %w", err)
 		}
-		share := sr.v
 		fmt.Fprintf(os.Stderr, "Transfer %s created, uploading…\n", share.ID)
 
 		// Decide whether a transfer passphrase is needed.
