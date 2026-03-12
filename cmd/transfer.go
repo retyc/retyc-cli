@@ -67,13 +67,13 @@ var transferLsCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSTATUS\tTITLE\tCREATED") //nolint:errcheck
+		fmt.Fprintln(w, "ID\tSTATUS\tTITLE\tCREATED")
 		for _, t := range result.Items {
 			title := ""
 			if t.Title != nil {
 				title = *t.Title
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", //nolint:errcheck
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 				t.ID,
 				t.Status,
 				title,
@@ -181,13 +181,13 @@ var transferInfoCmd = &cobra.Command{
 
 		fmt.Printf("\nFiles (%d):\n", filePage.Total)
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "  NAME\tSIZE") //nolint:errcheck
+		fmt.Fprintln(w, "  NAME\tSIZE")
 		for _, f := range filePage.Items {
 			name, err := crypto.DecryptToString(f.NameEnc, sessionIdentity)
 			if err != nil {
 				name = "(encrypted)"
 			}
-			fmt.Fprintf(w, "  %s\t%s\n", name, formatSize(f.OriginalSize)) //nolint:errcheck
+			fmt.Fprintf(w, "  %s\t%s\n", name, formatSize(f.OriginalSize))
 		}
 		_ = w.Flush()
 
