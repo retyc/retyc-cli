@@ -234,7 +234,7 @@ var transferInfoCmd = &cobra.Command{
 		if details.MessageEnc != nil {
 			msg, err := crypto.DecryptToString(*details.MessageEnc, sessionIdentity)
 			if err == nil && msg != "" {
-				fmt.Printf("\nMessage:\n  %s\n", msg)
+				printBoxedMessage(msg)
 			}
 		}
 
@@ -311,6 +311,17 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (*oauth2.Token, error
 	}
 
 	return tok, nil
+}
+
+// printBoxedMessage prints a decrypted message with a left vertical bar and padding,
+// so multi-line messages are clearly delimited and easy to read.
+func printBoxedMessage(msg string) {
+	fmt.Println("\nMessage:")
+	scanner := bufio.NewScanner(strings.NewReader(msg))
+	for scanner.Scan() {
+		fmt.Printf(" \u2502 %s\n", scanner.Text())
+	}
+	fmt.Println()
 }
 
 // ptrOr returns the dereferenced value of s, or fallback if s is nil.
