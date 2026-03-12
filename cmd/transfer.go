@@ -22,6 +22,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/keyring"
+	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
@@ -187,7 +188,7 @@ var transferInfoCmd = &cobra.Command{
 			if err != nil {
 				name = "(encrypted)"
 			}
-			fmt.Fprintf(w, "  %s\t%s\n", name, formatSize(f.OriginalSize))
+			fmt.Fprintf(w, "  %s\t%s\n", name, ui.FormatSize(f.OriginalSize))
 		}
 		_ = w.Flush()
 
@@ -341,14 +342,14 @@ func confirmFileList(names []string, sizes []int64, totalSize int64, extras []st
 		if len(runes) > lineWidth-10 {
 			name = string(runes[:lineWidth-13]) + "…"
 		}
-		fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, name, formatSize(sizes[i]))
+		fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, name, ui.FormatSize(sizes[i]))
 	}
 	fmt.Fprintf(os.Stderr, "  %s\n", strings.Repeat("─", lineWidth))
 	noun := "file"
 	if len(names) > 1 {
 		noun = "files"
 	}
-	fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, fmt.Sprintf("%d %s", len(names), noun), formatSize(totalSize))
+	fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, fmt.Sprintf("%d %s", len(names), noun), ui.FormatSize(totalSize))
 	fmt.Fprintln(os.Stderr)
 	for _, extra := range extras {
 		fmt.Fprintln(os.Stderr, extra)
@@ -381,19 +382,6 @@ func ptrOr(s *string, fallback string) string {
 	return *s
 }
 
-// formatSize formats a byte count as a human-readable string (e.g. "1.4 MiB").
-func formatSize(bytes int64) string {
-	if bytes < 1024 {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(1024), 0
-	for n := bytes / 1024; n >= 1024; n /= 1024 {
-		div *= 1024
-		exp++
-	}
-
-	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}
 
 // uploadChunkSize is the size of each plaintext chunk before encryption.
 const uploadChunkSize = 8 * 1024 * 1024 // 8 MB
