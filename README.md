@@ -223,7 +223,7 @@ api:
 
 | Feature | Status |
 |---|---|
-| Get data | 🔜 |
+| Get data | ✅ |
 | Get quota / capabilities | 🔜 |
 
 ### Organization
