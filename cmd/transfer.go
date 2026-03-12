@@ -49,18 +49,12 @@ var transferLsCmd = &cobra.Command{
 			listType = "received"
 		}
 
-		cfg, err := config.Load()
-		if err != nil {
-			return fmt.Errorf("loading config: %w", err)
-		}
-
 		ctx := context.Background()
-		tok, err := mustGetToken(ctx, cfg)
+		_, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 		result, err := client.ListTransfers(ctx, listType, 1)
 		if err != nil {
 			return fmt.Errorf("listing transfers: %w", err)
@@ -103,51 +97,16 @@ var transferInfoCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		shareID := args[0]
 
-		cfg, err := config.Load()
-		if err != nil {
-			return fmt.Errorf("loading config: %w", err)
-		}
-
 		ctx := context.Background()
-		tok, err := mustGetToken(ctx, cfg)
+		cfg, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
-
-		// Fetch transfer details and user key in parallel.
-		type detailsResult struct {
-			v   *api.TransferDetails
-			err error
+		details, userKey, err := fetchDetailsAndKey(ctx, client, shareID)
+		if err != nil {
+			return err
 		}
-		type keyResult struct {
-			v   *api.UserKey
-			err error
-		}
-		detailsCh := make(chan detailsResult, 1)
-		keyCh := make(chan keyResult, 1)
-
-		go func() {
-			v, err := client.GetTransferDetails(ctx, shareID)
-			detailsCh <- detailsResult{v, err}
-		}()
-		go func() {
-			v, err := client.GetActiveKey(ctx)
-			keyCh <- keyResult{v, err}
-		}()
-
-		dr := <-detailsCh
-		if dr.err != nil {
-			return fmt.Errorf("fetching transfer: %w", dr.err)
-		}
-		details := dr.v
-
-		kr := <-keyCh
-		if kr.err != nil {
-			return fmt.Errorf("fetching encryption key: %w", kr.err)
-		}
-		userKey := kr.v
 
 		// Display basic metadata (no crypto required).
 		fmt.Printf("ID:      %s\n", ptrOr(details.ID, "—"))
@@ -185,39 +144,9 @@ var transferInfoCmd = &cobra.Command{
 			return fmt.Errorf("no active encryption key found — set up your key in the web interface first")
 		}
 
-		// Try the kernel keyring cache first (skippable via config).
-		var identityStr string
-		if cfg.Keyring.Enabled {
-			var err error
-			identityStr, err = keyring.Load()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: keyring load: %v\n", err)
-			}
-		}
-
-		if identityStr == "" {
-			passphrase, err := readKeyPassphrase()
-			if err != nil {
-				return err
-			}
-
-			// Decrypt user's AGE private key (scrypt).
-			identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, passphrase)
-			if err != nil {
-				return fmt.Errorf("wrong key passphrase")
-			}
-
-			// Cache in the kernel keyring if enabled.
-			if cfg.Keyring.Enabled {
-				if err := keyring.Store(identityStr, cfg.Keyring.TTL); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: keyring store: %v\n", err)
-				}
-			}
-		}
-
-		identity, err := crypto.ParseIdentity(identityStr)
+		identity, err := resolveUserIdentity(cfg, userKey)
 		if err != nil {
-			return fmt.Errorf("parsing AGE identity: %w", err)
+			return err
 		}
 
 		// Decrypt session private key (X25519).
@@ -318,6 +247,119 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, 
 	return auth.NewRefreshingTokenSource(tok, *oidcCfg, httpClient, persist), nil
 }
 
+// newAPIClient loads config, obtains a valid token, and returns both the config
+// and an authenticated API client ready to use.
+func newAPIClient(ctx context.Context) (*config.Config, *api.Client, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading config: %w", err)
+	}
+	tok, err := mustGetToken(ctx, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return cfg, api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug), nil
+}
+
+// fetchDetailsAndKey fetches transfer details and the active user key concurrently.
+func fetchDetailsAndKey(
+	ctx context.Context,
+	client *api.Client,
+	shareID string,
+) (*api.TransferDetails, *api.UserKey, error) {
+	type detailsResult struct {
+		v   *api.TransferDetails
+		err error
+	}
+	type keyResult struct {
+		v   *api.UserKey
+		err error
+	}
+	detailsCh := make(chan detailsResult, 1)
+	keyCh := make(chan keyResult, 1)
+	go func() { v, err := client.GetTransferDetails(ctx, shareID); detailsCh <- detailsResult{v, err} }()
+	go func() { v, err := client.GetActiveKey(ctx); keyCh <- keyResult{v, err} }()
+
+	dr := <-detailsCh
+	if dr.err != nil {
+		return nil, nil, fmt.Errorf("fetching transfer: %w", dr.err)
+	}
+	kr := <-keyCh
+	if kr.err != nil {
+		return nil, nil, fmt.Errorf("fetching encryption key: %w", kr.err)
+	}
+
+	return dr.v, kr.v, nil
+}
+
+// resolveUserIdentity decrypts the user's AGE private key using the passphrase,
+// reading from the keyring cache first when enabled.
+func resolveUserIdentity(cfg *config.Config, userKey *api.UserKey) (*age.HybridIdentity, error) {
+	var identityStr string
+	if cfg.Keyring.Enabled {
+		var err error
+		identityStr, err = keyring.Load()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: keyring load: %v\n", err)
+		}
+	}
+
+	if identityStr == "" {
+		passphrase, err := readKeyPassphrase()
+		if err != nil {
+			return nil, err
+		}
+		identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("wrong key passphrase")
+		}
+		if cfg.Keyring.Enabled {
+			if err := keyring.Store(identityStr, cfg.Keyring.TTL); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: keyring store: %v\n", err)
+			}
+		}
+	}
+
+	identity, err := crypto.ParseIdentity(identityStr)
+	if err != nil {
+		return nil, fmt.Errorf("parsing AGE identity: %w", err)
+	}
+
+	return identity, nil
+}
+
+// confirmFileList prints a summary of files and prompts the user to proceed.
+// extras contains additional pre-formatted info lines printed after the file summary
+// (e.g. "  Expires:  in 1h", "  Destination:  transfer-xyz/").
+// Returns true if the user confirms.
+func confirmFileList(names []string, sizes []int64, totalSize int64, extras []string) bool {
+	const lineWidth = 44
+	fmt.Fprintln(os.Stderr)
+	for i, name := range names {
+		if len(name) > lineWidth-10 {
+			name = name[:lineWidth-13] + "…"
+		}
+		fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, name, formatSize(sizes[i]))
+	}
+	fmt.Fprintf(os.Stderr, "  %s\n", strings.Repeat("─", lineWidth))
+	noun := "file"
+	if len(names) > 1 {
+		noun = "files"
+	}
+	fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, fmt.Sprintf("%d %s", len(names), noun), formatSize(totalSize))
+	fmt.Fprintln(os.Stderr)
+	for _, extra := range extras {
+		fmt.Fprintln(os.Stderr, extra)
+	}
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprint(os.Stderr, "Proceed? [y/N] ")
+	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	fmt.Fprintln(os.Stderr)
+
+	return strings.ToLower(strings.TrimSpace(answer)) == "y"
+}
+
 // printBoxedMessage prints a decrypted message with a left vertical bar and padding,
 // so multi-line messages are clearly delimited and easy to read.
 func printBoxedMessage(msg string) {
@@ -414,52 +456,32 @@ var transferCreateCmd = &cobra.Command{
 
 		// Confirmation prompt (skip with --yes / -y).
 		if !yes {
-			const lineWidth = 44
-			fmt.Fprintln(os.Stderr)
-			for _, e := range entries {
-				name := e.name
-				if len(name) > lineWidth-10 {
-					name = name[:lineWidth-13] + "…"
-				}
-				fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, name, formatSize(e.size))
+			names := make([]string, len(entries))
+			sizes := make([]int64, len(entries))
+			for i, e := range entries {
+				names[i] = e.name
+				sizes[i] = e.size
 			}
-			fmt.Fprintf(os.Stderr, "  %s\n", strings.Repeat("─", lineWidth))
-			noun := "file"
-			if len(entries) > 1 {
-				noun = "files"
-			}
-			fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, fmt.Sprintf("%d %s", len(entries), noun), formatSize(totalSize))
-			fmt.Fprintln(os.Stderr)
+			var extras []string
 			if title != "" {
-				fmt.Fprintf(os.Stderr, "  Title:    %s\n", title)
+				extras = append(extras, fmt.Sprintf("  Title:    %s", title))
 			}
 			if len(toEmails) > 0 {
-				fmt.Fprintf(os.Stderr, "  To:       %s\n", strings.Join(toEmails, ", "))
+				extras = append(extras, fmt.Sprintf("  To:       %s", strings.Join(toEmails, ", ")))
 			}
-			fmt.Fprintf(os.Stderr, "  Expires:  %s\n", formatExpiry(expire))
-			fmt.Fprintln(os.Stderr)
-			fmt.Fprint(os.Stderr, "Proceed? [y/N] ")
-			answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			fmt.Fprintln(os.Stderr)
-			if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+			extras = append(extras, fmt.Sprintf("  Expires:  %s", formatExpiry(expire)))
+			if !confirmFileList(names, sizes, totalSize, extras) {
 				fmt.Fprintln(os.Stderr, "Aborted.")
 
 				return nil
 			}
 		}
 
-		cfg, err := config.Load()
-		if err != nil {
-			return fmt.Errorf("loading config: %w", err)
-		}
-
 		ctx := context.Background()
-		tok, err := mustGetToken(ctx, cfg)
+		_, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
 		}
-
-		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 
 		var titlePtr *string
 		if title != "" {
@@ -798,18 +820,12 @@ var transferDisableCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		shareID := args[0]
 
-		cfg, err := config.Load()
-		if err != nil {
-			return fmt.Errorf("loading config: %w", err)
-		}
-
 		ctx := context.Background()
-		tok, err := mustGetToken(ctx, cfg)
+		_, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 		if err := client.DisableTransfer(ctx, shareID); err != nil {
 			return fmt.Errorf("disabling transfer: %w", err)
 		}
@@ -827,18 +843,12 @@ var transferEnableCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		shareID := args[0]
 
-		cfg, err := config.Load()
-		if err != nil {
-			return fmt.Errorf("loading config: %w", err)
-		}
-
 		ctx := context.Background()
-		tok, err := mustGetToken(ctx, cfg)
+		_, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
 		if err := client.EnableTransfer(ctx, shareID); err != nil {
 			return fmt.Errorf("enabling transfer: %w", err)
 		}
@@ -858,81 +868,38 @@ var transferDownloadCmd = &cobra.Command{
 		outputDir, _ := cmd.Flags().GetString("output")
 		yes, _ := cmd.Flags().GetBool("yes")
 
-		cfg, err := config.Load()
-		if err != nil {
-			return fmt.Errorf("loading config: %w", err)
-		}
-
 		ctx := context.Background()
-		tok, err := mustGetToken(ctx, cfg)
+		cfg, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
 		}
 
-		client := api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug)
-
-		// Fetch transfer details and user key in parallel.
-		type detailsResult struct {
-			v   *api.TransferDetails
-			err error
+		details, userKey, err := fetchDetailsAndKey(ctx, client, shareID)
+		if err != nil {
+			return err
 		}
-		type keyResult struct {
-			v   *api.UserKey
-			err error
-		}
-		detailsCh := make(chan detailsResult, 1)
-		keyCh := make(chan keyResult, 1)
-		go func() { v, err := client.GetTransferDetails(ctx, shareID); detailsCh <- detailsResult{v, err} }()
-		go func() { v, err := client.GetActiveKey(ctx); keyCh <- keyResult{v, err} }()
-
-		dr := <-detailsCh
-		if dr.err != nil {
-			return fmt.Errorf("fetching transfer: %w", dr.err)
-		}
-		details := dr.v
-
-		kr := <-keyCh
-		if kr.err != nil {
-			return fmt.Errorf("fetching encryption key: %w", kr.err)
-		}
-		userKey := kr.v
 
 		if details.SessionPrivateKeyEnc == nil && details.SessionPrivateKeyEncForPassphrase == nil {
 			return fmt.Errorf("transfer not yet completed — no encrypted content available")
 		}
 
-		// Resolve session private key: try user key path first, then transfer passphrase.
-		var identityStr string
+		// Resolve session identity: try user key path first, then transfer passphrase.
+		var sessionIdentity *age.HybridIdentity
 
 		if userKey != nil && details.SessionPrivateKeyEnc != nil {
-			// Try keyring cache first.
-			if cfg.Keyring.Enabled {
-				identityStr, _ = keyring.Load()
-			}
-			if identityStr == "" {
-				passphrase, err := readKeyPassphrase()
-				if err != nil {
-					return err
-				}
-				identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, passphrase)
-				if err != nil {
-					return fmt.Errorf("wrong key passphrase")
-				}
-				if cfg.Keyring.Enabled {
-					if err := keyring.Store(identityStr, cfg.Keyring.TTL); err != nil {
-						fmt.Fprintf(os.Stderr, "warning: keyring store: %v\n", err)
-					}
-				}
-			}
-			identity, err := crypto.ParseIdentity(identityStr)
+			userIdentity, err := resolveUserIdentity(cfg, userKey)
 			if err != nil {
-				return fmt.Errorf("parsing identity: %w", err)
+				return err
 			}
-			sessionPrivKey, err := crypto.DecryptToString(*details.SessionPrivateKeyEnc, identity)
+			sessionPrivKey, err := crypto.DecryptToString(*details.SessionPrivateKeyEnc, userIdentity)
 			if err != nil {
 				return fmt.Errorf("decrypting session key (key mismatch?): %w", err)
 			}
-			identityStr = sessionPrivKey
+			si, err := crypto.ParseIdentity(sessionPrivKey)
+			if err != nil {
+				return fmt.Errorf("parsing session identity: %w", err)
+			}
+			sessionIdentity = si
 		} else {
 			// Ephemeral path: use transfer passphrase.
 			if details.EphemeralPrivateKeyEnc == nil || details.SessionPrivateKeyEncForPassphrase == nil {
@@ -956,12 +923,11 @@ var transferDownloadCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("decrypting session key: %w", err)
 			}
-			identityStr = sessionPrivKey
-		}
-
-		sessionIdentity, err := crypto.ParseIdentity(identityStr)
-		if err != nil {
-			return fmt.Errorf("parsing session identity: %w", err)
+			si, err := crypto.ParseIdentity(sessionPrivKey)
+			if err != nil {
+				return fmt.Errorf("parsing session identity: %w", err)
+			}
+			sessionIdentity = si
 		}
 
 		// Fetch all files (paginate).
@@ -1013,29 +979,14 @@ var transferDownloadCmd = &cobra.Command{
 
 		// Confirmation prompt (skip with --yes / -y).
 		if !yes {
-			const lineWidth = 44
-			fmt.Fprintln(os.Stderr)
-			for _, f := range decFiles {
-				name := f.name
-				if len(name) > lineWidth-10 {
-					name = name[:lineWidth-13] + "…"
-				}
-				fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, name, formatSize(f.OriginalSize))
+			names := make([]string, len(decFiles))
+			sizes := make([]int64, len(decFiles))
+			for i, f := range decFiles {
+				names[i] = f.name
+				sizes[i] = f.OriginalSize
 			}
-			fmt.Fprintf(os.Stderr, "  %s\n", strings.Repeat("─", lineWidth))
-			noun := "file"
-			if len(decFiles) > 1 {
-				noun = "files"
-			}
-			fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10,
-				fmt.Sprintf("%d %s", len(decFiles), noun), formatSize(totalSize))
-			fmt.Fprintln(os.Stderr)
-			fmt.Fprintf(os.Stderr, "  Destination:  %s/\n", outputDir)
-			fmt.Fprintln(os.Stderr)
-			fmt.Fprint(os.Stderr, "Proceed? [y/N] ")
-			answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			fmt.Fprintln(os.Stderr)
-			if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+			extras := []string{fmt.Sprintf("  Destination:  %s/", outputDir)}
+			if !confirmFileList(names, sizes, totalSize, extras) {
 				fmt.Fprintln(os.Stderr, "Aborted.")
 
 				return nil
