@@ -24,5 +24,6 @@ func (c *Client) GetActiveKey(ctx context.Context) (*UserKey, error) {
 	if err := c.Get(ctx, "/user/me/key/active", &result); err != nil {
 		return nil, err
 	}
+
 	return result, nil
 }

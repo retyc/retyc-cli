@@ -27,6 +27,7 @@ func Store(identity string, ttl int) error {
 	if _, err = unix.KeyctlInt(unix.KEYCTL_SET_TIMEOUT, id, ttl, 0, 0); err != nil {
 		return fmt.Errorf("set_timeout: %w", err)
 	}
+
 	return nil
 }
 
@@ -38,6 +39,7 @@ func Load() (string, error) {
 		if isAbsent(err) {
 			return "", nil
 		}
+
 		return "", fmt.Errorf("search: %w", err)
 	}
 
@@ -59,6 +61,7 @@ func Load() (string, error) {
 	if n > size {
 		n = size
 	}
+
 	return string(buf[:n]), nil
 }
 

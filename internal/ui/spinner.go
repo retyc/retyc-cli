@@ -55,6 +55,7 @@ func (s *Spinner) Start() {
 			select {
 			case <-s.stop:
 				fmt.Fprint(os.Stderr, clearLine+ansiReset)
+
 				return
 			case <-ticker.C:
 				color := spinColors[i%len(spinColors)]

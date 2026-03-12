@@ -31,6 +31,7 @@ func (t *UserAgentTransport) RoundTrip(req *http.Request) (*http.Response, error
 	if base == nil {
 		base = http.DefaultTransport
 	}
+
 	return base.RoundTrip(req)
 }
 
@@ -59,6 +60,7 @@ func New(baseURL, userAgent string, tok *oauth2.Token, insecure, debug bool) *Cl
 			},
 		},
 	}
+
 	return &Client{
 		baseURL: baseURL,
 		debug:   debug,
@@ -102,6 +104,7 @@ func (c *Client) Put(ctx context.Context, path string, body io.Reader, dst any) 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
+
 	return c.do(req, dst)
 }
 
@@ -124,6 +127,7 @@ func (c *Client) PostMultipartChunk(ctx context.Context, path string, data []byt
 		return err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+
 	return c.do(req, nil)
 }
 
@@ -133,6 +137,7 @@ func (c *Client) Delete(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
+
 	return c.do(req, nil)
 }
 
@@ -151,7 +156,7 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -165,6 +170,7 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
+
 	return body, nil
 }
 
@@ -175,11 +181,11 @@ func (c *Client) do(req *http.Request, dst any) error {
 		fmt.Fprintf(os.Stderr, "> %s %s\n", req.Method, req.URL)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: intentional outbound HTTP request from API client
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -207,5 +213,6 @@ func (c *Client) do(req *http.Request, dst any) error {
 			return fmt.Errorf("decoding response: %w", err)
 		}
 	}
+
 	return nil
 }

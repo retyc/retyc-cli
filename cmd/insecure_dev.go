@@ -9,5 +9,6 @@ package cmd
 var insecure bool
 
 func init() {
-	rootCmd.PersistentFlags().BoolVarP(&insecure, "insecure", "k", false, "skip TLS certificate verification (useful for self-signed certificates)")
+	rootCmd.PersistentFlags().BoolVarP(&insecure, "insecure", "k", false,
+		"skip TLS certificate verification (useful for self-signed certificates)")
 }
