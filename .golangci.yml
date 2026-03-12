@@ -10,6 +10,12 @@ linters:
     - misspell       # detect commonly misspelled words
     - nlreturn       # check for missing return statements in functions
     - whitespace     # check for whitespace issues
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
 
 issues:
   fix: false  # use `golangci-lint run --fix` to automatically fix some of the issues
