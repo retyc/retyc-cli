@@ -290,9 +290,11 @@ func readKeyPassphrase() (string, error) {
 	return string(pb), nil
 }
 
-// mustGetToken retrieves a valid OAuth2 token, returning a user-friendly error
-// if authentication is missing or expired.
-func mustGetToken(ctx context.Context, cfg *config.Config) (*oauth2.Token, error) {
+// mustGetToken retrieves a refreshing OAuth2 token source, returning a
+// user-friendly error if authentication is missing or expired.
+// The returned source automatically renews the access token during long
+// operations (e.g. large file uploads) without requiring re-authentication.
+func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, error) {
 	httpClient := newHTTPClient(insecure, debug)
 
 	oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
@@ -310,7 +312,10 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (*oauth2.Token, error
 		}
 	}
 
-	return tok, nil
+	// Persist refreshed tokens to disk only in interactive (non-CI) mode.
+	persist := os.Getenv("RETYC_TOKEN") == ""
+
+	return auth.NewRefreshingTokenSource(tok, *oidcCfg, httpClient, persist), nil
 }
 
 // printBoxedMessage prints a decrypted message with a left vertical bar and padding,

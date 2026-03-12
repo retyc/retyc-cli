@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/retyc/retyc-cli/internal/config"
@@ -199,7 +200,13 @@ func Refresh(
 		"refresh_token": {refreshToken},
 	}
 
-	resp, err := httpClient.PostForm(cfg.TokenURL, data)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +273,61 @@ func Revoke(ctx context.Context, cfg config.OIDCConfig, refreshToken string, htt
 	}
 
 	return nil
+}
+
+// RefreshingTokenSource is an oauth2.TokenSource that transparently refreshes
+// the access token when it expires. It is safe for concurrent use.
+// When persist is true, a successfully refreshed token is saved to disk so
+// that the next invocation of the CLI does not need to re-authenticate.
+type RefreshingTokenSource struct {
+	mu         sync.Mutex
+	tok        *oauth2.Token
+	cfg        config.OIDCConfig
+	httpClient *http.Client
+	persist    bool
+}
+
+// NewRefreshingTokenSource returns a TokenSource that refreshes tok automatically.
+// Set persist to true when the token was loaded from disk (interactive sessions);
+// set it to false for the RETYC_TOKEN env-var path (CI/CD, no disk state).
+func NewRefreshingTokenSource(
+	tok *oauth2.Token,
+	cfg config.OIDCConfig,
+	httpClient *http.Client,
+	persist bool,
+) oauth2.TokenSource {
+	return &RefreshingTokenSource{tok: tok, cfg: cfg, httpClient: httpClient, persist: persist}
+}
+
+// Token returns a valid access token, refreshing it if necessary.
+func (s *RefreshingTokenSource) Token() (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.tok.Valid() {
+		return s.tok, nil
+	}
+	if s.tok.RefreshToken == "" {
+		return nil, ErrNoRefreshToken
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	newTok, err := Refresh(ctx, s.cfg, s.tok.RefreshToken, s.httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("refreshing token: %w", err)
+	}
+
+	if s.persist {
+		if err := config.SaveToken(newTok); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: saving refreshed token: %v\n", err)
+		}
+	}
+
+	s.tok = newTok
+
+	return newTok, nil
 }
 
 // GetValidToken returns a valid token for the current session.
