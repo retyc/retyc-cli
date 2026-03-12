@@ -224,7 +224,7 @@ api:
 | Feature | Status |
 |---|---|
 | Get data | ✅ |
-| Get quota / capabilities | 🔜 |
+| Get quota | ✅ |
 
 ### Organization
 

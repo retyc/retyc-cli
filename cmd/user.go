@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -42,7 +43,49 @@ var userInfoCmd = &cobra.Command{
 	},
 }
 
+var userQuotaCmd = &cobra.Command{
+	Use:   "quota",
+	Short: "Show current user quota",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+		_, client, err := newAPIClient(ctx)
+		if err != nil {
+			return err
+		}
+
+		q, err := client.GetQuota(ctx)
+		if err != nil {
+			return fmt.Errorf("fetching quota: %w", err)
+		}
+
+		readOnly := ""
+		if q.IsUploadReadOnly {
+			readOnly = " (read-only)"
+		}
+
+		fmt.Printf("Transfers:   %d / %s\n", q.CountShare, formatCount(q.MaxCountShare))
+		fmt.Printf("Datarooms:   %d / %s\n", q.CountDataroom, formatCount(q.MaxCountDataroom))
+		fmt.Printf("Storage:     %s / %s%s\n",
+			ui.FormatSize(q.UsedStorage),
+			ui.FormatSize(q.MaxStorage),
+			readOnly,
+		)
+
+		return nil
+	},
+}
+
+// formatCount formats a nullable count limit: nil means unlimited.
+func formatCount(n *int) string {
+	if n == nil {
+		return "unlimited"
+	}
+
+	return fmt.Sprintf("%d", *n)
+}
+
 func init() {
 	userCmd.AddCommand(userInfoCmd)
+	userCmd.AddCommand(userQuotaCmd)
 	rootCmd.AddCommand(userCmd)
 }
