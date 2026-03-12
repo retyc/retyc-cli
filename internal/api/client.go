@@ -56,7 +56,17 @@ func New(baseURL, userAgent string, tok *oauth2.Token, insecure, debug bool) *Cl
 		Base: &oauth2.Transport{
 			Source: oauth2.StaticTokenSource(tok),
 			Base: &http.Transport{
-				TLSClientConfig: tlsCfg,
+				TLSClientConfig:     tlsCfg,
+				TLSHandshakeTimeout: 15 * time.Second,
+				// ResponseHeaderTimeout guards against a server that accepts the
+				// connection but never sends headers back. It does NOT limit how
+				// long the request body (i.e. a large upload) may take to send,
+				// so large chunks are not artificially timed out.
+				ResponseHeaderTimeout: 60 * time.Second,
+				// IdleConnTimeout closes connections that are idle for too long,
+				// protecting against a server that stops sending the response body
+				// mid-transfer (e.g. stalled downloads).
+				IdleConnTimeout: 90 * time.Second,
 			},
 		},
 	}
@@ -64,8 +74,11 @@ func New(baseURL, userAgent string, tok *oauth2.Token, insecure, debug bool) *Cl
 	return &Client{
 		baseURL: baseURL,
 		debug:   debug,
+		// No client-level Timeout: that field caps the entire round-trip
+		// (including body upload), which would kill large chunk uploads on
+		// slow connections. Transport-level timeouts above protect against
+		// hung connections and unresponsive servers instead.
 		httpClient: &http.Client{
-			Timeout:   30 * time.Second,
 			Transport: transport,
 		},
 	}
