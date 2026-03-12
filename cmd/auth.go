@@ -65,6 +65,7 @@ var authLoginCmd = &cobra.Command{
 			fmt.Println()
 			fmt.Println("Offline token (set as RETYC_TOKEN in CI):")
 			fmt.Println(token.RefreshToken)
+
 			return nil
 		}
 
@@ -73,6 +74,7 @@ var authLoginCmd = &cobra.Command{
 		}
 
 		fmt.Println("Authentication successful.")
+
 		return nil
 	},
 }
@@ -104,6 +106,7 @@ var authLogoutCmd = &cobra.Command{
 			return fmt.Errorf("removing token: %w", err)
 		}
 		fmt.Println("Logged out.")
+
 		return nil
 	},
 }
@@ -126,6 +129,7 @@ var authStatusCmd = &cobra.Command{
 			stored, err = config.LoadToken()
 			if err != nil {
 				fmt.Println("Not authenticated. Run `retyc auth login`.")
+
 				return nil
 			}
 		}
@@ -148,6 +152,7 @@ var authStatusCmd = &cobra.Command{
 			default:
 				fmt.Printf("Token expired and refresh failed: %v\nRun `retyc auth login`.\n", err)
 			}
+
 			return nil
 		}
 
@@ -167,6 +172,7 @@ var authStatusCmd = &cobra.Command{
 		} else {
 			fmt.Printf("Authenticated (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))
 		}
+
 		return nil
 	},
 }
@@ -184,6 +190,7 @@ func newHTTPClient(insecure, debug bool) *http.Client {
 		transport = &debugTransport{wrapped: transport}
 	}
 	transport = &api.UserAgentTransport{UserAgent: cliUserAgent(), Base: transport}
+
 	return &http.Client{
 		Timeout:   30 * time.Second,
 		Transport: transport,
@@ -204,7 +211,7 @@ func (t *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	resp.Body.Close() //nolint:errcheck,gosec // G104: body already fully read, close error irrelevant
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -220,6 +227,7 @@ func (t *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	resp.Body = io.NopCloser(bytes.NewReader(body))
+
 	return resp, nil
 }
 
@@ -241,11 +249,13 @@ func isOfflineToken(refreshToken string) bool {
 	if err := json.Unmarshal(decoded, &claims); err != nil {
 		return false
 	}
+
 	return strings.EqualFold(claims.Typ, "Offline")
 }
 
 func init() {
-	authLoginCmd.Flags().BoolVar(&offlineLogin, "offline", false, "Request an offline token for non-interactive use (CI/CD)")
+	authLoginCmd.Flags().BoolVar(&offlineLogin, "offline", false,
+		"Request an offline token for non-interactive use (CI/CD)")
 	authCmd.AddCommand(authLoginCmd)
 	authCmd.AddCommand(authLogoutCmd)
 	authCmd.AddCommand(authStatusCmd)

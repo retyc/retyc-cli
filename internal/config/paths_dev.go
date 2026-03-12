@@ -20,5 +20,6 @@ func configDir() (string, error) {
 	if dir := os.Getenv("RETYC_CONFIG_DIR"); dir != "" {
 		return dir, nil
 	}
+
 	return ".retyc", nil
 }

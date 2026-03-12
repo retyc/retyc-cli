@@ -21,12 +21,12 @@ func ConfigDir() (string, error) {
 
 // OIDCConfig holds the parameters needed to perform an OIDC device flow.
 type OIDCConfig struct {
-	Issuer         string   `yaml:"issuer" mapstructure:"issuer"`
-	ClientID       string   `yaml:"client_id" mapstructure:"client_id"`
-	Scopes         []string `yaml:"scopes" mapstructure:"scopes"`
-	DeviceAuthURL  string   `yaml:"device_auth_url" mapstructure:"device_auth_url"`
-	TokenURL       string   `yaml:"token_url" mapstructure:"token_url"`
-	EndSessionURL  string   `yaml:"end_session_url" mapstructure:"end_session_url"`
+	Issuer        string   `yaml:"issuer" mapstructure:"issuer"`
+	ClientID      string   `yaml:"client_id" mapstructure:"client_id"`
+	Scopes        []string `yaml:"scopes" mapstructure:"scopes"`
+	DeviceAuthURL string   `yaml:"device_auth_url" mapstructure:"device_auth_url"`
+	TokenURL      string   `yaml:"token_url" mapstructure:"token_url"`
+	EndSessionURL string   `yaml:"end_session_url" mapstructure:"end_session_url"`
 }
 
 // APIConfig holds REST API connection parameters.
@@ -62,6 +62,7 @@ func Load() (*Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshalling config: %w", err)
 	}
+
 	return &cfg, nil
 }
 
@@ -71,6 +72,7 @@ func tokenPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return filepath.Join(dir, "token.json"), nil
 }
 
@@ -89,13 +91,14 @@ func SaveToken(tok *oauth2.Token) error {
 		return err
 	}
 
+	//nolint:gosec // G304: path is computed internally from configDir
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
-	return json.NewEncoder(f).Encode(tok)
+	return json.NewEncoder(f).Encode(tok) //nolint:gosec // G117: token storage is intentional
 }
 
 // LoadToken reads the persisted OAuth2 token from disk.
@@ -105,19 +108,21 @@ func LoadToken() (*oauth2.Token, error) {
 		return nil, err
 	}
 
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: path is computed internally from configDir
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("no stored token found")
 		}
+
 		return nil, err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	var tok oauth2.Token
 	if err := json.NewDecoder(f).Decode(&tok); err != nil {
 		return nil, err
 	}
+
 	return &tok, nil
 }
 
@@ -130,5 +135,6 @@ func DeleteToken() error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+
 	return nil
 }

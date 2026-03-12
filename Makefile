@@ -24,6 +24,14 @@ test:
 vet:
 	go vet ./...
 
+## Run golangci-lint
+lint:
+	golangci-lint run ./...
+
+## Run golangci-lint --fix
+lint-fix:
+	golangci-lint run ./... --fix
+
 ## Remove built binary
 clean:
 	rm -f $(BINARY)

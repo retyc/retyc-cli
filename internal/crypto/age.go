@@ -23,6 +23,7 @@ func GenerateKeyPair() (*age.HybridIdentity, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generating AGE identity: %w", err)
 	}
+
 	return identity, nil
 }
 
@@ -32,6 +33,7 @@ func ParseIdentity(privateKey string) (*age.HybridIdentity, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing AGE identity: %w", err)
 	}
+
 	return id, nil
 }
 
@@ -41,6 +43,7 @@ func ParseRecipient(publicKey string) (*age.HybridRecipient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing AGE recipient: %w", err)
 	}
+
 	return rec, nil
 }
 
@@ -81,6 +84,7 @@ func Decrypt(ciphertext string, identities ...age.Identity) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading decrypted data: %w", err)
 	}
+
 	return plaintext, nil
 }
 
@@ -95,6 +99,7 @@ func DecryptToString(ciphertext string, identities ...age.Identity) (string, err
 	if err != nil {
 		return "", err
 	}
+
 	return string(b), nil
 }
 
@@ -105,6 +110,7 @@ func DecryptWithPassphrase(ciphertext string, passphrase string) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("creating scrypt identity: %w", err)
 	}
+
 	return Decrypt(ciphertext, identity)
 }
 
@@ -114,6 +120,7 @@ func DecryptToStringWithPassphrase(ciphertext string, passphrase string) (string
 	if err != nil {
 		return "", err
 	}
+
 	return string(b), nil
 }
 
@@ -127,6 +134,7 @@ func DecryptBinary(data []byte, identities ...age.Identity) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading decrypted data: %w", err)
 	}
+
 	return plaintext, nil
 }
 
@@ -146,6 +154,7 @@ func EncryptStringForKeys(value string, publicKeys []string) (string, error) {
 	if len(recipients) == 0 {
 		return "", fmt.Errorf("no valid recipients")
 	}
+
 	return EncryptToString(value, recipients...)
 }
 
@@ -167,6 +176,7 @@ func EncryptBinaryForKey(plaintext []byte, publicKey string) ([]byte, error) {
 	if err := w.Close(); err != nil {
 		return nil, fmt.Errorf("finalizing encryption: %w", err)
 	}
+
 	return buf.Bytes(), nil
 }
 
@@ -176,5 +186,6 @@ func EncryptWithPassphrase(plaintext []byte, passphrase string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("creating scrypt recipient: %w", err)
 	}
+
 	return Encrypt(plaintext, recipient)
 }

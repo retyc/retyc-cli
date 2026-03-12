@@ -112,7 +112,7 @@ func requestDeviceCode(cfg config.OIDCConfig, httpClient *http.Client) (*DeviceA
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -127,6 +127,7 @@ func requestDeviceCode(cfg config.OIDCConfig, httpClient *http.Client) (*DeviceA
 	if err := json.Unmarshal(body, &dar); err != nil {
 		return nil, fmt.Errorf("decoding device auth response: %w", err)
 	}
+
 	return &dar, nil
 }
 
@@ -143,7 +144,7 @@ func pollToken(cfg config.OIDCConfig, deviceCode string, httpClient *http.Client
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -151,11 +152,8 @@ func pollToken(cfg config.OIDCConfig, deviceCode string, httpClient *http.Client
 	}
 
 	// A non-2xx status that carries no recognised error field is unexpected.
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Try to decode anyway — RFC 8628 errors (authorization_pending, etc.)
-		// are returned as 4xx with a JSON body; fall through to the switch below.
-	}
-
+	// Try to decode anyway — RFC 8628 errors (authorization_pending, etc.)
+	// are returned as 4xx with a JSON body; fall through to the switch below.
 	var tr TokenResponse
 	if err := json.Unmarshal(body, &tr); err != nil {
 		return nil, fmt.Errorf("decoding token response (status %d): %w — body: %s", resp.StatusCode, err, string(body))
@@ -185,13 +183,16 @@ func tokenFromResponse(tr TokenResponse) *oauth2.Token {
 	if tr.ExpiresIn > 0 {
 		tok.Expiry = time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second)
 	}
+
 	return tok
 }
 
 // Refresh exchanges a refresh token for a new set of tokens.
 // If the server does not return a new refresh token, the original one is
 // preserved so that subsequent refreshes remain possible.
-func Refresh(ctx context.Context, cfg config.OIDCConfig, refreshToken string, httpClient *http.Client) (*oauth2.Token, error) {
+func Refresh(
+	ctx context.Context, cfg config.OIDCConfig, refreshToken string, httpClient *http.Client,
+) (*oauth2.Token, error) {
 	data := url.Values{
 		"client_id":     {cfg.ClientID},
 		"grant_type":    {"refresh_token"},
@@ -202,7 +203,7 @@ func Refresh(ctx context.Context, cfg config.OIDCConfig, refreshToken string, ht
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -253,13 +254,14 @@ func Revoke(ctx context.Context, cfg config.OIDCConfig, refreshToken string, htt
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
 			return fmt.Errorf("end_session endpoint returned %d (could not read body: %w)", resp.StatusCode, readErr)
 		}
+
 		return fmt.Errorf("end_session endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -286,6 +288,7 @@ func GetValidToken(ctx context.Context, cfg config.OIDCConfig, httpClient *http.
 		if err != nil {
 			return nil, fmt.Errorf("RETYC_TOKEN refresh failed: %w", err)
 		}
+
 		return tok, nil
 	}
 

@@ -68,24 +68,25 @@ var transferLsCmd = &cobra.Command{
 
 		if len(result.Items) == 0 {
 			fmt.Printf("No %s transfers found.\n", listType)
+
 			return nil
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tSTATUS\tTITLE\tCREATED")
+		fmt.Fprintln(w, "ID\tSTATUS\tTITLE\tCREATED") //nolint:errcheck
 		for _, t := range result.Items {
 			title := ""
 			if t.Title != nil {
 				title = *t.Title
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", //nolint:errcheck
 				t.ID,
 				t.Status,
 				title,
 				t.CreatedAt.Format("2006-01-02 15:04"),
 			)
 		}
-		w.Flush()
+		_ = w.Flush()
 
 		if result.Pages > 1 {
 			fmt.Printf("\nPage %d/%d · %d transfert(s) au total\n", result.Page, result.Pages, result.Total)
@@ -177,6 +178,7 @@ var transferInfoCmd = &cobra.Command{
 		// Crypto section: requires session_private_key_enc.
 		if details.SessionPrivateKeyEnc == nil {
 			fmt.Println("\n(Transfer not yet completed — no encrypted content available.)")
+
 			return nil
 		}
 		if userKey == nil {
@@ -244,20 +246,21 @@ var transferInfoCmd = &cobra.Command{
 
 		if filePage.Total == 0 {
 			fmt.Println("\nNo files.")
+
 			return nil
 		}
 
 		fmt.Printf("\nFiles (%d):\n", filePage.Total)
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "  NAME\tSIZE")
+		fmt.Fprintln(w, "  NAME\tSIZE") //nolint:errcheck
 		for _, f := range filePage.Items {
 			name, err := crypto.DecryptToString(f.NameEnc, sessionIdentity)
 			if err != nil {
 				name = "(encrypted)"
 			}
-			fmt.Fprintf(w, "  %s\t%s\n", name, formatSize(f.OriginalSize))
+			fmt.Fprintf(w, "  %s\t%s\n", name, formatSize(f.OriginalSize)) //nolint:errcheck
 		}
-		w.Flush()
+		_ = w.Flush()
 
 		if filePage.Pages > 1 {
 			fmt.Printf("  … and more (page 1/%d, %d files total)\n", filePage.Pages, filePage.Total)
@@ -274,15 +277,16 @@ func readKeyPassphrase() (string, error) {
 	if v := os.Getenv("RETYC_KEY_PASSPHRASE"); v != "" {
 		return v, nil
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) { //nolint:gosec // G115: Fd() fits in int on all supported platforms
 		return "", fmt.Errorf("no TTY detected and RETYC_KEY_PASSPHRASE is not set")
 	}
 	fmt.Fprint(os.Stderr, "Key passphrase: ")
-	pb, err := term.ReadPassword(int(os.Stdin.Fd()))
+	pb, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115: Fd() fits in int on all supported platforms
 	fmt.Fprint(os.Stderr, "\r\033[2K")
 	if err != nil {
 		return "", fmt.Errorf("reading key passphrase: %w", err)
 	}
+
 	return string(pb), nil
 }
 
@@ -305,6 +309,7 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (*oauth2.Token, error
 			return nil, fmt.Errorf("authentication failed: %w", err)
 		}
 	}
+
 	return tok, nil
 }
 
@@ -313,6 +318,7 @@ func ptrOr(s *string, fallback string) string {
 	if s == nil {
 		return fallback
 	}
+
 	return *s
 }
 
@@ -326,6 +332,7 @@ func formatSize(bytes int64) string {
 		div *= 1024
 		exp++
 	}
+
 	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
@@ -420,6 +427,7 @@ var transferCreateCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr)
 			if strings.ToLower(strings.TrimSpace(answer)) != "y" {
 				fmt.Fprintln(os.Stderr, "Aborted.")
+
 				return nil
 			}
 		}
@@ -480,6 +488,7 @@ var transferCreateCmd = &cobra.Command{
 				}
 				if len(pb) < minPassphraseLen {
 					fmt.Fprintf(os.Stderr, "Passphrase must be at least %d characters.\n", minPassphraseLen)
+
 					continue
 				}
 				fmt.Fprint(os.Stderr, "Confirm passphrase: ")
@@ -490,9 +499,11 @@ var transferCreateCmd = &cobra.Command{
 				}
 				if string(pb) != string(pb2) {
 					fmt.Fprintln(os.Stderr, "Passphrases do not match.")
+
 					continue
 				}
 				passphrase = string(pb)
+
 				break
 			}
 		}
@@ -577,6 +588,7 @@ var transferCreateCmd = &cobra.Command{
 			if genPassphrase {
 				fmt.Printf("Passphrase: %s\n", passphrase)
 			}
+
 			return nil
 		}
 
@@ -587,6 +599,7 @@ var transferCreateCmd = &cobra.Command{
 		if genPassphrase {
 			fmt.Printf("Passphrase: %s\n", passphrase)
 		}
+
 		return nil
 	},
 }
@@ -602,6 +615,7 @@ func formatExpiry(seconds int) string {
 	if seconds < 86400 {
 		return fmt.Sprintf("in %dh", seconds/3600)
 	}
+
 	return fmt.Sprintf("in %dd", seconds/86400)
 }
 
@@ -613,6 +627,7 @@ func newTransferBar(name string, sizeBytes int64) *progressbar.ProgressBar {
 	if len(desc) > descWidth {
 		desc = desc[:descWidth-1] + "…"
 	}
+
 	return progressbar.NewOptions64(
 		sizeBytes,
 		progressbar.OptionSetDescription(fmt.Sprintf("  %-*s", descWidth, desc)),
@@ -641,11 +656,11 @@ func newTransferBar(name string, sizeBytes int64) *progressbar.ProgressBar {
 // goroutine. A semaphore limits the number of in-flight uploads to uploadConcurrency,
 // keeping multiple HTTP connections busy in parallel.
 func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePath, sessionPubKey string) error {
-	f, err := os.Open(filePath)
+	f, err := os.Open(filePath) //nolint:gosec // G304: path comes from validated user argument
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	info, err := f.Stat()
 	if err != nil {
@@ -693,6 +708,7 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 	hasErr := func() bool {
 		mu.Lock()
 		defer mu.Unlock()
+
 		return firstErr != nil
 	}
 
@@ -708,6 +724,7 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 			encrypted, encErr := crypto.EncryptBinaryForKey(buf[:n], sessionPubKey)
 			if encErr != nil {
 				setErr(fmt.Errorf("encrypting chunk %d: %w", chunkID, encErr))
+
 				break
 			}
 
@@ -716,6 +733,7 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 			case sem <- struct{}{}:
 			case <-ctx.Done():
 				setErr(ctx.Err())
+
 				break
 			}
 			if hasErr() {
@@ -729,6 +747,7 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 				defer func() { <-sem }()
 				if err := client.UploadChunk(ctx, fileModel.ID, id, enc); err != nil {
 					setErr(fmt.Errorf("uploading chunk %d: %w", id, err))
+
 					return
 				}
 				_ = bar.Add(sz)
@@ -740,6 +759,7 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 		}
 		if readErr != nil {
 			setErr(fmt.Errorf("reading file: %w", readErr))
+
 			break
 		}
 	}
@@ -751,6 +771,7 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 	}
 
 	_ = bar.Finish()
+
 	return nil
 }
 
@@ -778,6 +799,7 @@ var transferDisableCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Transfer %s disabled.\n", shareID)
+
 		return nil
 	},
 }
@@ -806,6 +828,7 @@ var transferEnableCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Transfer %s enabled.\n", shareID)
+
 		return nil
 	},
 }
@@ -988,7 +1011,8 @@ var transferDownloadCmd = &cobra.Command{
 			if len(decFiles) > 1 {
 				noun = "files"
 			}
-			fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, fmt.Sprintf("%d %s", len(decFiles), noun), formatSize(totalSize))
+			fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10,
+				fmt.Sprintf("%d %s", len(decFiles), noun), formatSize(totalSize))
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintf(os.Stderr, "  Destination:  %s/\n", outputDir)
 			fmt.Fprintln(os.Stderr)
@@ -997,6 +1021,7 @@ var transferDownloadCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr)
 			if strings.ToLower(strings.TrimSpace(answer)) != "y" {
 				fmt.Fprintln(os.Stderr, "Aborted.")
+
 				return nil
 			}
 		}
@@ -1014,6 +1039,7 @@ var transferDownloadCmd = &cobra.Command{
 		}
 
 		fmt.Fprintf(os.Stderr, "\nDownloaded to %s/\n", outputDir)
+
 		return nil
 	},
 }
@@ -1024,13 +1050,17 @@ var transferDownloadCmd = &cobra.Command{
 // Workers download and decrypt concurrently. A reorder buffer holds chunks that
 // arrive ahead of the next expected write position, so disk writes always happen
 // sequentially (chunk 0 → 1 → 2 → …) regardless of network arrival order.
-func downloadTransferFile(ctx context.Context, client *api.Client, outputDir string, f api.TransferFile, name string, identity *age.HybridIdentity) error {
+func downloadTransferFile(
+	ctx context.Context, client *api.Client, outputDir string,
+	f api.TransferFile, name string, identity *age.HybridIdentity,
+) error {
 	dest := filepath.Join(outputDir, name)
+	//nolint:gosec // G304: dest is built from validated outputDir + decrypted filename
 	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer out.Close() //nolint:errcheck
 
 	bar := newTransferBar(name, f.OriginalSize)
 
@@ -1061,11 +1091,13 @@ func downloadTransferFile(ctx context.Context, client *api.Client, outputDir str
 				encrypted, err := client.DownloadChunk(ctx, f.ID, id)
 				if err != nil {
 					results <- chunkResult{id: id, err: fmt.Errorf("downloading chunk %d: %w", id, err)}
+
 					return
 				}
 				plaintext, err := crypto.DecryptBinary(encrypted, identity)
 				if err != nil {
 					results <- chunkResult{id: id, err: fmt.Errorf("decrypting chunk %d: %w", id, err)}
+
 					return
 				}
 				results <- chunkResult{id: id, data: plaintext}
@@ -1099,7 +1131,9 @@ func downloadTransferFile(ctx context.Context, client *api.Client, outputDir str
 	for r := range results {
 		if r.err != nil {
 			cancel()
-			for range results {} // drain so workers can unblock and exit
+			for range results {
+			} // drain so workers can unblock and exit
+
 			return r.err
 		}
 		reorder[r.id] = r.data
@@ -1111,7 +1145,9 @@ func downloadTransferFile(ctx context.Context, client *api.Client, outputDir str
 			}
 			if _, err := out.Write(data); err != nil {
 				cancel()
-				for range results {}
+				for range results {
+				}
+
 				return fmt.Errorf("writing chunk %d: %w", nextWrite, err)
 			}
 			_ = bar.Add(len(data))
@@ -1121,6 +1157,7 @@ func downloadTransferFile(ctx context.Context, client *api.Client, outputDir str
 	}
 
 	_ = bar.Finish()
+
 	return nil
 }
 
@@ -1138,6 +1175,7 @@ func generateTransferPassphrase() (string, error) {
 		}
 		result[i] = chars[n.Int64()]
 	}
+
 	return string(result), nil
 }
 
@@ -1149,9 +1187,9 @@ func randomLetters(n int) string {
 	for i, c := range b {
 		b[i] = letters[int(c)%len(letters)]
 	}
+
 	return string(b)
 }
-
 
 func init() {
 	transferLsCmd.Flags().Bool("sent", false, "List sent transfers (default)")

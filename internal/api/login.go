@@ -41,13 +41,14 @@ func FetchOIDCConfig(ctx context.Context, baseURL string, httpClient *http.Clien
 	if err != nil {
 		return nil, fmt.Errorf("fetching public login config: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
 			return nil, fmt.Errorf("public login config: API error %d (could not read body: %w)", resp.StatusCode, readErr)
 		}
+
 		return nil, fmt.Errorf("public login config: API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -68,13 +69,14 @@ func FetchOIDCConfig(ctx context.Context, baseURL string, httpClient *http.Clien
 	if err != nil {
 		return nil, fmt.Errorf("fetching OIDC discovery: %w", err)
 	}
-	defer resp2.Body.Close()
+	defer resp2.Body.Close() //nolint:errcheck
 
 	if resp2.StatusCode < 200 || resp2.StatusCode >= 300 {
 		body, readErr := io.ReadAll(resp2.Body)
 		if readErr != nil {
 			return nil, fmt.Errorf("OIDC discovery: API error %d (could not read body: %w)", resp2.StatusCode, readErr)
 		}
+
 		return nil, fmt.Errorf("OIDC discovery: API error %d: %s", resp2.StatusCode, string(body))
 	}
 
