@@ -49,7 +49,7 @@ var transferLsCmd = &cobra.Command{
 			listType = "received"
 		}
 
-		ctx := context.Background()
+		ctx := cmd.Context()
 		_, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
@@ -97,7 +97,7 @@ var transferInfoCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		shareID := args[0]
 
-		ctx := context.Background()
+		ctx := cmd.Context()
 		cfg, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
@@ -477,7 +477,7 @@ var transferCreateCmd = &cobra.Command{
 			}
 		}
 
-		ctx := context.Background()
+		ctx := cmd.Context()
 		_, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
@@ -820,7 +820,7 @@ var transferDisableCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		shareID := args[0]
 
-		ctx := context.Background()
+		ctx := cmd.Context()
 		_, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
@@ -843,7 +843,7 @@ var transferEnableCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		shareID := args[0]
 
-		ctx := context.Background()
+		ctx := cmd.Context()
 		_, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
@@ -868,7 +868,7 @@ var transferDownloadCmd = &cobra.Command{
 		outputDir, _ := cmd.Flags().GetString("output")
 		yes, _ := cmd.Flags().GetBool("yes")
 
-		ctx := context.Background()
+		ctx := cmd.Context()
 		cfg, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
