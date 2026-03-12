@@ -337,8 +337,9 @@ func confirmFileList(names []string, sizes []int64, totalSize int64, extras []st
 	const lineWidth = 44
 	fmt.Fprintln(os.Stderr)
 	for i, name := range names {
-		if len(name) > lineWidth-10 {
-			name = name[:lineWidth-13] + "…"
+		runes := []rune(name)
+		if len(runes) > lineWidth-10 {
+			name = string(runes[:lineWidth-13]) + "…"
 		}
 		fmt.Fprintf(os.Stderr, "  %-*s  %s\n", lineWidth-10, name, formatSize(sizes[i]))
 	}
