@@ -1,0 +1,15 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose      # check whether http.Response.Body is closed
+    - dupl           # code duplication
+    - gosec          # security issues
+    - lll            # report long lines
+    - misspell       # detect commonly misspelled words
+    - nlreturn       # check for missing return statements in functions
+    - whitespace     # check for whitespace issues
+
+issues:
+  fix: false  # use `golangci-lint run --fix` to automatically fix some of the issues
