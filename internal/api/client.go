@@ -42,21 +42,32 @@ type Client struct {
 	debug      bool
 }
 
-// New creates a Client that attaches the provided OAuth2 token to every request.
+// New creates a Client that attaches a valid OAuth2 token to every request.
+// tokSource is called before each request; it must refresh the token when expired.
 // userAgent is sent as the User-Agent header on all requests.
 // When insecure is true, TLS certificate verification is skipped, which allows
 // connecting to servers using self-signed certificates.
 // When debug is true, raw API responses are printed to stderr.
-func New(baseURL, userAgent string, tok *oauth2.Token, insecure, debug bool) *Client {
+func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debug bool) *Client {
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: insecure, // #nosec G402 — intentional, controlled by --insecure flag
 	}
 	transport := &UserAgentTransport{
 		UserAgent: userAgent,
 		Base: &oauth2.Transport{
-			Source: oauth2.StaticTokenSource(tok),
+			Source: tokSource,
 			Base: &http.Transport{
-				TLSClientConfig: tlsCfg,
+				TLSClientConfig:     tlsCfg,
+				TLSHandshakeTimeout: 15 * time.Second,
+				// ResponseHeaderTimeout guards against a server that accepts the
+				// connection but never sends headers back. It does NOT limit how
+				// long the request body (i.e. a large upload) may take to send,
+				// so large chunks are not artificially timed out.
+				ResponseHeaderTimeout: 60 * time.Second,
+				// IdleConnTimeout closes connections that are idle for too long,
+				// protecting against a server that stops sending the response body
+				// mid-transfer (e.g. stalled downloads).
+				IdleConnTimeout: 90 * time.Second,
 			},
 		},
 	}
@@ -64,8 +75,11 @@ func New(baseURL, userAgent string, tok *oauth2.Token, insecure, debug bool) *Cl
 	return &Client{
 		baseURL: baseURL,
 		debug:   debug,
+		// No client-level Timeout: that field caps the entire round-trip
+		// (including body upload), which would kill large chunk uploads on
+		// slow connections. Transport-level timeouts above protect against
+		// hung connections and unresponsive servers instead.
 		httpClient: &http.Client{
-			Timeout:   30 * time.Second,
 			Transport: transport,
 		},
 	}
