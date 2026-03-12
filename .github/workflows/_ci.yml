@@ -28,6 +28,9 @@ jobs:
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
 
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
       - name: Build (dev)
         run: CGO_ENABLED=0 go build ./...
 

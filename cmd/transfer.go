@@ -382,7 +382,6 @@ func ptrOr(s *string, fallback string) string {
 	return *s
 }
 
-
 // uploadChunkSize is the size of each plaintext chunk before encryption.
 const uploadChunkSize = 8 * 1024 * 1024 // 8 MB
 
@@ -1122,10 +1121,10 @@ func downloadTransferFile(
 // crypto/rand.Int is used to avoid modulo bias.
 func generateTransferPassphrase() (string, error) {
 	const chars = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
-	max := big.NewInt(int64(len(chars)))
+	maxChar := big.NewInt(int64(len(chars)))
 	result := make([]byte, 32)
 	for i := range result {
-		n, err := cryptorand.Int(cryptorand.Reader, max)
+		n, err := cryptorand.Int(cryptorand.Reader, maxChar)
 		if err != nil {
 			return "", err
 		}

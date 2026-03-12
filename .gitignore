@@ -8,6 +8,10 @@
 # Config
 /.retyc
 
+# Test coverage
+coverage.out
+coverage.html
+
 # Dependency cache
 vendor/
 
