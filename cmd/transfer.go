@@ -1121,10 +1121,10 @@ func downloadTransferFile(
 // crypto/rand.Int is used to avoid modulo bias.
 func generateTransferPassphrase() (string, error) {
 	const chars = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
-	maxchar := big.NewInt(int64(len(chars)))
+	maxChar := big.NewInt(int64(len(chars)))
 	result := make([]byte, 32)
 	for i := range result {
-		n, err := cryptorand.Int(cryptorand.Reader, maxchar)
+		n, err := cryptorand.Int(cryptorand.Reader, maxChar)
 		if err != nil {
 			return "", err
 		}
