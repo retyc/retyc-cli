@@ -64,7 +64,7 @@ func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Cli
 	fmt.Printf("\nOpen the following URL in your browser:\n\n  %s\n\n", devResp.VerificationURIComplete)
 	fmt.Printf("Enter code: %s\n\n", devResp.UserCode)
 
-	spinner := ui.New("Waiting for authentication…")
+	spinner := ui.NewSpinner("Waiting for authentication…")
 	spinner.Start()
 	defer spinner.Stop()
 

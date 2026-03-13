@@ -26,8 +26,8 @@ type Spinner struct {
 	done  chan struct{}
 }
 
-// New creates a Spinner with an optional label. Call Start to begin animating.
-func New(label ...string) *Spinner {
+// NewSpinner creates a Spinner with an optional label. Call Start to begin animating.
+func NewSpinner(label ...string) *Spinner {
 	s := &Spinner{
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
