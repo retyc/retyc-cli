@@ -32,6 +32,10 @@ type Spinner struct {
 
 // NewSpinner creates a Spinner with an optional label. Call Start to begin animating.
 func NewSpinner(label ...string) *Spinner {
+	if len(label) > 1 {
+		panic("NewSpinner: at most one label argument is allowed")
+	}
+
 	s := &Spinner{}
 	if len(label) > 0 {
 		s.label = label[0]
