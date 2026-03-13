@@ -4,6 +4,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -16,20 +17,26 @@ const (
 )
 
 // Spinner displays an animated dot indicator on stderr while a blocking
-// operation is running. The label is shown to the right of the rotating frame.
+// operation is running. If a label is provided, it is shown to the right of
+// the rotating frame; otherwise only the frame is displayed.
 type Spinner struct {
+	mu    sync.Mutex
 	label string
 	stop  chan struct{}
 	done  chan struct{}
 }
 
-// New creates a Spinner with the given label. Call Start to begin animating.
-func New(label string) *Spinner {
-	return &Spinner{
-		label: label,
-		stop:  make(chan struct{}),
-		done:  make(chan struct{}),
+// New creates a Spinner with an optional label. Call Start to begin animating.
+func New(label ...string) *Spinner {
+	s := &Spinner{
+		stop: make(chan struct{}),
+		done: make(chan struct{}),
 	}
+	if len(label) > 0 {
+		s.label = label[0]
+	}
+
+	return s
 }
 
 // Start begins animating the spinner in a background goroutine.
@@ -48,11 +55,26 @@ func (s *Spinner) Start() {
 				return
 			case <-ticker.C:
 				frame := frames[i%len(frames)]
-				fmt.Fprintf(os.Stderr, "\r%s%s %s%s", spinColor, frame, s.label, ansiReset)
+				s.mu.Lock()
+				label := s.label
+				s.mu.Unlock()
+				if label != "" {
+					fmt.Fprintf(os.Stderr, "\r%s%s %s%s", spinColor, frame, label, ansiReset)
+				} else {
+					fmt.Fprintf(os.Stderr, "\r%s%s%s", spinColor, frame, ansiReset)
+				}
 				i++
 			}
 		}
 	}()
+}
+
+// SetLabel updates the label shown next to the spinning frame.
+// Safe to call while the spinner is running.
+func (s *Spinner) SetLabel(label string) {
+	s.mu.Lock()
+	s.label = label
+	s.mu.Unlock()
 }
 
 // Stop halts the spinner and erases the spinner line from the terminal.
