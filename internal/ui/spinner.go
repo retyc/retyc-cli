@@ -19,19 +19,20 @@ const (
 // Spinner displays an animated dot indicator on stderr while a blocking
 // operation is running. If a label is provided, it is shown to the right of
 // the rotating frame; otherwise only the frame is displayed.
+//
+// Start and Stop may be called multiple times in sequence.
+// Stop is idempotent: calling it on an already-stopped spinner is a no-op.
 type Spinner struct {
-	mu    sync.Mutex
-	label string
-	stop  chan struct{}
-	done  chan struct{}
+	mu      sync.Mutex
+	label   string
+	stop    chan struct{}
+	done    chan struct{}
+	running bool
 }
 
 // NewSpinner creates a Spinner with an optional label. Call Start to begin animating.
 func NewSpinner(label ...string) *Spinner {
-	s := &Spinner{
-		stop: make(chan struct{}),
-		done: make(chan struct{}),
-	}
+	s := &Spinner{}
 	if len(label) > 0 {
 		s.label = label[0]
 	}
@@ -40,16 +41,30 @@ func NewSpinner(label ...string) *Spinner {
 }
 
 // Start begins animating the spinner in a background goroutine.
-// Call Stop to halt the animation and clear the line.
+// If the spinner is already running it is a no-op.
+// Start may be called again after Stop to resume animation.
 func (s *Spinner) Start() {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+
+		return
+	}
+	s.stop = make(chan struct{})
+	s.done = make(chan struct{})
+	s.running = true
+	stop := s.stop
+	done := s.done
+	s.mu.Unlock()
+
 	go func() {
-		defer close(s.done)
+		defer close(done)
 		ticker := time.NewTicker(75 * time.Millisecond)
 		defer ticker.Stop()
 		i := 0
 		for {
 			select {
-			case <-s.stop:
+			case <-stop:
 				fmt.Fprint(os.Stderr, clearLine+ansiReset)
 
 				return
@@ -79,7 +94,20 @@ func (s *Spinner) SetLabel(label string) {
 
 // Stop halts the spinner and erases the spinner line from the terminal.
 // It blocks until the background goroutine has exited.
+// Calling Stop on an already-stopped spinner is a no-op.
+// Start may be called again after Stop to resume animation.
 func (s *Spinner) Stop() {
-	close(s.stop)
-	<-s.done
+	s.mu.Lock()
+	if !s.running {
+		s.mu.Unlock()
+
+		return
+	}
+	s.running = false
+	stop := s.stop
+	done := s.done
+	s.mu.Unlock()
+
+	close(stop)
+	<-done
 }
