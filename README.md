@@ -12,7 +12,7 @@
 
 > Official command-line interface for [Retyc](https://retyc.com) - send and manage file transfers directly from your terminal.
 
-<img src=".media/demo.gif" width="500" alt="Retyc CLI demo" />
+<img src=".media/demo_0.0.2.gif" width="500" alt="Retyc CLI demo" />
 
 ---
 
