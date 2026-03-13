@@ -10,9 +10,12 @@ import (
 	"math/big"
 	"mime"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -116,8 +119,8 @@ var transferInfoCmd = &cobra.Command{
 		}
 
 		// Display basic metadata (no crypto required).
-		fmt.Printf("ID:      %s\n", ptrOr(details.ID, "—"))
-		fmt.Printf("Title:   %s\n", ptrOr(details.Title, "—"))
+		fmt.Printf("ID:      %s\n", ptrOr(details.ID, "-"))
+		fmt.Printf("Title:   %s\n", ptrOr(details.Title, "-"))
 		fmt.Printf("Status:  %s\n", details.Status)
 		if details.CreatedAt != nil {
 			fmt.Printf("Created: %s\n", details.CreatedAt.Format("2006-01-02 15:04"))
@@ -143,12 +146,12 @@ var transferInfoCmd = &cobra.Command{
 
 		// Crypto section: requires session_private_key_enc.
 		if details.SessionPrivateKeyEnc == nil {
-			fmt.Println("\n(Transfer not yet completed — no encrypted content available.)")
+			fmt.Println("\n(Transfer not yet completed - no encrypted content available.)")
 
 			return nil
 		}
 		if userKey == nil {
-			return fmt.Errorf("no active encryption key found — set up your key in the web interface first")
+			return fmt.Errorf("no active encryption key found - set up your key in the web interface first")
 		}
 
 		identity, err := resolveUserIdentity(cfg, userKey)
@@ -226,6 +229,38 @@ func readKeyPassphrase() (string, error) {
 	}
 
 	return string(pb), nil
+}
+
+// promptTransferPassphrase prompts the user to enter and confirm a new transfer
+// passphrase, re-prompting until a valid passphrase of at least minLen characters
+// is entered and confirmed.
+func promptTransferPassphrase(minLen int) (string, error) {
+	for {
+		fmt.Fprint(os.Stderr, "Transfer passphrase: ")
+		pb, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115
+		fmt.Fprint(os.Stderr, "\r\033[2K")
+		if err != nil {
+			return "", fmt.Errorf("reading passphrase: %w", err)
+		}
+		if len(pb) < minLen {
+			fmt.Fprintf(os.Stderr, "Passphrase must be at least %d characters.\n", minLen)
+
+			continue
+		}
+		fmt.Fprint(os.Stderr, "Confirm passphrase: ")
+		pb2, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115
+		fmt.Fprint(os.Stderr, "\r\033[2K")
+		if err != nil {
+			return "", fmt.Errorf("reading passphrase confirmation: %w", err)
+		}
+		if string(pb) != string(pb2) {
+			fmt.Fprintln(os.Stderr, "Passphrases do not match.")
+
+			continue
+		}
+
+		return string(pb), nil
+	}
 }
 
 // mustGetToken retrieves a refreshing OAuth2 token source, returning a
@@ -430,7 +465,7 @@ var transferCreateCmd = &cobra.Command{
 			}
 		}
 
-		// Stat all files up front — needed for the summary and to fail early.
+		// Stat all files up front - needed for the summary and to fail early.
 		type fileEntry struct {
 			path string
 			name string
@@ -490,13 +525,27 @@ var transferCreateCmd = &cobra.Command{
 
 		s.SetLabel("Get private key")
 
-		// Fetch the user's key first — no point creating the share if there is no key.
+		// Fetch the user's key first - no point creating the share if there is no key.
 		userKey, err := client.GetActiveKey(ctx)
 		if err != nil {
 			return fmt.Errorf("fetching encryption key: %w", err)
 		}
 		if userKey == nil {
-			return fmt.Errorf("no active encryption key — set up your key in the web interface first")
+			return fmt.Errorf("no active encryption key - set up your key in the web interface first")
+		}
+
+		// Prompt for the transfer passphrase BEFORE creating the share when we can
+		// determine upfront that it will be required (no recipients = passphrase always
+		// needed). This ensures a Ctrl+C during passphrase entry leaves nothing on the
+		// server. The recipients case is handled after CreateShare below.
+		if len(toEmails) == 0 && passphrase == "" && !genPassphrase {
+			s.Stop()
+			p, err := promptTransferPassphrase(minPassphraseLen)
+			if err != nil {
+				return err
+			}
+			passphrase = p
+			s.Start()
 		}
 
 		s.SetLabel("Creating transfer")
@@ -505,6 +554,63 @@ var transferCreateCmd = &cobra.Command{
 			return fmt.Errorf("creating transfer: %w", err)
 		}
 
+		// Save the terminal state now so the signal goroutine can restore it if
+		// SIGINT arrives during a ReadPassword call (which sets raw mode).
+		// Without this, the terminal is left with no echo after the process exits.
+		termFD := int(os.Stdin.Fd()) //nolint:gosec // G115
+		var savedTermState *term.State
+		if term.IsTerminal(termFD) {
+			savedTermState, _ = term.GetState(termFD)
+		}
+
+		// Install a SIGINT/SIGTERM handler now that a pending share exists on the server.
+		// On interruption, force-delete it to avoid leaving orphaned "pending" transfers.
+		uploadCtx, cancelUpload := context.WithCancel(ctx)
+		defer cancelUpload()
+
+		var uploadInterrupted atomic.Bool
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(sigCh)
+
+		// cleanupFinished is closed when forceCleanup has completed, allowing
+		// the signal goroutine to wait for it before calling os.Exit.
+		cleanupFinished := make(chan struct{})
+		var cleanupOnce sync.Once
+
+		// forceCleanup deletes the pending transfer. Guarded by sync.Once so it
+		// is safe to call from both the signal goroutine and the main goroutine.
+		forceCleanup := func() {
+			cleanupOnce.Do(func() {
+				defer close(cleanupFinished)
+				fmt.Fprintf(os.Stderr, "\nUpload interrupted - deleting pending transfer %s...\n", share.ID)
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				if err := client.ForceDeleteTransfer(cleanupCtx, share.ID); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not delete transfer: %v\n", err)
+				} else {
+					fmt.Fprintln(os.Stderr, "Transfer deleted.")
+				}
+			})
+		}
+
+		go func() {
+			select {
+			case <-sigCh:
+				uploadInterrupted.Store(true)
+				cancelUpload()
+				// Restore terminal before cleanup: if the signal arrived during
+				// ReadPassword (raw mode active), this prevents a broken console.
+				if savedTermState != nil {
+					_ = term.Restore(termFD, savedTermState)
+				}
+				forceCleanup()
+				<-cleanupFinished // wait for cleanup to complete before exiting
+				os.Exit(1)
+			case <-uploadCtx.Done():
+			}
+		}()
+
 		// Decide whether a transfer passphrase is needed.
 		// A passphrase is not needed only when all specified recipients already have a key.
 		allHaveKeys := len(toEmails) > 0 && len(share.PublicKeys) == len(toEmails)
@@ -512,47 +618,37 @@ var transferCreateCmd = &cobra.Command{
 
 		// Inform the user if some recipients have no key and a passphrase is therefore required.
 		if len(toEmails) > 0 && len(share.PublicKeys) < len(toEmails) {
-			fmt.Fprintf(os.Stderr, "Note: %d recipient(s) have no encryption key — a transfer passphrase is required.\n",
+			fmt.Fprintf(os.Stderr, "Note: %d recipient(s) have no encryption key - a transfer passphrase is required.\n",
 				len(toEmails)-len(share.PublicKeys))
 		}
 
-		// Prompt for transfer passphrase if required and not provided via flag.
-		// Re-prompt on invalid input or mismatched confirmation.
+		// Prompt for passphrase when it is needed but was not collected before CreateShare
+		// (recipients case: we only know which recipients lack a key after the API response).
+		// The signal handler is already active; a Ctrl+C cancels uploadCtx.
 		if needPassphrase && passphrase == "" {
 			s.Stop()
-			for {
-				fmt.Fprint(os.Stderr, "Transfer passphrase: ")
-				pb, err := term.ReadPassword(int(os.Stdin.Fd()))
-				fmt.Fprint(os.Stderr, "\r\033[2K")
-				if err != nil {
-					return fmt.Errorf("reading passphrase: %w", err)
-				}
-				if len(pb) < minPassphraseLen {
-					fmt.Fprintf(os.Stderr, "Passphrase must be at least %d characters.\n", minPassphraseLen)
+			if uploadInterrupted.Load() {
+				forceCleanup()
 
-					continue
-				}
-				fmt.Fprint(os.Stderr, "Confirm passphrase: ")
-				pb2, err := term.ReadPassword(int(os.Stdin.Fd()))
-				fmt.Fprint(os.Stderr, "\r\033[2K")
-				if err != nil {
-					return fmt.Errorf("reading passphrase confirmation: %w", err)
-				}
-				if string(pb) != string(pb2) {
-					fmt.Fprintln(os.Stderr, "Passphrases do not match.")
-
-					continue
-				}
-				passphrase = string(pb)
-
-				break
+				return fmt.Errorf("interrupted")
 			}
+			p, err := promptTransferPassphrase(minPassphraseLen)
+			if err != nil {
+				if uploadInterrupted.Load() {
+					forceCleanup()
+
+					return fmt.Errorf("interrupted")
+				}
+
+				return err
+			}
+			passphrase = p
 			s.Start()
 		}
 
 		s.SetLabel("Creating new transfer key")
 
-		// Generate session keypair — used to encrypt file content and metadata.
+		// Generate session keypair - used to encrypt file content and metadata.
 		sessionIdentity, err := crypto.GenerateKeyPair()
 		if err != nil {
 			return fmt.Errorf("generating session key: %w", err)
@@ -569,7 +665,7 @@ var transferCreateCmd = &cobra.Command{
 
 		// Generate ephemeral keypair only when a passphrase is required.
 		// The backend now accepts nil ephemeral fields (updated API), so we omit them
-		// entirely when all recipients have a key — no passphrase path needed.
+		// entirely when all recipients have a key - no passphrase path needed.
 		var ephemeralPrivKeyEnc, ephemeralPubKey, sessionPrivKeyEncForPassphrase string
 		if needPassphrase {
 			s.SetLabel("Creating new ephemeral key")
@@ -599,7 +695,13 @@ var transferCreateCmd = &cobra.Command{
 
 		// Upload each file.
 		for _, e := range entries {
-			if err := uploadTransferFile(ctx, client, share.ID, e.path, sessionPubKey); err != nil {
+			if err := uploadTransferFile(uploadCtx, client, share.ID, e.path, sessionPubKey); err != nil {
+				if uploadInterrupted.Load() {
+					forceCleanup()
+
+					return fmt.Errorf("interrupted")
+				}
+
 				return fmt.Errorf("%s: %w", e.name, err)
 			}
 		}
@@ -614,7 +716,7 @@ var transferCreateCmd = &cobra.Command{
 			messageEnc = &enc
 		}
 
-		// Complete the transfer — ephemeral fields included only when a passphrase is used.
+		// Complete the transfer - ephemeral fields included only when a passphrase is used.
 		req := api.CompleteTransferRequest{
 			SessionPrivateKeyEnc: sessionPrivKeyEnc,
 			SessionPublicKey:     sessionPubKey,
@@ -625,11 +727,17 @@ var transferCreateCmd = &cobra.Command{
 			req.EphemeralPublicKey = &ephemeralPubKey
 			req.SessionPrivateKeyEncForPassphrase = &sessionPrivKeyEncForPassphrase
 		}
-		if err := client.CompleteTransfer(ctx, share.ID, req); err != nil {
+		if err := client.CompleteTransfer(uploadCtx, share.ID, req); err != nil {
+			if uploadInterrupted.Load() {
+				forceCleanup()
+
+				return fmt.Errorf("interrupted")
+			}
+
 			return fmt.Errorf("completing transfer: %w", err)
 		}
 
-		details, err := client.GetTransferDetails(ctx, share.ID)
+		details, err := client.GetTransferDetails(uploadCtx, share.ID)
 		if err != nil {
 			// Non-fatal: the transfer is complete even if we can't fetch the URL.
 			fmt.Printf("Transfer %s ready.\n", share.ID)
@@ -776,7 +884,7 @@ func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePa
 				break
 			}
 
-			// Acquire a semaphore slot — blocks when uploadConcurrency uploads are in flight.
+			// Acquire a semaphore slot - blocks when uploadConcurrency uploads are in flight.
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
@@ -903,7 +1011,7 @@ var transferDownloadCmd = &cobra.Command{
 		}
 
 		if details.SessionPrivateKeyEnc == nil && details.SessionPrivateKeyEncForPassphrase == nil {
-			return fmt.Errorf("transfer not yet completed — no encrypted content available")
+			return fmt.Errorf("transfer not yet completed - no encrypted content available")
 		}
 
 		// Resolve session identity: try user key path first, then transfer passphrase.
@@ -926,7 +1034,7 @@ var transferDownloadCmd = &cobra.Command{
 		} else {
 			// Ephemeral path: use transfer passphrase.
 			if details.EphemeralPrivateKeyEnc == nil || details.SessionPrivateKeyEncForPassphrase == nil {
-				return fmt.Errorf("no decryption path available — neither user key nor passphrase data found")
+				return fmt.Errorf("no decryption path available - neither user key nor passphrase data found")
 			}
 			fmt.Fprint(os.Stderr, "Transfer passphrase: ")
 			pb, err := term.ReadPassword(int(os.Stdin.Fd()))

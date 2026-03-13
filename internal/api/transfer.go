@@ -222,3 +222,9 @@ func (c *Client) DisableTransfer(ctx context.Context, shareID string) error {
 func (c *Client) EnableTransfer(ctx context.Context, shareID string) error {
 	return c.Put(ctx, "/share/"+shareID+"/re-enable", nil, nil)
 }
+
+// ForceDeleteTransfer permanently removes a pending transfer and all its data.
+// Use this to clean up a transfer that was interrupted during upload.
+func (c *Client) ForceDeleteTransfer(ctx context.Context, shareID string) error {
+	return c.Delete(ctx, "/share/"+shareID+"/force")
+}
