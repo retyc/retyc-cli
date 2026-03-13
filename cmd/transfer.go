@@ -56,7 +56,10 @@ var transferLsCmd = &cobra.Command{
 			return err
 		}
 
+		s := ui.NewSpinner()
+		s.Start()
 		result, err := client.ListTransfers(ctx, listType, 1)
+		s.Stop()
 		if err != nil {
 			return fmt.Errorf("listing transfers: %w", err)
 		}
@@ -104,7 +107,10 @@ var transferInfoCmd = &cobra.Command{
 			return err
 		}
 
+		s := ui.NewSpinner()
+		s.Start()
 		details, userKey, err := fetchDetailsAndKey(ctx, client, shareID)
+		s.Stop()
 		if err != nil {
 			return err
 		}
@@ -169,7 +175,9 @@ var transferInfoCmd = &cobra.Command{
 		}
 
 		// Fetch and display files.
+		s.Start()
 		filePage, err := client.ListFiles(ctx, shareID, 1)
+		s.Stop()
 		if err != nil {
 			return fmt.Errorf("fetching files: %w", err)
 		}
@@ -471,10 +479,16 @@ var transferCreateCmd = &cobra.Command{
 			return err
 		}
 
+		s := ui.NewSpinner()
+		s.Start()
+		defer s.Stop()
+
 		var titlePtr *string
 		if title != "" {
 			titlePtr = &title
 		}
+
+		s.SetLabel("Get private key")
 
 		// Fetch the user's key first — no point creating the share if there is no key.
 		userKey, err := client.GetActiveKey(ctx)
@@ -485,11 +499,11 @@ var transferCreateCmd = &cobra.Command{
 			return fmt.Errorf("no active encryption key — set up your key in the web interface first")
 		}
 
+		s.SetLabel("Creating transfer")
 		share, err := client.CreateShare(ctx, expire, titlePtr, true, toEmails)
 		if err != nil {
 			return fmt.Errorf("creating transfer: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Transfer %s created, uploading…\n", share.ID)
 
 		// Decide whether a transfer passphrase is needed.
 		// A passphrase is not needed only when all specified recipients already have a key.
@@ -505,6 +519,7 @@ var transferCreateCmd = &cobra.Command{
 		// Prompt for transfer passphrase if required and not provided via flag.
 		// Re-prompt on invalid input or mismatched confirmation.
 		if needPassphrase && passphrase == "" {
+			s.Stop()
 			for {
 				fmt.Fprint(os.Stderr, "Transfer passphrase: ")
 				pb, err := term.ReadPassword(int(os.Stdin.Fd()))
@@ -532,7 +547,10 @@ var transferCreateCmd = &cobra.Command{
 
 				break
 			}
+			s.Start()
 		}
+
+		s.SetLabel("Creating new transfer key")
 
 		// Generate session keypair — used to encrypt file content and metadata.
 		sessionIdentity, err := crypto.GenerateKeyPair()
@@ -554,6 +572,7 @@ var transferCreateCmd = &cobra.Command{
 		// entirely when all recipients have a key — no passphrase path needed.
 		var ephemeralPrivKeyEnc, ephemeralPubKey, sessionPrivKeyEncForPassphrase string
 		if needPassphrase {
+			s.SetLabel("Creating new ephemeral key")
 			ephemeralIdentity, err := crypto.GenerateKeyPair()
 			if err != nil {
 				return fmt.Errorf("generating ephemeral key: %w", err)
@@ -574,6 +593,9 @@ var transferCreateCmd = &cobra.Command{
 			ephemeralPubKey = ephPubKey
 			sessionPrivKeyEncForPassphrase = sesEnc
 		}
+
+		// We stop the spinner here because we use progress bars for the uploads
+		s.Stop()
 
 		// Upload each file.
 		for _, e := range entries {
@@ -814,7 +836,11 @@ var transferDisableCmd = &cobra.Command{
 			return err
 		}
 
-		if err := client.DisableTransfer(ctx, shareID); err != nil {
+		s := ui.NewSpinner()
+		s.Start()
+		err = client.DisableTransfer(ctx, shareID)
+		s.Stop()
+		if err != nil {
 			return fmt.Errorf("disabling transfer: %w", err)
 		}
 
@@ -837,7 +863,11 @@ var transferEnableCmd = &cobra.Command{
 			return err
 		}
 
-		if err := client.EnableTransfer(ctx, shareID); err != nil {
+		s := ui.NewSpinner()
+		s.Start()
+		err = client.EnableTransfer(ctx, shareID)
+		s.Stop()
+		if err != nil {
 			return fmt.Errorf("enabling transfer: %w", err)
 		}
 
@@ -862,7 +892,12 @@ var transferDownloadCmd = &cobra.Command{
 			return err
 		}
 
+		s := ui.NewSpinner()
+		defer s.Stop()
+
+		s.Start()
 		details, userKey, err := fetchDetailsAndKey(ctx, client, shareID)
+		s.Stop()
 		if err != nil {
 			return err
 		}
@@ -919,6 +954,7 @@ var transferDownloadCmd = &cobra.Command{
 		}
 
 		// Fetch all files (paginate).
+		s.Start()
 		var allFiles []api.TransferFile
 		for page := 1; ; page++ {
 			p, err := client.ListFiles(ctx, shareID, page)
@@ -930,6 +966,7 @@ var transferDownloadCmd = &cobra.Command{
 				break
 			}
 		}
+		s.Stop()
 		if len(allFiles) == 0 {
 			return fmt.Errorf("no files in this transfer")
 		}
