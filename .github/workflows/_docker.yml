@@ -43,7 +43,8 @@ jobs:
         with:
           context: .
           push: true
-          provenance: false
+          provenance: mode=max,version=v1
+          sbom: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ inputs.tags }}
           build-args: VERSION=${{ inputs.version }}
