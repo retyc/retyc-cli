@@ -78,9 +78,9 @@ func (s *Spinner) Start() {
 				label := s.label
 				s.mu.Unlock()
 				if label != "" {
-					fmt.Fprintf(os.Stderr, "\r%s%s %s%s", spinColor, frame, label, ansiReset)
+					fmt.Fprintf(os.Stderr, "%s%s%s %s%s", clearLine, spinColor, frame, label, ansiReset)
 				} else {
-					fmt.Fprintf(os.Stderr, "\r%s%s%s", spinColor, frame, ansiReset)
+					fmt.Fprintf(os.Stderr, "%s%s%s%s", clearLine, spinColor, frame, ansiReset)
 				}
 				i++
 			}
