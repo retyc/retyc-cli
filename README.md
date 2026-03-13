@@ -1,21 +1,26 @@
-# retyc-cli
+<p align="center"><img width="200" src=".media/Retyc_Logo_Blue.png" alt="Retyc logo" /></p>
 
-> Official command-line interface for [RETYC](https://retyc.com) - send and manage file transfers directly from your terminal.
+<p align="center">
+  <a href="https://github.com/retyc/retyc-cli/actions/workflows/main.yml"><img src="https://github.com/retyc/retyc-cli/actions/workflows/main.yml/badge.svg" alt="CI" /></a>
+  <a href="https://goreportcard.com/report/github.com/retyc/retyc-cli"><img src="https://goreportcard.com/badge/github.com/retyc/retyc-cli" alt="GoReportCard" /></a>
+  <a href="https://github.com/retyc/retyc-cli/releases/latest"><img src="https://img.shields.io/github/v/release/retyc/retyc-cli" alt="Release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
+</p>
 
-[![CI](https://github.com/retyc/retyc-cli/actions/workflows/main.yml/badge.svg)](https://github.com/retyc/retyc-cli/actions/workflows/main.yml)
-[![Go](https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![Release](https://img.shields.io/github/v/release/retyc/retyc-cli)](https://github.com/retyc/retyc-cli/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-![demo](https://raw.githubusercontent.com/retyc/retyc-cli/main/.media/demo.gif)
+# Retyc CLI
+
+> Official command-line interface for [Retyc](https://retyc.com) - send and manage file transfers directly from your terminal.
+
+<img src=".media/demo.gif" width="500" alt="Retyc CLI demo" />
 
 ---
 
-## What is RETYC?
+## What is Retyc?
 
-[RETYC](https://retyc.com) is a European sovereign file-sharing platform with end-to-end post-quantum encryption. Data stays in Europe, GDPR-compliant by design.
+[Retyc](https://retyc.com) is a European sovereign file-sharing platform with end-to-end post-quantum encryption. Data stays in Europe, GDPR-compliant by design.
 
-`retyc-cli` lets you integrate RETYC transfers into your scripts, pipelines and workflows - no browser required.
+`retyc-cli` lets you integrate Retyc transfers into your scripts, pipelines and workflows - no browser required.
 
 ---
 
@@ -251,4 +256,4 @@ go build -tags prod -ldflags "-X github.com/retyc/retyc-cli/cmd.Version=v0.1.0" 
 
 ## License
 
-[MIT](LICENSE) - © RETYC / TripleStack SAS
+[MIT](LICENSE) - © Retyc / TripleStack SAS
