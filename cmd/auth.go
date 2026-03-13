@@ -185,7 +185,10 @@ func newHTTPClient(insecure, debug bool) *http.Client {
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: insecure, // #nosec G402 — intentional, controlled by --insecure flag
 	}
-	var transport http.RoundTripper = &http.Transport{TLSClientConfig: tlsCfg}
+	var transport http.RoundTripper = &http.Transport{
+		TLSClientConfig:   tlsCfg,
+		ForceAttemptHTTP2: true,
+	}
 	if debug {
 		transport = &debugTransport{wrapped: transport}
 	}
