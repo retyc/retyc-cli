@@ -176,6 +176,25 @@ func TestCompleteTransfer(t *testing.T) {
 	}
 }
 
+func TestForceDeleteTransfer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/share/pending-id/force" {
+			t.Errorf("path = %q, want /share/pending-id/force", r.URL.Path)
+		}
+
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	if err := newTestClient(srv).ForceDeleteTransfer(context.Background(), "pending-id"); err != nil {
+		t.Fatalf("ForceDeleteTransfer() error = %v", err)
+	}
+}
+
 func TestDisableTransfer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/share/to-disable" {
