@@ -58,6 +58,7 @@ func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debu
 			Source: tokSource,
 			Base: &http.Transport{
 				TLSClientConfig:     tlsCfg,
+				ForceAttemptHTTP2:   true,
 				TLSHandshakeTimeout: 15 * time.Second,
 				// ResponseHeaderTimeout guards against a server that accepts the
 				// connection but never sends headers back. It does NOT limit how
