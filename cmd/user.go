@@ -22,7 +22,10 @@ var userInfoCmd = &cobra.Command{
 			return err
 		}
 
+		s := ui.NewSpinner()
+		s.Start()
 		u, err := client.GetMe(ctx)
+		s.Stop()
 		if err != nil {
 			return fmt.Errorf("fetching user info: %w", err)
 		}
@@ -53,7 +56,10 @@ var userQuotaCmd = &cobra.Command{
 			return err
 		}
 
+		s := ui.NewSpinner()
+		s.Start()
 		q, err := client.GetQuota(ctx)
+		s.Stop()
 		if err != nil {
 			return fmt.Errorf("fetching quota: %w", err)
 		}
