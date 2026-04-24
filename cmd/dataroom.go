@@ -1018,17 +1018,23 @@ func dataroomUpload(ctx context.Context, localPaths []string, dst *retycURI, yes
 		if info.IsDir() {
 			// Walk the directory to get the real content size.
 			size = 0
-			_ = filepath.WalkDir(p, func(_ string, d os.DirEntry, err error) error {
-				if err != nil || d.IsDir() {
+			if walkErr := filepath.WalkDir(p, func(_ string, d os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if d.IsDir() {
 					return nil
 				}
 				fi, err := d.Info()
-				if err == nil {
-					size += fi.Size()
+				if err != nil {
+					return err
 				}
+				size += fi.Size()
 
 				return nil
-			})
+			}); walkErr != nil {
+				return fmt.Errorf("scanning %s: %w", p, walkErr)
+			}
 		}
 		entries = append(entries, statEntry{
 			path:  p,
@@ -1380,7 +1386,10 @@ var dataroomRmCmd = &cobra.Command{
 			if !yes {
 				fmt.Fprintln(os.Stderr)
 				for _, item := range matches {
-					name, _ := crypto.DecryptToString(item.Node.NameEnc, sess.Identity)
+					name, decErr := crypto.DecryptToString(item.Node.NameEnc, sess.Identity)
+					if decErr != nil {
+						name = item.Node.ID
+					}
 					typeLabel := "FILE"
 					if item.Node.TypeEnc == nil {
 						typeLabel = "DIR"

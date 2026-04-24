@@ -136,7 +136,9 @@ func (c *Client) CreateDataroom(
 		"title":                   title,
 		"session_private_key_enc": sessionPrivKeyEnc,
 		"session_public_key":      sessionPubKey,
-		"node_name_salt_enc":      nodeNameSaltEnc,
+	}
+	if nodeNameSaltEnc != nil {
+		body["node_name_salt_enc"] = *nodeNameSaltEnc
 	}
 	data, err := json.Marshal(body)
 	if err != nil {

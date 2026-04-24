@@ -483,3 +483,63 @@ func TestGetDataroomUsers(t *testing.T) {
 		t.Errorf("users[1].CurrentPublicKey should be nil")
 	}
 }
+
+func TestGetDataroomNode(t *testing.T) {
+	typeEnc := "enc-mime"
+	parentID := "parent-1"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dataroom/node/node-abc" {
+			t.Errorf("path = %q, want /dataroom/node/node-abc", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(DataroomNodeItem{
+			Node: DataroomNode{
+				ID:       "node-abc",
+				NameEnc:  "enc-name",
+				TypeEnc:  &typeEnc,
+				ParentID: &parentID,
+			},
+			Version: &DataroomNodeVersion{
+				ID:           "ver-1",
+				NodeID:       "node-abc",
+				OriginalSize: 2048,
+				ChunkCount:   1,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	item, err := newTestClient(srv).GetDataroomNode(context.Background(), "node-abc")
+	if err != nil {
+		t.Fatalf("GetDataroomNode() error = %v", err)
+	}
+	if item.Node.ID != "node-abc" {
+		t.Errorf("Node.ID = %q, want node-abc", item.Node.ID)
+	}
+	if item.Version == nil {
+		t.Fatal("Version is nil, want non-nil for file node")
+	}
+	if item.Version.OriginalSize != 2048 {
+		t.Errorf("Version.OriginalSize = %d, want 2048", item.Version.OriginalSize)
+	}
+}
+
+func TestGetDataroomNode_Directory(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(DataroomNodeItem{
+			Node:    DataroomNode{ID: "dir-1", NameEnc: "enc-name"},
+			Version: nil,
+		})
+	}))
+	defer srv.Close()
+
+	item, err := newTestClient(srv).GetDataroomNode(context.Background(), "dir-1")
+	if err != nil {
+		t.Fatalf("GetDataroomNode() error = %v", err)
+	}
+	if item.Node.TypeEnc != nil {
+		t.Errorf("TypeEnc should be nil for directory node")
+	}
+	if item.Version != nil {
+		t.Errorf("Version should be nil for directory node")
+	}
+}

@@ -270,8 +270,10 @@ func downloadChunks(
 	identity *age.HybridIdentity,
 	downloadFn func(ctx context.Context, chunkID int) ([]byte, error),
 ) error {
-	dest := filepath.Join(outputDir, name)
-	//nolint:gosec // G304: dest is built from validated outputDir + decrypted filename
+	// filepath.Base strips any directory component from the decrypted name,
+	// preventing path traversal if a malicious server sends "../etc/passwd".
+	dest := filepath.Join(outputDir, filepath.Base(name))
+	//nolint:gosec // G304: dest is validated outputDir + sanitised base filename
 	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
