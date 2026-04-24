@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"testing"
+
+	"github.com/retyc/retyc-cli/internal/service"
 )
 
 func TestPtrOr_Nil(t *testing.T) {
@@ -48,9 +50,9 @@ func TestFormatExpiry(t *testing.T) {
 }
 
 func TestGenerateTransferPassphrase_Length(t *testing.T) {
-	p, err := generateTransferPassphrase()
+	p, err := service.GenerateTransferPassphrase()
 	if err != nil {
-		t.Fatalf("generateTransferPassphrase() error = %v", err)
+		t.Fatalf("service.GenerateTransferPassphrase() error = %v", err)
 	}
 
 	if len(p) != 32 {
@@ -59,9 +61,9 @@ func TestGenerateTransferPassphrase_Length(t *testing.T) {
 }
 
 func TestGenerateTransferPassphrase_Charset(t *testing.T) {
-	p, err := generateTransferPassphrase()
+	p, err := service.GenerateTransferPassphrase()
 	if err != nil {
-		t.Fatalf("generateTransferPassphrase() error = %v", err)
+		t.Fatalf("service.GenerateTransferPassphrase() error = %v", err)
 	}
 
 	for i, c := range p {
@@ -72,32 +74,32 @@ func TestGenerateTransferPassphrase_Charset(t *testing.T) {
 }
 
 func TestGenerateTransferPassphrase_Unique(t *testing.T) {
-	p1, err := generateTransferPassphrase()
+	p1, err := service.GenerateTransferPassphrase()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	p2, err := generateTransferPassphrase()
+	p2, err := service.GenerateTransferPassphrase()
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if p1 == p2 {
-		t.Error("generateTransferPassphrase() returned identical passphrases on two consecutive calls")
+		t.Error("service.GenerateTransferPassphrase() returned identical passphrases on two consecutive calls")
 	}
 }
 
 func TestRandomLetters_Length(t *testing.T) {
 	for _, n := range []int{0, 1, 8, 16, 32} {
-		got := randomLetters(n)
+		got := service.RandomLetters(n)
 		if len(got) != n {
-			t.Errorf("randomLetters(%d) length = %d, want %d", n, len(got), n)
+			t.Errorf("service.RandomLetters(%d) length = %d, want %d", n, len(got), n)
 		}
 	}
 }
 
 func TestRandomLetters_Charset(t *testing.T) {
-	s := randomLetters(64)
+	s := service.RandomLetters(64)
 	for i, c := range s {
 		if c < 'a' || c > 'z' {
 			t.Errorf("randomLetters[%d] = %q, want lowercase a-z", i, c)
@@ -106,11 +108,11 @@ func TestRandomLetters_Charset(t *testing.T) {
 }
 
 func TestRandomLetters_Unique(t *testing.T) {
-	a := randomLetters(16)
-	b := randomLetters(16)
+	a := service.RandomLetters(16)
+	b := service.RandomLetters(16)
 
 	if a == b {
-		t.Error("randomLetters() returned identical strings on two consecutive calls")
+		t.Error("service.RandomLetters() returned identical strings on two consecutive calls")
 	}
 }
 

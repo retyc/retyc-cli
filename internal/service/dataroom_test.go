@@ -1,19 +1,21 @@
-package cmd
+package service
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"testing"
+
+	"github.com/retyc/retyc-cli/internal/api"
 )
 
-// — parseRetycURI —————————————————————————————————————————————————————————————
+// — ParseRetycURI —————————————————————————————————————————————————————————————
 
 func TestParseRetycURI_Valid(t *testing.T) {
 	tests := []struct {
-		input      string
-		wantDrID   string
-		wantPath   string
+		input    string
+		wantDrID string
+		wantPath string
 	}{
 		{"retyc://dr-123", "dr-123", "/"},
 		{"retyc://dr-123/", "dr-123", "/"},
@@ -24,15 +26,15 @@ func TestParseRetycURI_Valid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			uri, err := parseRetycURI(tt.input)
+			uri, err := ParseRetycURI(tt.input)
 			if err != nil {
-				t.Fatalf("parseRetycURI(%q) error = %v", tt.input, err)
+				t.Fatalf("ParseRetycURI(%q) error = %v", tt.input, err)
 			}
-			if uri.dataroomID != tt.wantDrID {
-				t.Errorf("dataroomID = %q, want %q", uri.dataroomID, tt.wantDrID)
+			if uri.DataroomID != tt.wantDrID {
+				t.Errorf("DataroomID = %q, want %q", uri.DataroomID, tt.wantDrID)
 			}
-			if uri.path != tt.wantPath {
-				t.Errorf("path = %q, want %q", uri.path, tt.wantPath)
+			if uri.Path != tt.wantPath {
+				t.Errorf("Path = %q, want %q", uri.Path, tt.wantPath)
 			}
 		})
 	}
@@ -52,9 +54,9 @@ func TestParseRetycURI_Invalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			_, err := parseRetycURI(tt.input)
+			_, err := ParseRetycURI(tt.input)
 			if err == nil {
-				t.Errorf("parseRetycURI(%q) expected error, got nil", tt.input)
+				t.Errorf("ParseRetycURI(%q) expected error, got nil", tt.input)
 			}
 		})
 	}
@@ -177,11 +179,11 @@ func TestIsConflict(t *testing.T) {
 		want bool
 	}{
 		{nil, false},
-		{fmt.Errorf("API error 409: Duplicate node name hash in the same folder"), true},
+		{fmt.Errorf("%w: duplicate node name hash", api.ErrConflict), true},
+		{fmt.Errorf("wrapping: %w", fmt.Errorf("%w: conflict", api.ErrConflict)), true},
 		{fmt.Errorf("API error 400: bad request"), false},
 		{fmt.Errorf("API error 500: internal server error"), false},
 		{fmt.Errorf("network timeout"), false},
-		{fmt.Errorf("wrapping: %w", fmt.Errorf("API error 409: conflict")), true},
 	}
 
 	for _, tt := range tests {

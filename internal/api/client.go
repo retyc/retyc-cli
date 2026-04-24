@@ -197,6 +197,10 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusConflict {
+			return nil, fmt.Errorf("%w: %s", ErrConflict, string(body))
+		}
+
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -234,6 +238,10 @@ func (c *Client) do(req *http.Request, dst any) error {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusConflict {
+			return fmt.Errorf("%w: %s", ErrConflict, string(body))
+		}
+
 		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
