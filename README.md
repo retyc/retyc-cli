@@ -199,7 +199,7 @@ api:
 
 - **Authentication**: OIDC device flow - no password ever stored locally
 - **File data + metadata**: end to end encrypted with [AGE](https://github.com/FiloSottile/age) post-quantum hybrid keys
-- **Private key caching** (Linux only): the decrypted AGE identity in the kernel session keyring (never written to disk). It is scoped to the current terminal session, isolated from other users and sessions, and automatically wiped after a configurable TTL (default: 60sec).
+- **Private key caching** (Linux only): the decrypted AGE identity is stored in the kernel session keyring and is never written to disk. It is scoped to the current terminal session, isolated from other users and sessions, and uses a sliding TTL (default: 60 seconds). Each access refreshes the expiration timer.
 - **Transport**: TLS enforced by default
 
 ---
