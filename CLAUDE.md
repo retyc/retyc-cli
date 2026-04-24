@@ -11,17 +11,21 @@ main.go                        # Entry point — calls cmd.Execute()
 cmd/
   root.go                      # cobra root, --config / --insecure / --debug flags, viper init
   auth.go                      # auth login / logout / status + newHTTPClient + debugTransport
+  common.go                    # Shared helpers: constants, newAPIClient, resolveUserIdentity,
+                               #   newTransferBar, uploadChunks, downloadChunks
   transfer.go                  # transfer ls/info/create/download/enable/disable
+  dataroom.go                  # dataroom commands (ls, cp, mv, rm, mkdir, create, info, user)
   version.go                   # version command (shows version + build mode)
 internal/
   auth/oidc.go                  # DeviceFlow, Refresh, GetValidToken
   api/
     client.go                   # Authenticated REST client (oauth2 transport)
-                                #   Get, Post, Put, Delete, PostMultipartChunk, GetBytes
+                                #   Get, Post, Put, Patch, Delete, PostMultipartChunk, GetBytes
     login.go                    # FetchOIDCConfig (unauthenticated, GET /login/config/public)
     transfer.go                 # Transfer types + ListTransfers, GetTransferDetails,
                                 #   ListFiles, CreateShare, CreateFile, UploadChunk,
                                 #   CompleteTransfer, DisableTransfer, EnableTransfer
+    dataroom.go                 # Dataroom types + all dataroom API methods
     user.go                     # UserKey type + GetActiveKey
   config/
     config.go                   # Structs, SetDefaults(), Load(), token persistence
@@ -170,7 +174,7 @@ Full flow:
 8. `PUT /share/{id}/complete`
 9. `GET /share/{id}/details` → display `web_url`
 
-Progress bar per file (`schollz/progressbar/v3`), reusable via `newTransferBar(name, size)`.
+Progress bar per file (`schollz/progressbar/v3`), via `newTransferBar(name, size)` in `cmd/common.go`.
 
 Flags: `--title`, `--expire` (seconds, default 3600), `--message`, `--passphrase`, `--yes`/`-y`
 
@@ -184,6 +188,93 @@ Downloads and decrypts all files of a transfer into a local directory.
 ### `transfer disable <id>` / `transfer enable <id>`
 - disable → `DELETE /share/{id}`
 - enable → `PUT /share/{id}/re-enable`
+
+## Shared chunk helpers (`cmd/common.go`)
+
+Upload and download chunk logic is factored out of both transfer and dataroom commands:
+
+- **`uploadChunks(ctx, f, size, displayName, sessionPubKey, uploadFn)`** — reads the file
+  sequentially in 8 MB chunks, encrypts each, dispatches to `uploadFn` with a semaphore
+  (4 concurrent goroutines). Progress bar via `newTransferBar`.
+- **`downloadChunks(ctx, outputDir, name, size, chunkCount, identity, downloadFn)`** —
+  downloads chunks via `downloadFn` concurrently (4 goroutines), decrypts, writes in order
+  using a reorder buffer. Creates the output file.
+
+Both `uploadTransferFile` and `uploadDataroomFile` call `uploadChunks` with their respective
+API method as `uploadFn`. Same for the download pair.
+
+## Dataroom commands
+
+All node operations use the **`retyc://dataroom_id/path`** URI scheme. Path components support
+glob patterns (`*`, `?`, `[...]`) resolved against decrypted node names at each level.
+
+### `dataroom ls [retyc://id[/path]]`
+- No arg: lists all datarooms (ID, title, created date)
+- With URI: lists nodes at that path. Glob → filtered listing. Requires crypto (decrypts names).
+
+### `dataroom cp <src...> <dst>`
+Direction detected from which argument is a `retyc://` URI:
+- **Upload** (`local → retyc://`): one or more local paths, last arg is remote dest folder.
+  Directories are uploaded recursively (BFS). SIGINT cancels and deletes any orphaned node
+  created mid-upload (`DeleteDataroomNode`).
+- **Download** (`retyc:// → local`): one remote path (or glob) → local dir. Directories in
+  glob results are skipped with a warning.
+- 409 on upload → existing node found by name → new version created instead.
+
+Flags: `--yes`/`-y`
+
+### `dataroom mv retyc://id/src retyc://id/dst`
+Rename or move within the same dataroom. Resolves both paths, re-encrypts the name with the
+session public key, calls `PUT /dataroom/node/{id}`.
+
+### `dataroom rm retyc://id[/path] [-y]`
+- **`retyc://id`** (path = `/`): deletes the entire dataroom. No crypto needed — calls `DELETE /dataroom/{id}` directly.
+- **`retyc://id/path`**: deletes a single node.
+- **Glob** (`retyc://id/*.log`): lists matching nodes (type + name) before confirmation, then deletes each.
+
+### `dataroom mkdir retyc://id/path`
+Creates directory node. Parent path must exist.
+
+### `dataroom create --title <title>`
+1. `GET /user/me/key/active` → user's public key
+2. Generate session keypair
+3. `EncryptStringForKeys(sessionPrivKey, [userPublicKey])` → `session_private_key_enc`
+4. `POST /dataroom/` with title, session_private_key_enc, session_public_key
+
+### `dataroom info <id>`
+Parallel fetch of `GET /dataroom/{id}`, `GET /dataroom/{id}/stats`,
+`GET /dataroom/{id}/users`. Displays metadata, file count, encrypted size, and users with roles.
+
+### `dataroom user add <dr_id> <email> [--role viewer|editor|admin]`
+### `dataroom user rm <dr_id> <user_id>`
+Both commands decrypt the session key, perform the add/remove, then **rekey the dataroom**:
+re-encrypt `session_private_key_enc` for all current users via
+`PUT /dataroom/{id}/users/rekey`. This grants access to the new user (or revokes it).
+
+## Dataroom crypto — key chain
+
+Each dataroom has a **permanent session keypair** (not ephemeral per operation):
+
+```
+user passphrase
+  └─ DecryptToStringWithPassphrase(userKey.PrivateKeyEnc) → AGE user identity
+
+dataroom session keypair (generated once at dataroom creation)
+  ├─ session_private_key_enc = EncryptStringForKeys(sessionPrivKey, allUsersPublicKeys)
+  │                            → re-encrypted on every user add/remove (rekey)
+  └─ session_public_key      → used to encrypt all node names, types, and file chunks
+
+node name_hash = SHA-256(nameSalt + filename)  ← nameSalt decrypted from node_name_salt_enc
+node name_enc  = EncryptStringForKeys(filename, [sessionPublicKey])   ← armored AGE
+node type_enc  = EncryptStringForKeys(mimeType, [sessionPublicKey])   ← armored AGE (files only)
+file chunks    = EncryptBinaryForKey(chunk, sessionPublicKey)          ← raw binary AGE
+```
+
+`resolveDataroomSession(ctx, cfg, client, dataroomID)` is the single entry point for obtaining
+the session material. Returns `*dataroomSession{Identity, PublicKey, PrivateKey, NameSalt}`.
+Fetches dataroom + user key concurrently (with internal spinner), stops spinner before passphrase
+prompt, decrypts the session key, then decrypts `node_name_salt_enc` if present. All node
+commands call this. The `NameSalt` is "" for datarooms that pre-date the salt field.
 
 ## API — backend nomenclature
 
