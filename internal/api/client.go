@@ -146,6 +146,20 @@ func (c *Client) PostMultipartChunk(ctx context.Context, path string, data []byt
 	return c.do(req, nil)
 }
 
+// Patch performs an authenticated PATCH request with a JSON body and decodes the response.
+func (c *Client) Patch(ctx context.Context, path string, body io.Reader, dst any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.baseURL+path, body)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "application/json")
+
+	return c.do(req, dst)
+}
+
 // Delete performs an authenticated DELETE request.
 func (c *Client) Delete(ctx context.Context, path string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+path, nil)
