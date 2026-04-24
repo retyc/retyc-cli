@@ -358,16 +358,17 @@ func resolveUserIdentity(cfg *config.Config, userKey *api.UserKey) (*age.HybridI
 		if err != nil {
 			return nil, fmt.Errorf("wrong key passphrase")
 		}
-		if cfg.Keyring.Enabled {
-			if err := keyring.Store(identityStr, cfg.Keyring.TTL); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: keyring store: %v\n", err)
-			}
-		}
 	}
 
 	identity, err := crypto.ParseIdentity(identityStr)
 	if err != nil {
 		return nil, fmt.Errorf("parsing AGE identity: %w", err)
+	}
+
+	if cfg.Keyring.Enabled {
+		if err := keyring.Store(identityStr, cfg.Keyring.TTL); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: keyring store: %v\n", err)
+		}
 	}
 
 	return identity, nil
