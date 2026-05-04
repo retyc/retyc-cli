@@ -31,6 +31,11 @@ jobs:
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
 
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
+
       - name: Build (dev)
         run: CGO_ENABLED=0 go build ./...
 
