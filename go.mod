@@ -1,6 +1,8 @@
 module github.com/retyc/retyc-cli
 
-go 1.24.0
+go 1.25.0
+
+toolchain go1.25.9
 
 require (
 	filippo.io/age v1.3.1 // indirect
