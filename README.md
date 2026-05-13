@@ -7,10 +7,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
 </p>
 
-
 # Retyc CLI
 
-> Official command-line interface for [Retyc](https://retyc.com) - send transfers and manage datarooms directly from your terminal.
+> Official command-line interface for [Retyc](https://retyc.com) - send transfers and manage datarooms directly from
+> your terminal.
 
 <img src=".media/demo_0.0.2.gif" width="500" alt="Retyc CLI demo" />
 
@@ -18,9 +18,11 @@
 
 ## What is Retyc?
 
-[Retyc](https://retyc.com) is a European sovereign file-sharing platform with end-to-end post-quantum encryption. Data stays in Europe, GDPR-compliant by design.
+[Retyc](https://retyc.com) is a European sovereign file-sharing platform with end-to-end post-quantum encryption. Data
+stays in Europe, GDPR-compliant by design.
 
-`retyc-cli` lets you integrate Retyc transfers and datarooms into your scripts, pipelines and workflows - no browser required.
+`retyc-cli` lets you integrate Retyc transfers and datarooms into your scripts, pipelines, and workflows - no browser
+required.
 
 ---
 
@@ -73,317 +75,46 @@ retyc transfer download <transfer-id>
 
 ---
 
-## Commands
+## Security
 
-### Auth
-
-| Command | Description |
-|---|---|
-| `retyc auth login` | Authenticate via OIDC device flow |
-| `retyc auth login --offline` | Authenticate and print an offline token for CI/CD use |
-| `retyc auth status` | Check authentication status (silently refreshes token) |
-| `retyc auth logout` | Sign out |
-
-### Transfer
-
-| Command | Description |
-|---|---|
-| `retyc transfer create <file>` | Create and send a new transfer (`--generate-passphrase` to auto-generate a secure passphrase) |
-| `retyc transfer info <id>` | Get transfer details |
-| `retyc transfer ls` | List sent and received transfers |
-| `retyc transfer download <id>` | Download a transfer |
-| `retyc transfer enable <id>` | Enable a transfer |
-| `retyc transfer disable <id>` | Disable a transfer |
-
-### Dataroom
-
-Datarooms are persistent, end-to-end encrypted shared spaces for files and folders.
-All paths use the `retyc://dataroom-id/path` URI scheme.
-Glob patterns (`*`, `?`, `[...]`) are supported in remote paths.
-
-| Command | Description |
-|---|---|
-| `retyc dataroom ls` | List all your datarooms |
-| `retyc dataroom ls retyc://<id>[/path]` | List nodes at a path (supports globs) |
-| `retyc dataroom create --title <title>` | Create a new dataroom |
-| `retyc dataroom info <id>` | Show dataroom details, stats and members |
-| `retyc dataroom cp <local…> retyc://<id>/<dest>` | Upload files or directories |
-| `retyc dataroom cp retyc://<id>/<path> <local-dir>` | Download a file |
-| `retyc dataroom mv retyc://<id>/<src> retyc://<id>/<dst>` | Rename or move a node |
-| `retyc dataroom rm retyc://<id>` | Delete the entire dataroom |
-| `retyc dataroom rm retyc://<id>/<path>` | Delete a node (supports globs) |
-| `retyc dataroom mkdir retyc://<id>/<path>` | Create a folder |
-| `retyc dataroom user add <id> <email> [--role viewer\|editor\|admin]` | Add a member |
-| `retyc dataroom user rm <id> <user-id>` | Remove a member |
-
-```sh
-# Create a dataroom (title is required)
-retyc dataroom create --title "Project Alpha"
-
-# Upload a release directory
-retyc dataroom cp ./dist/ retyc://019d3de3-.../releases/
-
-# List contents
-retyc dataroom ls retyc://019d3de3-.../releases/
-
-# Download a specific file
-retyc dataroom cp retyc://019d3de3-.../releases/binary ./
-
-# Download all PDFs from a folder
-retyc dataroom cp retyc://019d3de3-.../docs/*.pdf ./local/
-
-# Delete all log files
-retyc dataroom rm retyc://019d3de3-.../*.log
-
-# Delete the entire dataroom
-retyc dataroom rm retyc://019d3de3-...
-
-# Add a collaborator
-retyc dataroom user add 019d3de3-... alice@example.com --role editor
-```
+- **Authentication**: OIDC device flow (no password ever stored locally)
+- **File data + metadata**: end-to-end encrypted with [AGE](https://github.com/FiloSottile/age) post-quantum hybrid keys
+- **Private key caching** (Linux only): the decrypted AGE identity is stored in the kernel session keyring and is never
+  written to disk. It is scoped to the current terminal session, isolated from other users and sessions, and uses a
+  sliding TTL (default: 60 seconds). Each access refreshes the expiration timer.
+- **Transport**: TLS enforced by default
 
 ---
 
 ## MCP Server
 
-`retyc-cli` runs as a **Model Context Protocol (MCP) server**, exposing all Retyc operations as tools to AI agents.
+`retyc-cli` runs as a [Model Context Protocol](https://modelcontextprotocol.io) server — connect it to your AI agent and control Retyc in plain language:
 
-### Quick start
+> *"Create a dataroom called 'Release v2', upload ./dist/, and add alice@example.com as editor."*
+> *"Send all PDFs in ./reports/ to bob@example.com, expire in 7 days."*
+> *"List my latest transfers and download the most recent one into ~/Downloads/."*
 
+**Quick setup with Claude Code:**
 ```sh
-# Start the MCP server (uses stdio transport)
-retyc mcp serve
+# Use read -s to avoid storing the passphrase in shell history
+read -rs RETYC_KEY_PASSPHRASE
+claude mcp add --transport stdio retyc --env RETYC_KEY_PASSPHRASE="$RETYC_KEY_PASSPHRASE" -- /path/to/retyc mcp serve
 ```
 
-### Claude Desktop integration
-
-Add to `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "retyc": {
-      "command": "retyc",
-      "args": ["mcp", "serve"],
-      "env": {
-        "RETYC_KEY_PASSPHRASE": "your-key-passphrase"
-      }
-    }
-  }
-}
-```
-
-### Environment variables
-
-| Variable | Required | Description |
-|---|---|---|
-| `RETYC_KEY_PASSPHRASE` | Yes | AGE private key passphrase. Required for encrypted operations (transfers, datarooms). |
-| `RETYC_TOKEN` | No | Offline refresh token. If set, bypasses local token storage (useful in isolated environments). |
-| `RETYC_CONFIG_DIR` | No | Override config directory (default: `.retyc/` in dev mode, `~/.config/retyc/` in prod). |
-
-### Tools reference
-
-All tools return structured JSON responses. On error, responses include `error_code` and `message` fields.
-
-Long-running operations (upload/download) emit progress notifications showing bytes transferred and elapsed time.
-
-#### Auth
-
-| Tool | Description | Parameters |
-|---|---|---|
-| `auth_status` | Check authentication status and token validity. Silently refreshes token if expired. | None |
-
-#### User
-
-| Tool | Description | Parameters |
-|---|---|---|
-| `user_info` | Get current user profile: email, name, company, address, plan details, public key. | None |
-| `user_quota` | Get storage and transfer quotas (used / limit). | None |
-
-#### Transfer
-
-| Tool | Description | Parameters |
-|---|---|---|
-| `transfer_list` | List sent or received transfers (default: sent). Returns ID, title, status, recipient count, created date. | **filter**: `"sent"` (default) or `"received"`; **page**: int (default: 1) |
-| `transfer_info` | Get full transfer details: title, message, file list with decrypted names and sizes, web URL, expiration. | **id**: string (required) |
-| `transfer_send` | Create and upload a new encrypted transfer. Files are encrypted locally before upload. | **files**: array of absolute local file paths (required); **title**: string (optional); **message**: string (optional); **passphrase**: string (optional); **generate_passphrase**: boolean (auto-generate secure passphrase); **to**: array of recipient emails (optional); **expire**: int seconds (default: 3600, set 0 for no expiration) |
-| `transfer_download` | Download and decrypt all files from a transfer into a local directory. | **id**: string (required); **output_dir**: string absolute local path (required); **passphrase**: string (only if no user key stored) |
-| `transfer_disable` | Disable (soft-delete) a transfer. Files cannot be downloaded after. | **id**: string (required) |
-| `transfer_enable` | Re-enable a previously disabled transfer. | **id**: string (required) |
-
-#### Dataroom
-
-| Tool | Description | Parameters |
-|---|---|---|
-| `dataroom_list` | List all datarooms. Returns ID, title, created date, file count. | None |
-| `dataroom_create` | Create a new end-to-end encrypted dataroom. | **title**: string (required) |
-| `dataroom_info` | Get dataroom metadata, file statistics, member list with roles. | **id**: string (required) |
-| `dataroom_ls` | List nodes at a path in a dataroom. Supports glob patterns (`*`, `?`, `[...]`). | **uri**: string in format `retyc://id` or `retyc://id/path` or `retyc://id/*.pdf` (required) |
-| `dataroom_upload` | Upload local files or directories recursively. Encrypted end-to-end. | **local_paths**: array of absolute paths (required); **remote_uri**: string in format `retyc://id/folder` (required) |
-| `dataroom_download` | Download and decrypt a file or glob of files from a dataroom. | **remote_uri**: string in format `retyc://id/file` or `retyc://id/*.pdf` (required); **local_dir**: string absolute path (required) |
-| `dataroom_mkdir` | Create a folder in a dataroom. Parent path must exist. | **uri**: string in format `retyc://id/path/new-folder` (required) |
-| `dataroom_rm` | Delete a node (file or folder) or entire dataroom. Supports glob patterns. | **uri**: string: `retyc://id` deletes dataroom; `retyc://id/path` deletes node; globs expand (required) |
-| `dataroom_mv` | Move or rename a node within the same dataroom. | **src_uri**: string in format `retyc://id/src` (required); **dst_uri**: string in format `retyc://id/dst` (required) |
-| `dataroom_user_add` | Add a member to a dataroom. Automatically re-encrypts for all members (rekey). | **dataroom_id**: string (required); **email**: string (required); **role**: `"viewer"` (default), `"editor"`, or `"admin"` (optional) |
-| `dataroom_user_rm` | Remove a member from a dataroom. Automatically re-encrypts for remaining members. | **dataroom_id**: string (required); **user_id**: string (required) |
-
-### Authentication in MCP mode
-
-The MCP server operates in two modes:
-
-1. **With token on disk** (default): Reads stored token from config directory (default: `.retyc/` or `~/.config/retyc/`). Refreshes automatically if expired.
-2. **With `RETYC_TOKEN` env var**: Uses offline refresh token directly, bypassing disk storage.
-
-For interactive authentication, use the CLI: `retyc auth login` before starting the MCP server.
+Full integration guide (Claude Desktop, Cursor, Windsurf, example prompts): [doc/mcp.md](doc/mcp.md)
 
 ---
 
-## Docker
+## Documentation
 
-Config and tokens are persisted in a named volume. The `-it` flags are required for interactive prompts (device flow, passphrase).
-
-```sh
-# Authenticate
-docker run -it --rm -v retyc-config:/home/retyc/.config/retyc retyc/retyc-cli:latest auth login
-
-# Send / list / download (mount current directory for file access)
-docker run -it --rm \
-  -v retyc-config:/home/retyc/.config/retyc \
-  -v "$(pwd)":/data \
-  retyc/retyc-cli:latest transfer create /data/report.pdf
-```
-
-> **Tip:** `alias retyc='docker run -it --rm -v retyc-config:/home/retyc/.config/retyc -v "$(pwd)":/data retyc/retyc-cli:latest'`
-
-> **Note:** kernel keyring caching is not available in Docker (blocked by the default seccomp profile). The passphrase will be prompted on each invocation.
-
----
-
-## CI / CD
-
-`retyc-cli` can run fully non-interactively for authentication and key-unlock flows in pipelines. Set the following environment variables to avoid credential and key passphrase prompts:
-
-| Variable | Description |
-|---|---|
-| `RETYC_TOKEN` | Offline refresh token used instead of reading credentials from disk |
-| `RETYC_KEY_PASSPHRASE` | Passphrase for your AGE private key, used instead of an interactive passphrase prompt |
-
-> **Note:** Other interactive prompts (for example, transfer confirmation unless you pass `-y`) may still appear and must be disabled using the appropriate CLI flags when running in CI.
-
-### Setup (one-time, on your machine)
-
-```sh
-# Authenticate and print an offline token
-retyc auth login --offline
-```
-
-Copy the printed token and store it as a secret in your CI provider alongside your key passphrase.
-
-### Usage in a pipeline
-
-```sh
-export RETYC_TOKEN=<offline_token>
-export RETYC_KEY_PASSPHRASE=<key_passphrase>
-
-# Send build artifacts
-retyc transfer create -y --title "Release v1.2.3" ./dist/app.tar.gz
-
-# Download a transfer
-retyc transfer download -y <transfer-id>
-```
-
-The offline token is a long-lived refresh token. At each invocation the CLI exchanges it for a short-lived access token — nothing is written to disk.
-
----
-
-## Configuration
-
-Credentials and config are stored in a platform-specific directory:
-
-| Build | Config directory |
-|---|---|
-| Production (`-tags prod`) | `~/.config/retyc/` (XDG Base Dir) |
-| Development (default) | `.retyc/` in the current directory |
-
-Override at any time:
-
-```sh
-export RETYC_CONFIG_DIR=/path/to/config
-```
-
-### Environment variables
-
-| Variable | Description |
-|---|---|
-| `RETYC_CONFIG_DIR` | Override the config directory |
-| `RETYC_TOKEN` | Offline refresh token (bypasses disk credentials — see [CI / CD](#ci--cd)) |
-| `RETYC_KEY_PASSPHRASE` | AGE key passphrase (bypasses interactive prompt — see [CI / CD](#ci--cd)) |
-
-Create `config.yaml` to override defaults:
-
-```yaml
-api:
-  base_url: https://api.retyc.com
-
-insecure: true  # dev builds only — skip TLS verification persistently
-```
-
-### Global flags
-
-| Flag | Short | Description |
-|---|---|---|
-| `--config <file>` | | Use a specific config file |
-| `--insecure` | `-k` | Skip TLS certificate verification *(dev builds only — can be set persistently via `insecure: true` in `config.yaml`)* |
-| `--debug` | | Enable debug mode |
-
----
-
-## Security
-
-- **Authentication**: OIDC device flow - no password ever stored locally
-- **File data + metadata**: end to end encrypted with [AGE](https://github.com/FiloSottile/age) post-quantum hybrid keys
-- **Private key caching** (Linux only): the decrypted AGE identity is stored in the kernel session keyring and is never written to disk. It is scoped to the current terminal session, isolated from other users and sessions, and uses a sliding TTL (default: 60 seconds). Each access refreshes the expiration timer.
-- **Transport**: TLS enforced by default
-
----
-
-## Roadmap
-
-### Transfer
-
-| Feature | Status |
-|---|---|
-| Create | ✅ |
-| Info | ✅ |
-| List (inbox / sent) | ✅ |
-| Download | ✅ |
-| Enable/Disable | ✅ |
-
-### Dataroom
-
-| Feature | Status |
-|---|---|
-| Create / Info / List | ✅ |
-| User management (add / remove + rekey) | ✅ |
-| Upload (files + recursive directories) | ✅ |
-| Download (single file + glob) | ✅ |
-| Move / Rename | ✅ |
-| Delete (single + glob) | ✅ |
-| Create folder | ✅ |
-| Versioning (promote / manage) | 🔜 |
-
-### User
-
-| Feature | Status |
-|---|---|
-| Get data | ✅ |
-| Get quota | ✅ |
-
-### Organization
-
-| Feature | Status |
-|---|---|
-| User management (invitations, roles) | 🔜 |
+| Topic                        | Link                                         |
+|------------------------------|----------------------------------------------|
+| Full commands reference      | [doc/commands.md](doc/commands.md)           |
+| MCP server + tools reference | [doc/mcp.md](doc/mcp.md)                     |
+| Docker usage                 | [doc/docker.md](doc/docker.md)               |
+| CI / CD integration          | [doc/ci-cd.md](doc/ci-cd.md)                 |
+| Configuration & env vars     | [doc/configuration.md](doc/configuration.md) |
+| Roadmap                      | [doc/roadmap.md](doc/roadmap.md)             |
 
 ---
 
