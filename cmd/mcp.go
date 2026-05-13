@@ -137,6 +137,7 @@ func registerAuthTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("auth_status",
 			mcp.WithDescription("Check authentication status and token validity"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, err := config.Load()
@@ -169,6 +170,7 @@ func registerUserTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("user_info",
 			mcp.WithDescription("Get current user profile (email, role, plan, public key)"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			_, client, err := newAPIClient(ctx)
@@ -187,6 +189,7 @@ func registerUserTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("user_quota",
 			mcp.WithDescription("Get current user storage and transfer quotas"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			_, client, err := newAPIClient(ctx)
@@ -209,6 +212,7 @@ func registerTransferTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("transfer_list",
 			mcp.WithDescription("List transfers (sent or received)"),
+			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("filter",
 				mcp.Description("Filter: \"sent\" (default) or \"received\""),
 				mcp.DefaultString("sent"),
@@ -238,6 +242,7 @@ func registerTransferTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("transfer_info",
 			mcp.WithDescription("Get full details of a transfer including decrypted file names and message"),
+			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Transfer ID")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -261,6 +266,8 @@ func registerTransferTools(srv *server.MCPServer) {
 				"Create and upload a new encrypted transfer. "+
 					"Files are encrypted locally before upload — plaintext never leaves this machine.",
 			),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithArray("files",
 				mcp.Required(),
 				mcp.Description("Absolute local file paths to upload"),
@@ -307,6 +314,8 @@ func registerTransferTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("transfer_download",
 			mcp.WithDescription("Download and decrypt all files from a transfer to a local directory"),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Transfer ID")),
 			mcp.WithString("output_dir", mcp.Required(), mcp.Description("Local destination directory (must be absolute path)")),
 			mcp.WithString("passphrase",
@@ -344,7 +353,9 @@ func registerTransferTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("transfer_disable",
-			mcp.WithDescription("Disable (soft-delete) a transfer"),
+			mcp.WithDescription("Disable a transfer"),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Transfer ID")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -363,6 +374,8 @@ func registerTransferTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("transfer_enable",
 			mcp.WithDescription("Re-enable a previously disabled transfer"),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Transfer ID")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -385,6 +398,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_list",
 			mcp.WithDescription("List all datarooms"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			_, client, err := newAPIClient(ctx)
@@ -403,6 +417,8 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_create",
 			mcp.WithDescription("Create a new dataroom with end-to-end encryption"),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("title", mcp.Required(), mcp.Description("Dataroom title")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -422,6 +438,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_info",
 			mcp.WithDescription("Get dataroom metadata, file statistics, and member list"),
+			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Dataroom ID")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -441,6 +458,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_ls",
 			mcp.WithDescription("List nodes in a dataroom path. Supports glob patterns (*, ?, [...])"),
+			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("uri",
 				mcp.Required(),
 				mcp.Description("retyc:// URI, e.g. retyc://id or retyc://id/path or retyc://id/*.pdf"),
@@ -465,6 +483,8 @@ func registerDataroomTools(srv *server.MCPServer) {
 			mcp.WithDescription(
 				"Upload one or more local files or directories to a dataroom. Directories are uploaded recursively.",
 			),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithArray("local_paths",
 				mcp.Required(),
 				mcp.Description("Absolute local file or directory paths to upload"),
@@ -507,6 +527,8 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_download",
 			mcp.WithDescription("Download a file (or glob of files) from a dataroom to a local directory"),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("remote_uri",
 				mcp.Required(),
 				mcp.Description("Source retyc:// URI, e.g. retyc://id/file.pdf or retyc://id/*.pdf"),
@@ -550,6 +572,8 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_mkdir",
 			mcp.WithDescription("Create a folder in a dataroom"),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("uri",
 				mcp.Required(),
 				mcp.Description("retyc:// URI including the new folder name, e.g. retyc://id/parent/new-folder"),
@@ -572,6 +596,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_rm",
 			mcp.WithDescription("Delete a node (file or folder) or the entire dataroom. Supports glob patterns."),
+			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithString("uri",
 				mcp.Required(),
 				mcp.Description(
@@ -596,6 +621,8 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_mv",
 			mcp.WithDescription("Move or rename a node within the same dataroom"),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("src_uri",
 				mcp.Required(),
 				mcp.Description("Source retyc:// URI"),
@@ -626,6 +653,8 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_user_add",
 			mcp.WithDescription("Add a user to a dataroom and rekey it for all members"),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("dataroom_id", mcp.Required(), mcp.Description("Dataroom ID")),
 			mcp.WithString("email", mcp.Required(), mcp.Description("User email address to add")),
 			mcp.WithString("role",
@@ -656,6 +685,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_user_rm",
 			mcp.WithDescription("Remove a user from a dataroom and rekey it for remaining members"),
+			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithString("dataroom_id", mcp.Required(), mcp.Description("Dataroom ID")),
 			mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to remove")),
 		),
