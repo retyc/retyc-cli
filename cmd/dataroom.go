@@ -77,7 +77,7 @@ var dataroomLsCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		nodes, err := service.ListNodes(ctx, cfg, client, args[0], readKeyPassphrase)
+		nodes, err := service.ListNodes(ctx, cfg, client, args[0], spinnerReader(s))
 		s.Stop()
 		if err != nil {
 			return err
@@ -120,7 +120,7 @@ var dataroomCreateCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		result, err := service.CreateDataroom(ctx, cfg, client, title, readKeyPassphrase)
+		result, err := service.CreateDataroom(ctx, cfg, client, title, spinnerReader(s))
 		s.Stop()
 		if err != nil {
 			return err
@@ -197,7 +197,7 @@ var dataroomUserAddCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		err = service.AddDataroomUser(ctx, cfg, client, drID, email, role, readKeyPassphrase)
+		err = service.AddDataroomUser(ctx, cfg, client, drID, email, role, spinnerReader(s))
 		s.Stop()
 		if err != nil {
 			return err
@@ -227,7 +227,7 @@ var dataroomUserRmCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		err = service.RemoveDataroomUser(ctx, cfg, client, drID, userID, readKeyPassphrase)
+		err = service.RemoveDataroomUser(ctx, cfg, client, drID, userID, spinnerReader(s))
 		s.Stop()
 		if err != nil {
 			return err
@@ -420,7 +420,7 @@ var dataroomMvCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		err = service.MoveDataroomNode(ctx, cfg, client, args[0], args[1], readKeyPassphrase)
+		err = service.MoveDataroomNode(ctx, cfg, client, args[0], args[1], spinnerReader(s))
 		s.Stop()
 		if err != nil {
 			return err
@@ -471,7 +471,7 @@ var dataroomRmCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		count, err := service.DeleteDataroomNode(ctx, cfg, client, uri, readKeyPassphrase)
+		count, err := service.DeleteDataroomNode(ctx, cfg, client, uri, spinnerReader(s))
 		s.Stop()
 		if err != nil {
 			return err
@@ -504,7 +504,7 @@ var dataroomMkdirCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		nodeID, err := service.MkdirDataroom(ctx, cfg, client, args[0], readKeyPassphrase)
+		nodeID, err := service.MkdirDataroom(ctx, cfg, client, args[0], spinnerReader(s))
 		s.Stop()
 		if err != nil {
 			return err

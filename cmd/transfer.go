@@ -98,7 +98,7 @@ var transferInfoCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		info, err := service.GetTransferInfo(ctx, cfg, client, shareID, readKeyPassphrase)
+		info, err := service.GetTransferInfo(ctx, cfg, client, shareID, spinnerReader(s))
 		s.Stop()
 		if err != nil {
 			return err

@@ -12,6 +12,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/schollz/progressbar/v3"
 	"golang.org/x/oauth2"
 	"golang.org/x/term"
@@ -38,6 +39,16 @@ func readKeyPassphrase() (string, error) {
 	}
 
 	return string(pb), nil
+}
+
+// spinnerReader wraps readKeyPassphrase to stop s before prompting.
+// Spinner.Stop is idempotent, so calling s.Stop() again afterwards is safe.
+func spinnerReader(s *ui.Spinner) func() (string, error) {
+	return func() (string, error) {
+		s.Stop()
+
+		return readKeyPassphrase()
+	}
 }
 
 // mustGetToken retrieves a refreshing OAuth2 token source, returning a
