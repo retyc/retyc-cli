@@ -144,6 +144,100 @@ retyc dataroom user add 019d3de3-... alice@example.com --role editor
 
 ---
 
+## MCP Server
+
+`retyc-cli` runs as a **Model Context Protocol (MCP) server**, exposing all Retyc operations as tools to AI agents.
+
+### Quick start
+
+```sh
+# Start the MCP server (uses stdio transport)
+retyc mcp serve
+```
+
+### Claude Desktop integration
+
+Add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "retyc": {
+      "command": "retyc",
+      "args": ["mcp", "serve"],
+      "env": {
+        "RETYC_KEY_PASSPHRASE": "your-key-passphrase"
+      }
+    }
+  }
+}
+```
+
+### Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `RETYC_KEY_PASSPHRASE` | Yes | AGE private key passphrase. Required for encrypted operations (transfers, datarooms). |
+| `RETYC_TOKEN` | No | Offline refresh token. If set, bypasses local token storage (useful in isolated environments). |
+| `RETYC_CONFIG_DIR` | No | Override config directory (default: `.retyc/` in dev mode, `~/.config/retyc/` in prod). |
+
+### Tools reference
+
+All tools return structured JSON responses. On error, responses include `error_code` and `message` fields.
+
+Long-running operations (upload/download) emit progress notifications showing bytes transferred and elapsed time.
+
+#### Auth
+
+| Tool | Description | Parameters |
+|---|---|---|
+| `auth_status` | Check authentication status and token validity. Silently refreshes token if expired. | None |
+
+#### User
+
+| Tool | Description | Parameters |
+|---|---|---|
+| `user_info` | Get current user profile: email, name, company, address, plan details, public key. | None |
+| `user_quota` | Get storage and transfer quotas (used / limit). | None |
+
+#### Transfer
+
+| Tool | Description | Parameters |
+|---|---|---|
+| `transfer_list` | List sent or received transfers (default: sent). Returns ID, title, status, recipient count, created date. | **filter**: `"sent"` (default) or `"received"`; **page**: int (default: 1) |
+| `transfer_info` | Get full transfer details: title, message, file list with decrypted names and sizes, web URL, expiration. | **id**: string (required) |
+| `transfer_send` | Create and upload a new encrypted transfer. Files are encrypted locally before upload. | **files**: array of absolute local file paths (required); **title**: string (optional); **message**: string (optional); **passphrase**: string (optional); **generate_passphrase**: boolean (auto-generate secure passphrase); **to**: array of recipient emails (optional); **expire**: int seconds (default: 3600, set 0 for no expiration) |
+| `transfer_download` | Download and decrypt all files from a transfer into a local directory. | **id**: string (required); **output_dir**: string absolute local path (required); **passphrase**: string (only if no user key stored) |
+| `transfer_disable` | Disable (soft-delete) a transfer. Files cannot be downloaded after. | **id**: string (required) |
+| `transfer_enable` | Re-enable a previously disabled transfer. | **id**: string (required) |
+
+#### Dataroom
+
+| Tool | Description | Parameters |
+|---|---|---|
+| `dataroom_list` | List all datarooms. Returns ID, title, created date, file count. | None |
+| `dataroom_create` | Create a new end-to-end encrypted dataroom. | **title**: string (required) |
+| `dataroom_info` | Get dataroom metadata, file statistics, member list with roles. | **id**: string (required) |
+| `dataroom_ls` | List nodes at a path in a dataroom. Supports glob patterns (`*`, `?`, `[...]`). | **uri**: string in format `retyc://id` or `retyc://id/path` or `retyc://id/*.pdf` (required) |
+| `dataroom_upload` | Upload local files or directories recursively. Encrypted end-to-end. | **local_paths**: array of absolute paths (required); **remote_uri**: string in format `retyc://id/folder` (required) |
+| `dataroom_download` | Download and decrypt a file or glob of files from a dataroom. | **remote_uri**: string in format `retyc://id/file` or `retyc://id/*.pdf` (required); **local_dir**: string absolute path (required) |
+| `dataroom_mkdir` | Create a folder in a dataroom. Parent path must exist. | **uri**: string in format `retyc://id/path/new-folder` (required) |
+| `dataroom_rm` | Delete a node (file or folder) or entire dataroom. Supports glob patterns. | **uri**: string: `retyc://id` deletes dataroom; `retyc://id/path` deletes node; globs expand (required) |
+| `dataroom_mv` | Move or rename a node within the same dataroom. | **src_uri**: string in format `retyc://id/src` (required); **dst_uri**: string in format `retyc://id/dst` (required) |
+| `dataroom_user_add` | Add a member to a dataroom. Automatically re-encrypts for all members (rekey). | **dataroom_id**: string (required); **email**: string (required); **role**: `"viewer"` (default), `"editor"`, or `"admin"` (optional) |
+| `dataroom_user_rm` | Remove a member from a dataroom. Automatically re-encrypts for remaining members. | **dataroom_id**: string (required); **user_id**: string (required) |
+
+### Authentication in MCP mode
+
+The MCP server operates in two modes:
+
+1. **With token on disk** (default): Reads stored token from config directory (default: `.retyc/` or `~/.config/retyc/`). Refreshes automatically if expired.
+2. **With `RETYC_TOKEN` env var**: Uses offline refresh token directly, bypassing disk storage.
+
+For interactive authentication, use the CLI: `retyc auth login` before starting the MCP server.
+
+---
+
 ## Docker
 
 Config and tokens are persisted in a named volume. The `-it` flags are required for interactive prompts (device flow, passphrase).
