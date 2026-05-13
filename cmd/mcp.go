@@ -96,7 +96,13 @@ type mcpToolError struct {
 func toJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return fmt.Sprintf(`{"error":"marshal failed: %s"}`, err)
+		fallback, fallbackErr := json.Marshal(map[string]string{
+			"error": "marshal failed: " + err.Error(),
+		})
+		if fallbackErr != nil {
+			return `{"error":"marshal failed"}`
+		}
+		return string(fallback)
 	}
 
 	return string(b)

@@ -166,7 +166,7 @@ func SendTransfer(
 	needPassphrase := !allHaveKeys || p.Passphrase != "" || p.GeneratePassphrase
 
 	if needPassphrase && passphrase == "" {
-		err = fmt.Errorf("transfer passphrase required but not provided (use --passphrase or --generate-passphrase)")
+		err = fmt.Errorf("transfer passphrase required but not provided; it must be provided or generated")
 
 		return nil, err
 	}
