@@ -63,7 +63,23 @@ The MCP server operates in two modes:
    Refreshes automatically if expired.
 2. **With `RETYC_TOKEN` env var**: Uses offline refresh token directly, bypassing disk storage.
 
-For interactive authentication, use the CLI: `retyc auth login` before starting the MCP server.
+### Authenticate from the chat (device flow)
+
+You can authenticate without leaving your AI client by asking the agent to log you in:
+
+> *"Log me into Retyc."*
+
+The agent will call `auth_login_start`, which returns a one-time URL. Open it in your browser, complete the login, then tell the agent to continue — it will poll with `auth_login_poll` until the token is confirmed and saved to disk.
+
+The `auth_login_start` tool short-circuits if a valid token is already stored, so it is safe to call at any time.
+
+### Authenticate via CLI
+
+```sh
+retyc auth login
+```
+
+Run this before starting the MCP server if you prefer to authenticate outside the agent.
 
 ## Example prompts
 
@@ -95,9 +111,11 @@ Long-running operations (upload/download) emit progress notifications showing by
 
 ### Auth
 
-| Tool          | Description                                                                          | Parameters |
-|---------------|--------------------------------------------------------------------------------------|------------|
-| `auth_status` | Check authentication status and token validity. Silently refreshes token if expired. | None       |
+| Tool                | Description                                                                                                                                                      | Parameters                         |
+|---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------|
+| `auth_status`       | Check authentication status and token validity. Silently refreshes token if expired.                                                                             | None                               |
+| `auth_login_start`  | Initiate OIDC device flow. Returns a URL to open in the browser. Short-circuits with `already_authenticated: true` if a valid token is already stored on disk.   | None                               |
+| `auth_login_poll`   | Poll once for the device flow result. Returns `status: "pending"`, `"slow_down"`, `"expired"`, or `"denied"`. Saves the token to disk when `done` is `true`.    | **device_code**: string (required) |
 
 ### User
 
