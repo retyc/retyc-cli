@@ -26,6 +26,15 @@ var ErrNoToken = errors.New("no stored token")
 // refresh token to attempt a silent renewal.
 var ErrNoRefreshToken = errors.New("token expired and no refresh token available")
 
+// ErrDeviceCodeExpired is returned by PollToken when the device code has expired.
+var ErrDeviceCodeExpired = errors.New("device code expired")
+
+// ErrAccessDenied is returned by PollToken when the user explicitly denied access.
+var ErrAccessDenied = errors.New("access denied by user")
+
+// ErrSlowDown is returned by PollToken when the server requests a slower polling rate.
+var ErrSlowDown = errors.New("slow down: poll less frequently")
+
 // DeviceAuthResponse holds the response from the device authorization endpoint.
 type DeviceAuthResponse struct {
 	DeviceCode              string `json:"device_code"`
@@ -55,7 +64,7 @@ type TokenResponse struct {
 // TLS certificates (e.g. in development environments).
 func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client) (*oauth2.Token, error) {
 	// Step 1: request a device code
-	devResp, err := requestDeviceCode(cfg, httpClient)
+	devResp, err := RequestDeviceCode(cfg, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("requesting device code: %w", err)
 	}
@@ -83,15 +92,19 @@ func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Cli
 	// requests, so the initial poll can happen immediately. This makes the
 	// response feel instantaneous when the user authenticates right away.
 	for time.Now().Before(deadline) {
-		tok, err := pollToken(cfg, devResp.DeviceCode, httpClient)
+		tok, err := PollToken(cfg, devResp.DeviceCode, httpClient)
 		if err != nil {
-			return nil, err
+			if !errors.Is(err, ErrSlowDown) {
+				return nil, err
+			}
+			// RFC 8628 §3.5: slow_down requires increasing the polling interval by 5s.
+			interval += 5 * time.Second
 		}
 		if tok != nil {
 			return tok, nil
 		}
 
-		// authorization_pending — wait before next poll
+		// authorization_pending or slow_down — wait before next poll
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -99,11 +112,11 @@ func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Cli
 		}
 	}
 
-	return nil, fmt.Errorf("device code expired")
+	return nil, ErrDeviceCodeExpired
 }
 
-// requestDeviceCode calls the device authorization endpoint.
-func requestDeviceCode(cfg config.OIDCConfig, httpClient *http.Client) (*DeviceAuthResponse, error) {
+// RequestDeviceCode calls the device authorization endpoint.
+func RequestDeviceCode(cfg config.OIDCConfig, httpClient *http.Client) (*DeviceAuthResponse, error) {
 	data := url.Values{
 		"client_id": {cfg.ClientID},
 		"scope":     {strings.Join(cfg.Scopes, " ")},
@@ -132,9 +145,12 @@ func requestDeviceCode(cfg config.OIDCConfig, httpClient *http.Client) (*DeviceA
 	return &dar, nil
 }
 
-// pollToken exchanges a device code for tokens at the token endpoint.
-// Returns nil, nil when the authorization is still pending.
-func pollToken(cfg config.OIDCConfig, deviceCode string, httpClient *http.Client) (*oauth2.Token, error) {
+// PollToken exchanges a device code for tokens at the token endpoint.
+// Returns (token, nil) on success, (nil, nil) when authorization is pending,
+// ErrSlowDown when the server requests a reduced polling rate,
+// ErrDeviceCodeExpired when the code has expired, ErrAccessDenied when the
+// user denied access, or a non-nil error for unexpected failures.
+func PollToken(cfg config.OIDCConfig, deviceCode string, httpClient *http.Client) (*oauth2.Token, error) {
 	data := url.Values{
 		"client_id":   {cfg.ClientID},
 		"device_code": {deviceCode},
@@ -163,12 +179,14 @@ func pollToken(cfg config.OIDCConfig, deviceCode string, httpClient *http.Client
 	switch tr.Error {
 	case "":
 		return tokenFromResponse(tr), nil
-	case "authorization_pending", "slow_down":
+	case "authorization_pending":
 		return nil, nil
+	case "slow_down":
+		return nil, ErrSlowDown
 	case "expired_token":
-		return nil, fmt.Errorf("device code expired")
+		return nil, ErrDeviceCodeExpired
 	case "access_denied":
-		return nil, fmt.Errorf("access denied by user")
+		return nil, ErrAccessDenied
 	default:
 		return nil, fmt.Errorf("token error %s: %s", tr.Error, tr.ErrorDesc)
 	}

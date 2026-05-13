@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
@@ -158,7 +160,108 @@ func registerAuthTools(srv *server.MCPServer) {
 
 			return mcp.NewToolResultText(toJSON(map[string]any{
 				"authenticated": true,
-				"expires_at":    t.Expiry.Format("2006-01-02T15:04:05Z"),
+				"expires_at":    t.Expiry.UTC().Format(time.RFC3339),
+			})), nil
+		},
+	)
+
+	srv.AddTool(
+		mcp.NewTool("auth_login_start",
+			mcp.WithDescription(
+				"Initiate OIDC device flow login. Returns a URL to open in the browser and a "+
+					"device_code to pass to auth_login_poll. Show the verification_uri_complete link to the user.",
+			),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if tok, err := config.LoadToken(); err == nil && tok.Valid() {
+				return mcp.NewToolResultText(toJSON(map[string]any{
+					"already_authenticated": true,
+					"expires_at":            tok.Expiry.UTC().Format(time.RFC3339),
+				})), nil
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				return toolErr(fmt.Errorf("loading config: %w", err))
+			}
+			httpClient := newHTTPClient(insecure, debug)
+			oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+			if err != nil {
+				return toolErr(fmt.Errorf("fetching OIDC config: %w", err))
+			}
+			dar, err := auth.RequestDeviceCode(*oidcCfg, httpClient)
+			if err != nil {
+				return toolErr(fmt.Errorf("requesting device code: %w", err))
+			}
+			if dar.ExpiresIn == 0 {
+				dar.ExpiresIn = 300
+			}
+			if dar.Interval == 0 {
+				dar.Interval = 5
+			}
+
+			return mcp.NewToolResultText(toJSON(map[string]any{
+				"verification_uri_complete": dar.VerificationURIComplete,
+				"verification_uri":          dar.VerificationURI,
+				"user_code":                 dar.UserCode,
+				"device_code":               dar.DeviceCode,
+				"interval":                  dar.Interval,
+				"expires_in":                dar.ExpiresIn,
+			})), nil
+		},
+	)
+
+	srv.AddTool(
+		mcp.NewTool("auth_login_poll",
+			mcp.WithDescription(
+				"Poll for the result of a device flow started with auth_login_start. "+
+					"Call repeatedly, waiting interval seconds between calls, until done is true.",
+			),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithString("device_code", mcp.Required(), mcp.Description("device_code returned by auth_login_start")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			deviceCode := req.GetString("device_code", "")
+			if deviceCode == "" {
+				return toolErr(fmt.Errorf("device_code is required"))
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				return toolErr(fmt.Errorf("loading config: %w", err))
+			}
+			httpClient := newHTTPClient(insecure, debug)
+			oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+			if err != nil {
+				return toolErr(fmt.Errorf("fetching OIDC config: %w", err))
+			}
+			tok, err := auth.PollToken(*oidcCfg, deviceCode, httpClient)
+			if err != nil {
+				switch {
+				case errors.Is(err, auth.ErrDeviceCodeExpired):
+					return mcp.NewToolResultText(toJSON(map[string]any{"done": false, "status": "expired"})), nil
+				case errors.Is(err, auth.ErrAccessDenied):
+					return mcp.NewToolResultText(toJSON(map[string]any{"done": false, "status": "denied"})), nil
+				case errors.Is(err, auth.ErrSlowDown):
+					// RFC 8628: caller must add 5s to its current polling interval.
+					return mcp.NewToolResultText(toJSON(map[string]any{
+						"done": false, "status": "slow_down", "extra_delay_seconds": 5,
+					})), nil
+				default:
+					return toolErr(err)
+				}
+			}
+			if tok == nil {
+				return mcp.NewToolResultText(toJSON(map[string]any{"done": false, "status": "pending"})), nil
+			}
+			if err := config.SaveToken(tok); err != nil {
+				return toolErr(fmt.Errorf("saving token: %w", err))
+			}
+
+			return mcp.NewToolResultText(toJSON(map[string]any{
+				"done":       true,
+				"expires_at": tok.Expiry.UTC().Format(time.RFC3339),
 			})), nil
 		},
 	)

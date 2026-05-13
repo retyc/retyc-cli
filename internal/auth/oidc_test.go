@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -68,9 +69,9 @@ func TestRequestDeviceCode_Success(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test-client", Scopes: []string{"openid"}, DeviceAuthURL: srv.URL}
 
-	resp, err := requestDeviceCode(cfg, http.DefaultClient)
+	resp, err := RequestDeviceCode(cfg, http.DefaultClient)
 	if err != nil {
-		t.Fatalf("requestDeviceCode() error = %v", err)
+		t.Fatalf("RequestDeviceCode() error = %v", err)
 	}
 
 	if resp.DeviceCode != "dev-code-123" {
@@ -90,9 +91,9 @@ func TestRequestDeviceCode_NonOK(t *testing.T) {
 
 	cfg := config.OIDCConfig{DeviceAuthURL: srv.URL}
 
-	_, err := requestDeviceCode(cfg, http.DefaultClient)
+	_, err := RequestDeviceCode(cfg, http.DefaultClient)
 	if err == nil {
-		t.Error("requestDeviceCode() should return error for non-2xx status")
+		t.Error("RequestDeviceCode() should return error for non-2xx status")
 	}
 }
 
@@ -104,9 +105,9 @@ func TestRequestDeviceCode_InvalidJSON(t *testing.T) {
 
 	cfg := config.OIDCConfig{DeviceAuthURL: srv.URL}
 
-	_, err := requestDeviceCode(cfg, http.DefaultClient)
+	_, err := RequestDeviceCode(cfg, http.DefaultClient)
 	if err == nil {
-		t.Error("requestDeviceCode() should return error for invalid JSON")
+		t.Error("RequestDeviceCode() should return error for invalid JSON")
 	}
 }
 
@@ -123,13 +124,13 @@ func TestPollToken_Success(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	tok, err := pollToken(cfg, "device-code", http.DefaultClient)
+	tok, err := PollToken(cfg, "device-code", http.DefaultClient)
 	if err != nil {
-		t.Fatalf("pollToken() error = %v", err)
+		t.Fatalf("PollToken() error = %v", err)
 	}
 
 	if tok == nil {
-		t.Fatal("pollToken() returned nil token")
+		t.Fatal("PollToken() returned nil token")
 	}
 
 	if tok.AccessToken != "new-access-token" {
@@ -146,13 +147,13 @@ func TestPollToken_AuthorizationPending(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	tok, err := pollToken(cfg, "device-code", http.DefaultClient)
+	tok, err := PollToken(cfg, "device-code", http.DefaultClient)
 	if err != nil {
-		t.Errorf("pollToken() error = %v, want nil for authorization_pending", err)
+		t.Errorf("PollToken() error = %v, want nil for authorization_pending", err)
 	}
 
 	if tok != nil {
-		t.Error("pollToken() should return nil token for authorization_pending")
+		t.Error("PollToken() should return nil token for authorization_pending")
 	}
 }
 
@@ -165,9 +166,9 @@ func TestPollToken_SlowDown(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	tok, err := pollToken(cfg, "device-code", http.DefaultClient)
-	if err != nil || tok != nil {
-		t.Errorf("pollToken() = (%v, %v), want (nil, nil) for slow_down", tok, err)
+	tok, err := PollToken(cfg, "device-code", http.DefaultClient)
+	if !errors.Is(err, ErrSlowDown) || tok != nil {
+		t.Errorf("PollToken() = (%v, %v), want (nil, ErrSlowDown) for slow_down", tok, err)
 	}
 }
 
@@ -180,9 +181,9 @@ func TestPollToken_ExpiredToken(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	_, err := pollToken(cfg, "device-code", http.DefaultClient)
+	_, err := PollToken(cfg, "device-code", http.DefaultClient)
 	if err == nil {
-		t.Error("pollToken() should return error for expired_token")
+		t.Error("PollToken() should return error for expired_token")
 	}
 }
 
@@ -195,9 +196,9 @@ func TestPollToken_AccessDenied(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	_, err := pollToken(cfg, "device-code", http.DefaultClient)
+	_, err := PollToken(cfg, "device-code", http.DefaultClient)
 	if err == nil {
-		t.Error("pollToken() should return error for access_denied")
+		t.Error("PollToken() should return error for access_denied")
 	}
 }
 
@@ -213,9 +214,9 @@ func TestPollToken_UnknownError(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	_, err := pollToken(cfg, "device-code", http.DefaultClient)
+	_, err := PollToken(cfg, "device-code", http.DefaultClient)
 	if err == nil {
-		t.Error("pollToken() should return error for unknown error field")
+		t.Error("PollToken() should return error for unknown error field")
 	}
 }
 
@@ -227,9 +228,9 @@ func TestPollToken_InvalidJSON(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	_, err := pollToken(cfg, "device-code", http.DefaultClient)
+	_, err := PollToken(cfg, "device-code", http.DefaultClient)
 	if err == nil {
-		t.Error("pollToken() should return error for invalid JSON response")
+		t.Error("PollToken() should return error for invalid JSON response")
 	}
 }
 
