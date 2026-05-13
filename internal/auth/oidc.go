@@ -241,6 +241,11 @@ func Refresh(
 	}
 
 	if tr.Error != "" {
+		if tr.Error == "invalid_grant" {
+			// Refresh token is expired or revoked — caller must re-authenticate.
+			return nil, fmt.Errorf("refresh token invalid or expired (%s): %w", tr.ErrorDesc, ErrNoRefreshToken)
+		}
+
 		return nil, fmt.Errorf("refresh error %s: %s", tr.Error, tr.ErrorDesc)
 	}
 

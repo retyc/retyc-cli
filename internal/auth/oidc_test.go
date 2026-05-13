@@ -284,7 +284,7 @@ func TestRefresh_PreservesRefreshToken(t *testing.T) {
 	}
 }
 
-func TestRefresh_ErrorResponse(t *testing.T) {
+func TestRefresh_InvalidGrant(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -298,7 +298,35 @@ func TestRefresh_ErrorResponse(t *testing.T) {
 
 	_, err := Refresh(context.Background(), cfg, "bad-token", http.DefaultClient)
 	if err == nil {
-		t.Error("Refresh() should return error for invalid_grant")
+		t.Fatal("Refresh() should return error for invalid_grant")
+	}
+
+	if !errors.Is(err, ErrNoRefreshToken) {
+		t.Errorf("Refresh() error = %v, want errors.Is(err, ErrNoRefreshToken) to be true", err)
+	}
+}
+
+func TestGetValidToken_EnvToken_InvalidGrant(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":             "invalid_grant",
+			"error_description": "Invalid refresh token",
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("RETYC_TOKEN", "expired-offline-token")
+
+	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
+
+	_, err := GetValidToken(context.Background(), cfg, http.DefaultClient)
+	if err == nil {
+		t.Fatal("GetValidToken() should return error when RETYC_TOKEN refresh returns invalid_grant")
+	}
+
+	if !errors.Is(err, ErrNoRefreshToken) {
+		t.Errorf("GetValidToken() error = %v, want errors.Is(err, ErrNoRefreshToken) to be true", err)
 	}
 }
 

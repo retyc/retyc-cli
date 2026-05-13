@@ -54,6 +54,22 @@ func spinnerReader(s *ui.Spinner) func() (string, error) {
 // mustGetToken retrieves a refreshing OAuth2 token source, returning a
 // user-friendly error if authentication is missing or expired.
 func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, error) {
+	persist := os.Getenv("RETYC_TOKEN") == ""
+
+	// When using stored tokens, check the token file before making any HTTP
+	// calls. This avoids two unnecessary round-trips (FetchOIDCConfig) just to
+	// discover that no token exists — which would otherwise block callers
+	// (e.g. MCP tools) for up to the HTTP timeout duration.
+	if persist {
+		if _, err := config.LoadToken(); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("not authenticated, run `retyc auth login`: %w", auth.ErrNoToken)
+			}
+
+			return nil, fmt.Errorf("loading stored token: %w", err)
+		}
+	}
+
 	httpClient := newHTTPClient(insecure, debug)
 
 	oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
@@ -65,13 +81,11 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, 
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrNoRefreshToken):
-			return nil, fmt.Errorf("not authenticated, run `retyc auth login`")
+			return nil, fmt.Errorf("not authenticated, run `retyc auth login`: %w", err)
 		default:
 			return nil, fmt.Errorf("authentication failed: %w", err)
 		}
 	}
-
-	persist := os.Getenv("RETYC_TOKEN") == ""
 
 	return auth.NewRefreshingTokenSource(tok, *oidcCfg, httpClient, persist), nil
 }
