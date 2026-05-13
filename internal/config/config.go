@@ -111,7 +111,7 @@ func LoadToken() (*oauth2.Token, error) {
 	f, err := os.Open(path) //nolint:gosec // G304: path is computed internally from configDir
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("no stored token found")
+			return nil, fmt.Errorf("no stored token found: %w", os.ErrNotExist)
 		}
 
 		return nil, err

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,8 +110,8 @@ func TestLoadToken_NoFile(t *testing.T) {
 		t.Fatal("LoadToken() should return error when no token file exists")
 	}
 
-	if err.Error() != "no stored token found" {
-		t.Errorf("error = %q, want 'no stored token found'", err.Error())
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("LoadToken() error = %v, want errors.Is(err, os.ErrNotExist) to be true", err)
 	}
 }
 
