@@ -3,24 +3,17 @@ package cmd
 import (
 	"bufio"
 	"context"
-	cryptorand "crypto/rand"
 	"fmt"
-	"math/big"
-	"mime"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"text/tabwriter"
-	"time"
 
-	"filippo.io/age"
 	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/ui"
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -54,10 +47,10 @@ var transferLsCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		result, err := client.ListTransfers(ctx, listType, 1)
+		result, err := service.ListTransfers(ctx, client, listType, 1)
 		s.Stop()
 		if err != nil {
-			return fmt.Errorf("listing transfers: %w", err)
+			return err
 		}
 
 		if len(result.Items) == 0 {
@@ -105,29 +98,29 @@ var transferInfoCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		details, userKey, err := fetchDetailsAndKey(ctx, client, shareID)
+		info, err := service.GetTransferInfo(ctx, cfg, client, shareID, spinnerReader(s))
 		s.Stop()
 		if err != nil {
 			return err
 		}
 
-		// Display basic metadata (no crypto required).
-		fmt.Printf("ID:      %s\n", ptrOr(details.ID, "-"))
-		fmt.Printf("Title:   %s\n", ptrOr(details.Title, "-"))
-		fmt.Printf("Status:  %s\n", details.Status)
-		if details.CreatedAt != nil {
-			fmt.Printf("Created: %s\n", details.CreatedAt.Format("2006-01-02 15:04"))
+		d := info.Details
+		fmt.Printf("ID:      %s\n", ptrOr(d.ID, "-"))
+		fmt.Printf("Title:   %s\n", ptrOr(d.Title, "-"))
+		fmt.Printf("Status:  %s\n", d.Status)
+		if d.CreatedAt != nil {
+			fmt.Printf("Created: %s\n", d.CreatedAt.Format("2006-01-02 15:04"))
 		}
-		if details.ExpiresAt != nil {
-			fmt.Printf("Expires: %s\n", details.ExpiresAt.Format("2006-01-02 15:04"))
+		if d.ExpiresAt != nil {
+			fmt.Printf("Expires: %s\n", d.ExpiresAt.Format("2006-01-02 15:04"))
 		}
-		if details.WebURL != "" {
-			fmt.Printf("URL:     %s\n", details.WebURL)
+		if d.WebURL != "" {
+			fmt.Printf("URL:     %s\n", d.WebURL)
 		}
 
-		if len(details.Recipients) > 0 {
+		if len(d.Recipients) > 0 {
 			fmt.Println("\nRecipients:")
-			for _, r := range details.Recipients {
+			for _, r := range d.Recipients {
 				email := ptrOr(r.Email, "(external)")
 				status := "password only"
 				if r.KeyEncrypted {
@@ -137,76 +130,35 @@ var transferInfoCmd = &cobra.Command{
 			}
 		}
 
-		// Crypto section: requires session_private_key_enc.
-		if details.SessionPrivateKeyEnc == nil {
+		if d.SessionPrivateKeyEnc == nil {
 			fmt.Println("\n(Transfer not yet completed - no encrypted content available.)")
 
 			return nil
 		}
-		if userKey == nil {
-			return fmt.Errorf("no active encryption key found - set up your key in the web interface first")
+
+		if info.Message != "" {
+			printBoxedMessage(info.Message)
 		}
 
-		identity, err := resolveUserIdentity(cfg, userKey)
-		if err != nil {
-			return err
-		}
-
-		// Decrypt session private key (X25519).
-		sessionKeyStr, err := crypto.DecryptToString(*details.SessionPrivateKeyEnc, identity)
-		if err != nil {
-			return fmt.Errorf("decrypting session key (key mismatch?): %w", err)
-		}
-		sessionIdentity, err := crypto.ParseIdentity(sessionKeyStr)
-		if err != nil {
-			return fmt.Errorf("parsing session AGE identity: %w", err)
-		}
-
-		// Decrypt message if present.
-		if details.MessageEnc != nil {
-			msg, err := crypto.DecryptToString(*details.MessageEnc, sessionIdentity)
-			if err == nil && msg != "" {
-				printBoxedMessage(msg)
-			}
-		}
-
-		// Fetch and display files.
-		s.Start()
-		filePage, err := client.ListFiles(ctx, shareID, 1)
-		s.Stop()
-		if err != nil {
-			return fmt.Errorf("fetching files: %w", err)
-		}
-
-		if filePage.Total == 0 {
+		if len(info.Files) == 0 {
 			fmt.Println("\nNo files.")
 
 			return nil
 		}
 
-		fmt.Printf("\nFiles (%d):\n", filePage.Total)
+		fmt.Printf("\nFiles (%d):\n", len(info.Files))
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "  NAME\tSIZE")
-		for _, f := range filePage.Items {
-			name, err := crypto.DecryptToString(f.NameEnc, sessionIdentity)
-			if err != nil {
-				name = "(encrypted)"
-			}
-			fmt.Fprintf(w, "  %s\t%s\n", name, ui.FormatSize(f.OriginalSize))
+		for _, f := range info.Files {
+			fmt.Fprintf(w, "  %s\t%s\n", f.Name, ui.FormatSize(f.Size))
 		}
 		_ = w.Flush()
-
-		if filePage.Pages > 1 {
-			fmt.Printf("  … and more (page 1/%d, %d files total)\n", filePage.Pages, filePage.Total)
-		}
 
 		return nil
 	},
 }
 
-// promptTransferPassphrase prompts the user to enter and confirm a new transfer
-// passphrase, re-prompting until a valid passphrase of at least minLen characters
-// is entered and confirmed.
+// promptTransferPassphrase prompts the user to enter and confirm a new transfer passphrase.
 func promptTransferPassphrase(minLen int) (string, error) {
 	for {
 		fmt.Fprint(os.Stderr, "Transfer passphrase: ")
@@ -236,11 +188,10 @@ func promptTransferPassphrase(minLen int) (string, error) {
 	}
 }
 
-// fetchDetailsAndKey fetches transfer details and the active user key concurrently.
-func fetchDetailsAndKey(
-	ctx context.Context,
-	client *api.Client,
-	shareID string,
+// fetchTransferDetailsAndKey fetches transfer details and the active user key concurrently.
+// Used as a CLI pre-flight check before prompting for a transfer passphrase.
+func fetchTransferDetailsAndKey(
+	ctx context.Context, client *api.Client, shareID string,
 ) (*api.TransferDetails, *api.UserKey, error) {
 	type detailsResult struct {
 		v   *api.TransferDetails
@@ -268,9 +219,6 @@ func fetchDetailsAndKey(
 }
 
 // confirmFileList prints a summary of files and prompts the user to proceed.
-// extras contains additional pre-formatted info lines printed after the file summary
-// (e.g. "  Expires:  in 1h", "  Destination:  transfer-xyz/").
-// Returns true if the user confirms.
 func confirmFileList(names []string, sizes []int64, totalSize int64, extras []string) bool {
 	const lineWidth = 44
 	fmt.Fprintln(os.Stderr)
@@ -299,13 +247,12 @@ func confirmFileList(names []string, sizes []int64, totalSize int64, extras []st
 	return strings.ToLower(strings.TrimSpace(answer)) == "y"
 }
 
-// printBoxedMessage prints a decrypted message with a left vertical bar and padding,
-// so multi-line messages are clearly delimited and easy to read.
+// printBoxedMessage prints a decrypted message with a left vertical bar.
 func printBoxedMessage(msg string) {
 	fmt.Println("\nMessage:")
 	scanner := bufio.NewScanner(strings.NewReader(msg))
 	for scanner.Scan() {
-		fmt.Printf(" \u2502 %s\n", scanner.Text())
+		fmt.Printf(" │ %s\n", scanner.Text())
 	}
 	fmt.Println()
 }
@@ -333,21 +280,10 @@ var transferCreateCmd = &cobra.Command{
 		genPassphrase, _ := cmd.Flags().GetBool("generate-passphrase")
 		passphraseExplicit := cmd.Flags().Changed("passphrase")
 
-		// Fail fast if --passphrase was provided explicitly but is too short.
 		if passphraseExplicit && len(passphrase) < minPassphraseLen {
 			return fmt.Errorf("transfer passphrase must be at least %d characters", minPassphraseLen)
 		}
 
-		// Generate a random passphrase if requested.
-		if genPassphrase {
-			var err error
-			passphrase, err = generateTransferPassphrase()
-			if err != nil {
-				return fmt.Errorf("generating passphrase: %w", err)
-			}
-		}
-
-		// Stat all files up front - needed for the summary and to fail early.
 		type fileEntry struct {
 			path string
 			name string
@@ -367,7 +303,6 @@ var transferCreateCmd = &cobra.Command{
 			totalSize += info.Size()
 		}
 
-		// Confirmation prompt (skip with --yes / -y).
 		if !yes {
 			names := make([]string, len(entries))
 			sizes := make([]int64, len(entries))
@@ -390,252 +325,63 @@ var transferCreateCmd = &cobra.Command{
 			}
 		}
 
+		// Prompt for the transfer passphrase before any API call so a Ctrl+C during
+		// entry leaves nothing on the server.
+		if !genPassphrase && passphrase == "" && len(toEmails) == 0 {
+			p, err := promptTransferPassphrase(minPassphraseLen)
+			if err != nil {
+				return err
+			}
+			passphrase = p
+		}
+
 		ctx := cmd.Context()
-		_, client, err := newAPIClient(ctx)
+		cfg, client, err := newAPIClient(ctx)
 		if err != nil {
 			return err
 		}
 
-		s := ui.NewSpinner()
-		s.Start()
-		defer s.Stop()
-
-		var titlePtr *string
-		if title != "" {
-			titlePtr = &title
-		}
-
-		s.SetLabel("Get private key")
-
-		// Fetch the user's key first - no point creating the share if there is no key.
-		userKey, err := client.GetActiveKey(ctx)
-		if err != nil {
-			return fmt.Errorf("fetching encryption key: %w", err)
-		}
-		if userKey == nil {
-			return fmt.Errorf("no active encryption key - set up your key in the web interface first")
-		}
-
-		// Prompt for the transfer passphrase BEFORE creating the share when we can
-		// determine upfront that it will be required (no recipients = passphrase always
-		// needed). This ensures a Ctrl+C during passphrase entry leaves nothing on the
-		// server. The recipients case is handled after CreateShare below.
-		if len(toEmails) == 0 && passphrase == "" && !genPassphrase {
-			s.Stop()
-			p, err := promptTransferPassphrase(minPassphraseLen)
-			if err != nil {
-				return err
-			}
-			passphrase = p
-			s.Start()
-		}
-
-		s.SetLabel("Creating transfer")
-		share, err := client.CreateShare(ctx, expire, titlePtr, true, toEmails)
-		if err != nil {
-			return fmt.Errorf("creating transfer: %w", err)
-		}
-
-		// Save the terminal state now so the signal goroutine can restore it if
-		// SIGINT arrives during a ReadPassword call (which sets raw mode).
-		// Without this, the terminal is left with no echo after the process exits.
-		termFD := int(os.Stdin.Fd()) //nolint:gosec // G115
-		var savedTermState *term.State
-		if term.IsTerminal(termFD) {
-			savedTermState, _ = term.GetState(termFD)
-		}
-
-		// Install a SIGINT/SIGTERM handler now that a pending share exists on the server.
-		// On interruption, force-delete it to avoid leaving orphaned "pending" transfers.
 		uploadCtx, cancelUpload := context.WithCancel(ctx)
 		defer cancelUpload()
 
-		var uploadInterrupted atomic.Bool
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		defer signal.Stop(sigCh)
 
-		// cleanupFinished is closed when forceCleanup has completed, allowing
-		// the signal goroutine to wait for it before calling os.Exit.
-		cleanupFinished := make(chan struct{})
-		var cleanupOnce sync.Once
-
-		// forceCleanup deletes the pending transfer. Guarded by sync.Once so it
-		// is safe to call from both the signal goroutine and the main goroutine.
-		forceCleanup := func() {
-			cleanupOnce.Do(func() {
-				defer close(cleanupFinished)
-				fmt.Fprintf(os.Stderr, "\nUpload interrupted - deleting pending transfer %s...\n", share.ID)
-				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cleanupCancel()
-				if err := client.ForceDeleteTransfer(cleanupCtx, share.ID); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not delete transfer: %v\n", err)
-				} else {
-					fmt.Fprintln(os.Stderr, "Transfer deleted.")
-				}
-			})
-		}
-
 		go func() {
 			select {
 			case <-sigCh:
-				uploadInterrupted.Store(true)
+				fmt.Fprintln(os.Stderr, "\nInterrupted.")
 				cancelUpload()
-				// Restore terminal before cleanup: if the signal arrived during
-				// ReadPassword (raw mode active), this prevents a broken console.
-				if savedTermState != nil {
-					_ = term.Restore(termFD, savedTermState)
-				}
-				forceCleanup()
-				<-cleanupFinished // wait for cleanup to complete before exiting
-				os.Exit(1)
 			case <-uploadCtx.Done():
 			}
 		}()
 
-		// Decide whether a transfer passphrase is needed.
-		// A passphrase is not needed only when all specified recipients already have a key.
-		allHaveKeys := len(toEmails) > 0 && len(share.PublicKeys) == len(toEmails)
-		needPassphrase := !allHaveKeys || passphraseExplicit || genPassphrase
-
-		// Inform the user if some recipients have no key and a passphrase is therefore required.
-		if len(toEmails) > 0 && len(share.PublicKeys) < len(toEmails) {
-			fmt.Fprintf(os.Stderr, "Note: %d recipient(s) have no encryption key - a transfer passphrase is required.\n",
-				len(toEmails)-len(share.PublicKeys))
+		bars := make(map[string]*progressbar.ProgressBar)
+		filePaths := make([]string, len(entries))
+		for i, e := range entries {
+			filePaths[i] = e.path
 		}
 
-		// Prompt for passphrase when it is needed but was not collected before CreateShare
-		// (recipients case: we only know which recipients lack a key after the API response).
-		// The signal handler is already active; a Ctrl+C cancels uploadCtx.
-		if needPassphrase && passphrase == "" {
-			s.Stop()
-			if uploadInterrupted.Load() {
-				forceCleanup()
-
-				return fmt.Errorf("interrupted")
-			}
-			p, err := promptTransferPassphrase(minPassphraseLen)
-			if err != nil {
-				if uploadInterrupted.Load() {
-					forceCleanup()
-
-					return fmt.Errorf("interrupted")
-				}
-
-				return err
-			}
-			passphrase = p
-			s.Start()
-		}
-
-		s.SetLabel("Creating new transfer key")
-
-		// Generate session keypair - used to encrypt file content and metadata.
-		sessionIdentity, err := crypto.GenerateKeyPair()
+		result, err := service.SendTransfer(uploadCtx, cfg, client, service.SendTransferParams{
+			FilePaths:          filePaths,
+			Title:              title,
+			Message:            message,
+			Passphrase:         passphrase,
+			GeneratePassphrase: genPassphrase,
+			ToEmails:           toEmails,
+			ExpireSecs:         expire,
+		}, readKeyPassphrase, cliProgressFn(bars))
 		if err != nil {
-			return fmt.Errorf("generating session key: %w", err)
-		}
-		sessionPrivKey := sessionIdentity.String()
-		sessionPubKey := sessionIdentity.Recipient().String()
-
-		// Encrypt session private key for the owner and all recipients who have a key.
-		allPubKeys := append([]string{userKey.PublicKey}, share.PublicKeys...)
-		sessionPrivKeyEnc, err := crypto.EncryptStringForKeys(sessionPrivKey, allPubKeys)
-		if err != nil {
-			return fmt.Errorf("encrypting session key: %w", err)
+			return err
 		}
 
-		// Generate ephemeral keypair only when a passphrase is required.
-		// The backend now accepts nil ephemeral fields (updated API), so we omit them
-		// entirely when all recipients have a key - no passphrase path needed.
-		var ephemeralPrivKeyEnc, ephemeralPubKey, sessionPrivKeyEncForPassphrase string
-		if needPassphrase {
-			s.SetLabel("Creating new ephemeral key")
-			ephemeralIdentity, err := crypto.GenerateKeyPair()
-			if err != nil {
-				return fmt.Errorf("generating ephemeral key: %w", err)
-			}
-			ephPubKey := ephemeralIdentity.Recipient().String()
-			ephPrivKey := ephemeralIdentity.String()
-
-			enc, err := crypto.EncryptWithPassphrase([]byte(ephPrivKey), passphrase)
-			if err != nil {
-				return fmt.Errorf("encrypting ephemeral key: %w", err)
-			}
-			sesEnc, err := crypto.EncryptStringForKeys(sessionPrivKey, []string{ephPubKey})
-			if err != nil {
-				return fmt.Errorf("encrypting session key for passphrase access: %w", err)
-			}
-
-			ephemeralPrivKeyEnc = enc
-			ephemeralPubKey = ephPubKey
-			sessionPrivKeyEncForPassphrase = sesEnc
+		fmt.Printf("Transfer %s ready.\n", result.ID)
+		if result.WebURL != "" {
+			fmt.Printf("URL: %s\n", result.WebURL)
 		}
-
-		// We stop the spinner here because we use progress bars for the uploads
-		s.Stop()
-
-		// Upload each file.
-		for _, e := range entries {
-			if err := uploadTransferFile(uploadCtx, client, share.ID, e.path, sessionPubKey); err != nil {
-				if uploadInterrupted.Load() {
-					forceCleanup()
-
-					return fmt.Errorf("interrupted")
-				}
-
-				return fmt.Errorf("%s: %w", e.name, err)
-			}
-		}
-
-		// Encrypt message if provided.
-		var messageEnc *string
-		if message != "" {
-			enc, err := crypto.EncryptStringForKeys(message, []string{sessionPubKey})
-			if err != nil {
-				return fmt.Errorf("encrypting message: %w", err)
-			}
-			messageEnc = &enc
-		}
-
-		// Complete the transfer - ephemeral fields included only when a passphrase is used.
-		req := api.CompleteTransferRequest{
-			SessionPrivateKeyEnc: sessionPrivKeyEnc,
-			SessionPublicKey:     sessionPubKey,
-			MessageEnc:           messageEnc,
-		}
-		if needPassphrase {
-			req.EphemeralPrivateKeyEnc = &ephemeralPrivKeyEnc
-			req.EphemeralPublicKey = &ephemeralPubKey
-			req.SessionPrivateKeyEncForPassphrase = &sessionPrivKeyEncForPassphrase
-		}
-		if err := client.CompleteTransfer(uploadCtx, share.ID, req); err != nil {
-			if uploadInterrupted.Load() {
-				forceCleanup()
-
-				return fmt.Errorf("interrupted")
-			}
-
-			return fmt.Errorf("completing transfer: %w", err)
-		}
-
-		details, err := client.GetTransferDetails(uploadCtx, share.ID)
-		if err != nil {
-			// Non-fatal: the transfer is complete even if we can't fetch the URL.
-			fmt.Printf("Transfer %s ready.\n", share.ID)
-			if genPassphrase {
-				fmt.Printf("Passphrase: %s\n", passphrase)
-			}
-
-			return nil
-		}
-
-		fmt.Printf("Transfer %s ready.\n", share.ID)
-		if details.WebURL != "" {
-			fmt.Printf("URL: %s\n", details.WebURL)
-		}
-		if genPassphrase {
-			fmt.Printf("Passphrase: %s\n", passphrase)
+		if result.Passphrase != "" && genPassphrase {
+			fmt.Printf("Passphrase: %s\n", result.Passphrase)
 		}
 
 		return nil
@@ -657,52 +403,11 @@ func formatExpiry(seconds int) string {
 	return fmt.Sprintf("in %dd", seconds/86400)
 }
 
-// uploadTransferFile encrypts and uploads a single file in chunks to shareID.
-func uploadTransferFile(ctx context.Context, client *api.Client, shareID, filePath, sessionPubKey string) error {
-	f, err := os.Open(filePath) //nolint:gosec // G304: path comes from validated user argument
-	if err != nil {
-		return err
-	}
-	defer f.Close() //nolint:errcheck
-
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-
-	name := filepath.Base(filePath)
-	mimeType := mime.TypeByExtension(filepath.Ext(filePath))
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-
-	nameEnc, err := crypto.EncryptStringForKeys(name, []string{sessionPubKey})
-	if err != nil {
-		return fmt.Errorf("encrypting filename: %w", err)
-	}
-	typeEnc, err := crypto.EncryptStringForKeys(mimeType, []string{sessionPubKey})
-	if err != nil {
-		return fmt.Errorf("encrypting MIME type: %w", err)
-	}
-
-	fileModel, err := client.CreateFile(ctx, shareID, nameEnc, typeEnc, info.Size())
-	if err != nil {
-		return fmt.Errorf("registering file: %w", err)
-	}
-
-	return uploadChunks(ctx, f, info.Size(), name, sessionPubKey,
-		func(ctx context.Context, chunkID int, data []byte) error {
-			return client.UploadChunk(ctx, fileModel.ID, chunkID, data)
-		})
-}
-
 var transferDisableCmd = &cobra.Command{
 	Use:   "disable <transfer_id>",
 	Short: "Disable a transfer",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		shareID := args[0]
-
 		ctx := cmd.Context()
 		_, client, err := newAPIClient(ctx)
 		if err != nil {
@@ -711,13 +416,13 @@ var transferDisableCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		err = client.DisableTransfer(ctx, shareID)
+		err = service.DisableTransfer(ctx, client, args[0])
 		s.Stop()
 		if err != nil {
-			return fmt.Errorf("disabling transfer: %w", err)
+			return err
 		}
 
-		fmt.Printf("Transfer %s disabled.\n", shareID)
+		fmt.Printf("Transfer %s disabled.\n", args[0])
 
 		return nil
 	},
@@ -728,8 +433,6 @@ var transferEnableCmd = &cobra.Command{
 	Short: "Re-enable a disabled transfer",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		shareID := args[0]
-
 		ctx := cmd.Context()
 		_, client, err := newAPIClient(ctx)
 		if err != nil {
@@ -738,13 +441,13 @@ var transferEnableCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		err = client.EnableTransfer(ctx, shareID)
+		err = service.EnableTransfer(ctx, client, args[0])
 		s.Stop()
 		if err != nil {
-			return fmt.Errorf("enabling transfer: %w", err)
+			return err
 		}
 
-		fmt.Printf("Transfer %s enabled.\n", shareID)
+		fmt.Printf("Transfer %s enabled.\n", args[0])
 
 		return nil
 	},
@@ -766,189 +469,69 @@ var transferDownloadCmd = &cobra.Command{
 		}
 
 		s := ui.NewSpinner()
-		defer s.Stop()
-
 		s.Start()
-		details, userKey, err := fetchDetailsAndKey(ctx, client, shareID)
+		details, userKey, err := fetchTransferDetailsAndKey(ctx, client, shareID)
 		s.Stop()
 		if err != nil {
 			return err
 		}
 
-		if details.SessionPrivateKeyEnc == nil && details.SessionPrivateKeyEncForPassphrase == nil {
-			return fmt.Errorf("transfer not yet completed - no encrypted content available")
-		}
-
-		// Resolve session identity: try user key path first, then transfer passphrase.
-		var sessionIdentity *age.HybridIdentity
-
-		if userKey != nil && details.SessionPrivateKeyEnc != nil {
-			userIdentity, err := resolveUserIdentity(cfg, userKey)
-			if err != nil {
-				return err
-			}
-			sessionPrivKey, err := crypto.DecryptToString(*details.SessionPrivateKeyEnc, userIdentity)
-			if err != nil {
-				return fmt.Errorf("decrypting session key (key mismatch?): %w", err)
-			}
-			si, err := crypto.ParseIdentity(sessionPrivKey)
-			if err != nil {
-				return fmt.Errorf("parsing session identity: %w", err)
-			}
-			sessionIdentity = si
-		} else {
-			// Ephemeral path: use transfer passphrase.
+		// Prompt for the transfer passphrase when the user key path is unavailable.
+		var transferPassphrase string
+		if userKey == nil || details.SessionPrivateKeyEnc == nil {
 			if details.EphemeralPrivateKeyEnc == nil || details.SessionPrivateKeyEncForPassphrase == nil {
 				return fmt.Errorf("no decryption path available - neither user key nor passphrase data found")
 			}
 			fmt.Fprint(os.Stderr, "Transfer passphrase: ")
-			pb, err := term.ReadPassword(int(os.Stdin.Fd()))
+			pb, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115
 			fmt.Fprint(os.Stderr, "\r\033[2K")
 			if err != nil {
 				return fmt.Errorf("reading passphrase: %w", err)
 			}
-			ephemeralPrivKey, err := crypto.DecryptToStringWithPassphrase(*details.EphemeralPrivateKeyEnc, string(pb))
-			if err != nil {
-				return fmt.Errorf("wrong transfer passphrase")
-			}
-			ephemeralIdentity, err := crypto.ParseIdentity(ephemeralPrivKey)
-			if err != nil {
-				return fmt.Errorf("parsing ephemeral identity: %w", err)
-			}
-			sessionPrivKey, err := crypto.DecryptToString(*details.SessionPrivateKeyEncForPassphrase, ephemeralIdentity)
-			if err != nil {
-				return fmt.Errorf("decrypting session key: %w", err)
-			}
-			si, err := crypto.ParseIdentity(sessionPrivKey)
-			if err != nil {
-				return fmt.Errorf("parsing session identity: %w", err)
-			}
-			sessionIdentity = si
+			transferPassphrase = string(pb)
 		}
 
-		// Fetch all files (paginate).
-		s.Start()
-		var allFiles []api.TransferFile
-		for page := 1; ; page++ {
-			p, err := client.ListFiles(ctx, shareID, page)
-			if err != nil {
-				return fmt.Errorf("listing files: %w", err)
-			}
-			allFiles = append(allFiles, p.Items...)
-			if page >= p.Pages {
-				break
-			}
-		}
-		s.Stop()
-		if len(allFiles) == 0 {
-			return fmt.Errorf("no files in this transfer")
-		}
-
-		// Decrypt file names up front (needed for conflict check and confirmation).
-		type decryptedFile struct {
-			api.TransferFile
-			name string
-		}
-		decFiles := make([]decryptedFile, 0, len(allFiles))
-		var totalSize int64
-		for _, f := range allFiles {
-			name, err := crypto.DecryptToString(f.NameEnc, sessionIdentity)
-			if err != nil {
-				name = f.ID // fallback
-			}
-			decFiles = append(decFiles, decryptedFile{f, name})
-			totalSize += f.OriginalSize
-		}
-
-		// Determine destination directory.
-		if outputDir == "" {
-			outputDir = "transfer-" + randomLetters(8)
-		}
-
-		// Fail-fast: if destination exists, check for file name conflicts.
-		if _, err := os.Stat(outputDir); err == nil {
-			for _, f := range decFiles {
-				dest := filepath.Join(outputDir, f.name)
-				if _, err := os.Stat(dest); err == nil {
-					return fmt.Errorf("file already exists: %s", dest)
-				}
-			}
-		}
-
-		// Confirmation prompt (skip with --yes / -y).
 		if !yes {
-			names := make([]string, len(decFiles))
-			sizes := make([]int64, len(decFiles))
-			for i, f := range decFiles {
-				names[i] = f.name
-				sizes[i] = f.OriginalSize
+			// Fetch file list for the confirmation summary.
+			s.Start()
+			filePage, err := client.ListFiles(ctx, shareID, 1)
+			s.Stop()
+			if err != nil {
+				return fmt.Errorf("fetching files: %w", err)
 			}
-			extras := []string{fmt.Sprintf("  Destination:  %s/", outputDir)}
-			if !confirmFileList(names, sizes, totalSize, extras) {
+			names := make([]string, len(filePage.Items))
+			sizes := make([]int64, len(filePage.Items))
+			var totalSize int64
+			for i, f := range filePage.Items {
+				names[i] = f.ID // names are encrypted; use ID as placeholder
+				sizes[i] = f.OriginalSize
+				totalSize += f.OriginalSize
+			}
+			dest := outputDir
+			if dest == "" {
+				dest = "transfer-<random>"
+			}
+			if !confirmFileList(names, sizes, totalSize, []string{fmt.Sprintf("  Destination:  %s/", dest)}) {
 				fmt.Fprintln(os.Stderr, "Aborted.")
 
 				return nil
 			}
 		}
 
-		// Create destination directory.
-		if err := os.MkdirAll(outputDir, 0700); err != nil {
-			return fmt.Errorf("creating destination directory: %w", err)
+		bars := make(map[string]*progressbar.ProgressBar)
+		result, err := service.DownloadTransfer(ctx, cfg, client, service.DownloadTransferParams{
+			ShareID:    shareID,
+			OutputDir:  outputDir,
+			Passphrase: transferPassphrase,
+		}, readKeyPassphrase, cliProgressFn(bars))
+		if err != nil {
+			return err
 		}
 
-		// Download and decrypt each file.
-		for _, f := range decFiles {
-			if err := downloadTransferFile(ctx, client, outputDir, f.TransferFile, f.name, sessionIdentity); err != nil {
-				return fmt.Errorf("%s: %w", f.name, err)
-			}
-		}
-
-		fmt.Fprintf(os.Stderr, "\nDownloaded to %s/\n", outputDir)
+		fmt.Fprintf(os.Stderr, "\nDownloaded to %s/\n", result.OutputDir)
 
 		return nil
 	},
-}
-
-// downloadTransferFile downloads all chunks of a file in parallel, decrypts them,
-// and writes them to disk in the correct order via downloadChunks.
-func downloadTransferFile(
-	ctx context.Context, client *api.Client, outputDir string,
-	f api.TransferFile, name string, identity *age.HybridIdentity,
-) error {
-	return downloadChunks(ctx, outputDir, name, f.OriginalSize, f.ChunkCount, identity,
-		func(ctx context.Context, chunkID int) ([]byte, error) {
-			return client.DownloadChunk(ctx, f.ID, chunkID)
-		})
-}
-
-// generateTransferPassphrase generates a cryptographically secure 32-character
-// passphrase drawn uniformly from the 94 printable non-space ASCII characters (0x21–0x7E).
-// crypto/rand.Int is used to avoid modulo bias.
-func generateTransferPassphrase() (string, error) {
-	const chars = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
-	maxChar := big.NewInt(int64(len(chars)))
-	result := make([]byte, 32)
-	for i := range result {
-		n, err := cryptorand.Int(cryptorand.Reader, maxChar)
-		if err != nil {
-			return "", err
-		}
-		result[i] = chars[n.Int64()]
-	}
-
-	return string(result), nil
-}
-
-// randomLetters returns a string of n random lowercase ASCII letters.
-func randomLetters(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyz"
-	b := make([]byte, n)
-	_, _ = cryptorand.Read(b)
-	for i, c := range b {
-		b[i] = letters[int(c)%len(letters)]
-	}
-
-	return string(b)
 }
 
 func init() {
