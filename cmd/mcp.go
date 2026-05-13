@@ -596,6 +596,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_rm",
 			mcp.WithDescription("Delete a node (file or folder) or the entire dataroom. Supports glob patterns."),
+			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithString("uri",
 				mcp.Required(),
