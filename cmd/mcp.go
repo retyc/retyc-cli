@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -102,6 +103,7 @@ func toJSON(v any) string {
 		if fallbackErr != nil {
 			return `{"error":"marshal failed"}`
 		}
+
 		return string(fallback)
 	}
 
@@ -324,6 +326,9 @@ func registerTransferTools(srv *server.MCPServer) {
 			if outputDir == "" {
 				return toolErr(fmt.Errorf("output_dir is required"))
 			}
+			if !filepath.IsAbs(outputDir) {
+				return toolErr(fmt.Errorf("output_dir must be an absolute path"))
+			}
 			result, err := service.DownloadTransfer(ctx, cfg, client, service.DownloadTransferParams{
 				ShareID:    req.GetString("id", ""),
 				OutputDir:  outputDir,
@@ -479,9 +484,15 @@ func registerDataroomTools(srv *server.MCPServer) {
 			if err != nil {
 				return toolErr(err)
 			}
+			localPaths := req.GetStringSlice("local_paths", nil)
+			for _, p := range localPaths {
+				if !filepath.IsAbs(p) {
+					return toolErr(fmt.Errorf("local_paths must contain absolute paths, got: %s", p))
+				}
+			}
 			if err := service.UploadToDataroom(
 				ctx, cfg, client,
-				req.GetStringSlice("local_paths", nil),
+				localPaths,
 				req.GetString("remote_uri", ""),
 				mcpPassphraseReader,
 				mcpProgressFn(srv, ctx, token),
@@ -517,6 +528,9 @@ func registerDataroomTools(srv *server.MCPServer) {
 			localDir := req.GetString("local_dir", "")
 			if localDir == "" {
 				return toolErr(fmt.Errorf("local_dir is required"))
+			}
+			if !filepath.IsAbs(localDir) {
+				return toolErr(fmt.Errorf("local_dir must be an absolute path"))
 			}
 			files, err := service.DownloadFromDataroom(
 				ctx, cfg, client,

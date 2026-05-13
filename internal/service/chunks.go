@@ -137,6 +137,10 @@ func DownloadChunks(
 	dest := filepath.Join(outputDir, filepath.Base(name))
 	partDest := dest + ".part"
 
+	if _, err := os.Stat(dest); err == nil {
+		return fmt.Errorf("file already exists: %s", dest)
+	}
+
 	//nolint:gosec // G304: dest is validated outputDir + sanitised base filename
 	out, err := os.OpenFile(partDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {

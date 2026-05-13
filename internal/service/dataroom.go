@@ -419,6 +419,7 @@ type dirQueueEntry struct {
 func uploadDataroomDir(
 	ctx context.Context, client *api.Client, dataroomID, localDir string,
 	parentID *string, sessionPubKey string, sessionIdentity *age.HybridIdentity, nameSalt string,
+	progress ProgressFn,
 ) error {
 	queue := []dirQueueEntry{{localPath: localDir, remoteParent: parentID, relPath: filepath.Base(localDir)}}
 
@@ -467,7 +468,7 @@ func uploadDataroomDir(
 			} else {
 				if err := uploadDataroomFile(
 					ctx, client, dataroomID, fullPath, entry.remoteParent,
-					sessionPubKey, sessionIdentity, relPath, nameSalt, nil,
+					sessionPubKey, sessionIdentity, relPath, nameSalt, progress,
 				); err != nil {
 					return fmt.Errorf("%s: %w", relPath, err)
 				}
@@ -676,7 +677,7 @@ func UploadToDataroom(
 		if info.IsDir() {
 			if err := uploadDataroomDir(
 				ctx, client, dst.DataroomID, localPath, destParentID,
-				sess.PublicKey, sess.Identity, sess.NameSalt,
+				sess.PublicKey, sess.Identity, sess.NameSalt, progress,
 			); err != nil {
 				return fmt.Errorf("%s: %w", info.Name(), err)
 			}
@@ -743,7 +744,7 @@ func DownloadFromDataroom(
 			); err != nil {
 				return nil, fmt.Errorf("%s: %w", name, err)
 			}
-			downloaded = append(downloaded, filepath.Join(outputDir, name))
+			downloaded = append(downloaded, filepath.Join(outputDir, filepath.Base(name)))
 		}
 
 		return downloaded, nil
@@ -783,7 +784,7 @@ func DownloadFromDataroom(
 		return nil, err
 	}
 
-	downloaded = append(downloaded, filepath.Join(outputDir, name))
+	downloaded = append(downloaded, filepath.Join(outputDir, filepath.Base(name)))
 
 	return downloaded, nil
 }
@@ -855,6 +856,9 @@ func DeleteDataroomNode(
 		matches, err := resolveGlob(ctx, client, parsed.DataroomID, parsed.Path, sess.Identity)
 		if err != nil {
 			return 0, err
+		}
+		if len(matches) == 0 {
+			return 0, fmt.Errorf("no nodes match %s", parsed.Path)
 		}
 		for _, item := range matches {
 			if err := client.DeleteDataroomNode(ctx, item.Node.ID); err != nil {

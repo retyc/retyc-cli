@@ -89,27 +89,31 @@ func GetTransferInfo(
 		}
 	}
 
-	filePage, err := client.ListFiles(ctx, shareID, 1)
-	if err != nil {
-		return nil, fmt.Errorf("fetching files: %w", err)
-	}
-
-	for _, f := range filePage.Items {
-		name, decErr := crypto.DecryptToString(f.NameEnc, sessionIdentity)
-		if decErr != nil {
-			name = "(encrypted)"
+	for page := 1; ; page++ {
+		filePage, err := client.ListFiles(ctx, shareID, page)
+		if err != nil {
+			return nil, fmt.Errorf("fetching files: %w", err)
 		}
-		mimeType := ""
-		if f.TypeEnc != "" {
-			mimeType, _ = crypto.DecryptToString(f.TypeEnc, sessionIdentity)
+		for _, f := range filePage.Items {
+			name, decErr := crypto.DecryptToString(f.NameEnc, sessionIdentity)
+			if decErr != nil {
+				name = "(encrypted)"
+			}
+			mimeType := ""
+			if f.TypeEnc != "" {
+				mimeType, _ = crypto.DecryptToString(f.TypeEnc, sessionIdentity)
+			}
+			result.Files = append(result.Files, TransferFileInfo{
+				ID:         f.ID,
+				Name:       name,
+				MIMEType:   mimeType,
+				Size:       f.OriginalSize,
+				ChunkCount: f.ChunkCount,
+			})
 		}
-		result.Files = append(result.Files, TransferFileInfo{
-			ID:         f.ID,
-			Name:       name,
-			MIMEType:   mimeType,
-			Size:       f.OriginalSize,
-			ChunkCount: f.ChunkCount,
-		})
+		if page >= filePage.Pages {
+			break
+		}
 	}
 
 	return result, nil
@@ -360,7 +364,7 @@ func DownloadTransfer(
 
 	if _, err := os.Stat(outputDir); err == nil {
 		for _, f := range decFiles {
-			dest := filepath.Join(outputDir, f.name)
+			dest := filepath.Join(outputDir, filepath.Base(f.name))
 			if _, err := os.Stat(dest); err == nil {
 				return nil, fmt.Errorf("file already exists: %s", dest)
 			}
@@ -378,7 +382,7 @@ func DownloadTransfer(
 			}); err != nil {
 			return nil, fmt.Errorf("%s: %w", f.name, err)
 		}
-		downloadedFiles = append(downloadedFiles, f.name)
+		downloadedFiles = append(downloadedFiles, filepath.Base(f.name))
 	}
 
 	return &DownloadTransferResult{
