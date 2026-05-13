@@ -7,3 +7,5 @@
 package cmd
 
 const insecure = false
+
+func setInsecureFromConfig() {}
