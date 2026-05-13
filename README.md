@@ -230,6 +230,8 @@ Create `config.yaml` to override defaults:
 ```yaml
 api:
   base_url: https://api.retyc.com
+
+insecure: true  # dev builds only — skip TLS verification persistently
 ```
 
 ### Global flags
@@ -237,7 +239,7 @@ api:
 | Flag | Short | Description |
 |---|---|---|
 | `--config <file>` | | Use a specific config file |
-| `--insecure` | `-k` | Skip TLS certificate verification |
+| `--insecure` | `-k` | Skip TLS certificate verification *(dev builds only — can be set persistently via `insecure: true` in `config.yaml`)* |
 | `--debug` | | Enable debug mode |
 
 ---
