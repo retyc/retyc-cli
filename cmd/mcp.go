@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -816,7 +817,46 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 }
 
+// mcpbTool matches the "tools" item schema of the MCPB manifest (v0.3).
+type mcpbTool struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+var mcpToolsCmd = &cobra.Command{
+	Use:   "tools",
+	Short: "Print registered MCP tools as JSON (for MCPB manifest generation)",
+	Long: `Print the list of MCP tools in the format expected by the MCPB manifest schema.
+
+Output is a JSON array of {"name","description"} objects, suitable for use as
+the "tools" field in an mcpb-manifest.json file. The CLI is the source of truth:
+run this command and paste the output into your manifest to avoid duplication.
+
+Example:
+  retyc mcp tools | jq '.' > tools.json`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		srv := server.NewMCPServer("retyc", Version, server.WithToolCapabilities(false))
+		registerMCPTools(srv)
+
+		registered := srv.ListTools()
+		tools := make([]mcpbTool, 0, len(registered))
+		for _, st := range registered {
+			tools = append(tools, mcpbTool{
+				Name:        st.Tool.Name,
+				Description: st.Tool.Description,
+			})
+		}
+		sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
+
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+
+		return enc.Encode(tools)
+	},
+}
+
 func init() {
 	mcpCmd.AddCommand(mcpServeCmd)
+	mcpCmd.AddCommand(mcpToolsCmd)
 	rootCmd.AddCommand(mcpCmd)
 }
