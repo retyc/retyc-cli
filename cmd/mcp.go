@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync/atomic"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
@@ -175,39 +175,28 @@ func registerAuthTools(srv *server.MCPServer) {
 			mcp.WithDestructiveHintAnnotation(false),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			if tok, err := config.LoadToken(); err == nil && tok.Valid() {
-				return mcp.NewToolResultText(toJSON(map[string]any{
-					"already_authenticated": true,
-					"expires_at":            tok.Expiry.UTC().Format(time.RFC3339),
-				})), nil
-			}
 			cfg, err := config.Load()
 			if err != nil {
 				return toolErr(fmt.Errorf("loading config: %w", err))
 			}
-			httpClient := newHTTPClient(insecure, debug)
-			oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+			result, err := service.LoginStart(ctx, cfg.API.BaseURL, newHTTPClient(insecure, debug))
 			if err != nil {
-				return toolErr(fmt.Errorf("fetching OIDC config: %w", err))
+				return toolErr(err)
 			}
-			dar, err := auth.RequestDeviceCode(*oidcCfg, httpClient)
-			if err != nil {
-				return toolErr(fmt.Errorf("requesting device code: %w", err))
-			}
-			if dar.ExpiresIn == 0 {
-				dar.ExpiresIn = 300
-			}
-			if dar.Interval == 0 {
-				dar.Interval = 5
+			if result.AlreadyAuthenticated {
+				return mcp.NewToolResultText(toJSON(map[string]any{
+					"already_authenticated": true,
+					"expires_at":            result.ExpiresAt.UTC().Format(time.RFC3339),
+				})), nil
 			}
 
 			return mcp.NewToolResultText(toJSON(map[string]any{
-				"verification_uri_complete": dar.VerificationURIComplete,
-				"verification_uri":          dar.VerificationURI,
-				"user_code":                 dar.UserCode,
-				"device_code":               dar.DeviceCode,
-				"interval":                  dar.Interval,
-				"expires_in":                dar.ExpiresIn,
+				"verification_uri_complete": result.VerificationURIComplete,
+				"verification_uri":          result.VerificationURI,
+				"user_code":                 result.UserCode,
+				"device_code":               result.DeviceCode,
+				"interval":                  result.Interval,
+				"expires_in":                result.ExpiresIn,
 			})), nil
 		},
 	)
@@ -216,7 +205,9 @@ func registerAuthTools(srv *server.MCPServer) {
 		mcp.NewTool("auth_login_poll",
 			mcp.WithDescription(
 				"Poll for the result of a device flow started with auth_login_start. "+
-					"Call repeatedly, waiting interval seconds between calls, until done is true.",
+					"Call repeatedly, waiting interval seconds between calls, until done is true. "+
+					"When status is \"slow_down\", add extra_delay_seconds to your current interval "+
+					"and keep the increased interval for all subsequent calls.",
 			),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -231,37 +222,51 @@ func registerAuthTools(srv *server.MCPServer) {
 			if err != nil {
 				return toolErr(fmt.Errorf("loading config: %w", err))
 			}
-			httpClient := newHTTPClient(insecure, debug)
-			oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+			result, err := service.LoginPoll(ctx, cfg.API.BaseURL, deviceCode, newHTTPClient(insecure, debug))
 			if err != nil {
-				return toolErr(fmt.Errorf("fetching OIDC config: %w", err))
+				return toolErr(err)
 			}
-			tok, err := auth.PollToken(*oidcCfg, deviceCode, httpClient)
+			switch result.Status {
+			case service.PollDone:
+				return mcp.NewToolResultText(toJSON(map[string]any{
+					"done":       true,
+					"expires_at": result.ExpiresAt.UTC().Format(time.RFC3339),
+				})), nil
+			case service.PollSlowDown:
+				return mcp.NewToolResultText(toJSON(map[string]any{
+					"done": false, "status": service.PollSlowDown, "extra_delay_seconds": result.ExtraDelaySecs,
+				})), nil
+			default:
+				return mcp.NewToolResultText(toJSON(map[string]any{
+					"done": false, "status": result.Status,
+				})), nil
+			}
+		},
+	)
+
+	srv.AddTool(
+		mcp.NewTool("auth_logout",
+			mcp.WithDescription("Revoke the server-side session and delete stored credentials"),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			cfg, err := config.Load()
 			if err != nil {
-				switch {
-				case errors.Is(err, auth.ErrDeviceCodeExpired):
-					return mcp.NewToolResultText(toJSON(map[string]any{"done": false, "status": "expired"})), nil
-				case errors.Is(err, auth.ErrAccessDenied):
-					return mcp.NewToolResultText(toJSON(map[string]any{"done": false, "status": "denied"})), nil
-				case errors.Is(err, auth.ErrSlowDown):
-					// RFC 8628: caller must add 5s to its current polling interval.
-					return mcp.NewToolResultText(toJSON(map[string]any{
-						"done": false, "status": "slow_down", "extra_delay_seconds": 5,
-					})), nil
-				default:
-					return toolErr(err)
-				}
+				return toolErr(fmt.Errorf("loading config: %w", err))
 			}
-			if tok == nil {
-				return mcp.NewToolResultText(toJSON(map[string]any{"done": false, "status": "pending"})), nil
+			warnings, err := service.Logout(ctx, cfg.API.BaseURL, newHTTPClient(insecure, debug))
+			if err != nil {
+				return toolErr(err)
 			}
-			if err := config.SaveToken(tok); err != nil {
-				return toolErr(fmt.Errorf("saving token: %w", err))
+			warnStrs := make([]string, len(warnings))
+			for i, w := range warnings {
+				warnStrs[i] = w.Error()
 			}
 
 			return mcp.NewToolResultText(toJSON(map[string]any{
-				"done":       true,
-				"expires_at": tok.Expiry.UTC().Format(time.RFC3339),
+				"ok":       true,
+				"warnings": warnStrs,
 			})), nil
 		},
 	)
@@ -812,7 +817,46 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 }
 
+// mcpbTool matches the "tools" item schema of the MCPB manifest (v0.3).
+type mcpbTool struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+var mcpToolsCmd = &cobra.Command{
+	Use:   "tools",
+	Short: "Print registered MCP tools as JSON (for MCPB manifest generation)",
+	Long: `Print the list of MCP tools in the format expected by the MCPB manifest schema.
+
+Output is a JSON array of {"name","description"} objects, suitable for use as
+the "tools" field in an mcpb-manifest.json file. The CLI is the source of truth:
+run this command and paste the output into your manifest to avoid duplication.
+
+Example:
+  retyc mcp tools | jq '.' > tools.json`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		srv := server.NewMCPServer("retyc", Version, server.WithToolCapabilities(false))
+		registerMCPTools(srv)
+
+		registered := srv.ListTools()
+		tools := make([]mcpbTool, 0, len(registered))
+		for _, st := range registered {
+			tools = append(tools, mcpbTool{
+				Name:        st.Tool.Name,
+				Description: st.Tool.Description,
+			})
+		}
+		sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
+
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+
+		return enc.Encode(tools)
+	},
+}
+
 func init() {
 	mcpCmd.AddCommand(mcpServeCmd)
+	mcpCmd.AddCommand(mcpToolsCmd)
 	rootCmd.AddCommand(mcpCmd)
 }

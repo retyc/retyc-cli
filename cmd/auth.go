@@ -16,6 +16,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 )
@@ -83,27 +84,18 @@ var authLogoutCmd = &cobra.Command{
 	Use:   "logout",
 	Short: "Revoke server-side token and remove stored credentials",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Attempt server-side revocation before deleting the local token.
-		// Failures are non-fatal: local credentials are always cleaned up.
-		tok, err := config.LoadToken()
-		if err == nil && tok.RefreshToken != "" {
-			cfg, err := config.Load()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: loading config: %v\n", err)
-			} else {
-				ctx := cmd.Context()
-				httpClient := newHTTPClient(insecure, debug)
-				oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "warning: fetching OIDC config: %v\n", err)
-				} else if err := auth.Revoke(ctx, *oidcCfg, tok.RefreshToken, httpClient); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: revoking token: %v\n", err)
-				}
-			}
+		var baseURL string
+		if cfg, err := config.Load(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: loading config: %v\n", err)
+		} else {
+			baseURL = cfg.API.BaseURL
 		}
-
-		if err := config.DeleteToken(); err != nil {
-			return fmt.Errorf("removing token: %w", err)
+		warnings, err := service.Logout(cmd.Context(), baseURL, newHTTPClient(insecure, debug))
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", w)
+		}
+		if err != nil {
+			return err
 		}
 		fmt.Println("Logged out.")
 

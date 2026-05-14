@@ -306,7 +306,7 @@ func TestRefresh_InvalidGrant(t *testing.T) {
 	}
 }
 
-func TestGetValidToken_EnvToken_InvalidGrant(t *testing.T) {
+func TestGetValidToken_EnvToken_InvalidGrant_NoDiskToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -316,17 +316,55 @@ func TestGetValidToken_EnvToken_InvalidGrant(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	t.Setenv("RETYC_CONFIG_DIR", t.TempDir())
 	t.Setenv("RETYC_TOKEN", "expired-offline-token")
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
 	_, err := GetValidToken(context.Background(), cfg, http.DefaultClient)
 	if err == nil {
-		t.Fatal("GetValidToken() should return error when RETYC_TOKEN refresh returns invalid_grant")
+		t.Fatal("GetValidToken() should return error when RETYC_TOKEN fails and no disk token exists")
 	}
 
-	if !errors.Is(err, ErrNoRefreshToken) {
-		t.Errorf("GetValidToken() error = %v, want errors.Is(err, ErrNoRefreshToken) to be true", err)
+	if !errors.Is(err, ErrNoToken) {
+		t.Errorf("GetValidToken() error = %v, want errors.Is(err, ErrNoToken) to be true", err)
+	}
+}
+
+func TestGetValidToken_EnvToken_InvalidGrant_FallbackToDisk(t *testing.T) {
+	// RETYC_TOKEN is set but expired; a valid token was saved to disk (e.g. via
+	// MCP device flow). GetValidToken should fall through to the disk token.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":             "invalid_grant",
+			"error_description": "Invalid refresh token",
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("RETYC_CONFIG_DIR", t.TempDir())
+	t.Setenv("RETYC_TOKEN", "expired-offline-token")
+
+	diskTok := &oauth2.Token{
+		AccessToken:  "disk-access-token",
+		TokenType:    "Bearer",
+		RefreshToken: "disk-refresh",
+		Expiry:       time.Now().Add(time.Hour),
+	}
+	if err := config.SaveToken(diskTok); err != nil {
+		t.Fatalf("SaveToken() error = %v", err)
+	}
+
+	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
+
+	tok, err := GetValidToken(context.Background(), cfg, http.DefaultClient)
+	if err != nil {
+		t.Fatalf("GetValidToken() should fall back to disk token, got error: %v", err)
+	}
+
+	if tok.AccessToken != "disk-access-token" {
+		t.Errorf("AccessToken = %q, want disk-access-token", tok.AccessToken)
 	}
 }
 
