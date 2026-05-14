@@ -265,6 +265,34 @@ func registerAuthTools(srv *server.MCPServer) {
 			})), nil
 		},
 	)
+
+	srv.AddTool(
+		mcp.NewTool("auth_logout",
+			mcp.WithDescription("Revoke the server-side session and delete stored credentials"),
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(false),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// Best-effort server-side revocation — local credentials are always deleted.
+			tok, err := config.LoadToken()
+			if err == nil && tok.RefreshToken != "" {
+				cfg, err := config.Load()
+				if err == nil {
+					httpClient := newHTTPClient(insecure, debug)
+					oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+					if err == nil {
+						_ = auth.Revoke(ctx, *oidcCfg, tok.RefreshToken, httpClient)
+					}
+				}
+			}
+
+			if err := config.DeleteToken(); err != nil {
+				return toolErr(fmt.Errorf("removing token: %w", err))
+			}
+
+			return mcp.NewToolResultText(`{"ok":true}`), nil
+		},
+	)
 }
 
 // — User tools ————————————————————————————————————————————————————————————————
