@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	"runtime"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -317,6 +317,13 @@ func registerUserTools(srv *server.MCPServer) {
 // — Transfer tools ————————————————————————————————————————————————————————————
 
 func registerTransferTools(srv *server.MCPServer) {
+	var absPathHint string
+	if runtime.GOOS == "windows" {
+		absPathHint = " (absolute Windows path, e.g. C:\\Users\\Public\\Downloads)"
+	} else {
+		absPathHint = " (absolute POSIX path; if this server runs in WSL, use /mnt/c/... instead of C:\\...)"
+	}
+
 	srv.AddTool(
 		mcp.NewTool("transfer_list",
 			mcp.WithDescription("List transfers (sent or received)"),
@@ -425,7 +432,7 @@ func registerTransferTools(srv *server.MCPServer) {
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Transfer ID")),
-			mcp.WithString("output_dir", mcp.Required(), mcp.Description("Local destination directory (must be absolute path)")),
+			mcp.WithString("output_dir", mcp.Required(), mcp.Description("Local destination directory"+absPathHint)),
 			mcp.WithString("passphrase",
 				mcp.Description("Transfer passphrase (only needed when you have no user key for this transfer)"),
 			),
@@ -442,9 +449,6 @@ func registerTransferTools(srv *server.MCPServer) {
 			outputDir := req.GetString("output_dir", "")
 			if outputDir == "" {
 				return toolErr(fmt.Errorf("output_dir is required"))
-			}
-			if !filepath.IsAbs(outputDir) {
-				return toolErr(fmt.Errorf("output_dir must be an absolute path"))
 			}
 			result, err := service.DownloadTransfer(ctx, cfg, client, service.DownloadTransferParams{
 				ShareID:    req.GetString("id", ""),
@@ -503,6 +507,13 @@ func registerTransferTools(srv *server.MCPServer) {
 // — Dataroom tools ————————————————————————————————————————————————————————————
 
 func registerDataroomTools(srv *server.MCPServer) {
+	var absPathHint string
+	if runtime.GOOS == "windows" {
+		absPathHint = " (absolute Windows path, e.g. C:\\Users\\Public\\Downloads)"
+	} else {
+		absPathHint = " (absolute POSIX path; if this server runs in WSL, use /mnt/c/... instead of C:\\...)"
+	}
+
 	srv.AddTool(
 		mcp.NewTool("dataroom_list",
 			mcp.WithDescription("List all datarooms"),
@@ -595,7 +606,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithArray("local_paths",
 				mcp.Required(),
-				mcp.Description("Absolute local file or directory paths to upload"),
+				mcp.Description("Local file or directory paths to upload"+absPathHint),
 				mcp.Items(map[string]any{"type": "string"}),
 			),
 			mcp.WithString("remote_uri",
@@ -613,11 +624,6 @@ func registerDataroomTools(srv *server.MCPServer) {
 				return toolErr(err)
 			}
 			localPaths := req.GetStringSlice("local_paths", nil)
-			for _, p := range localPaths {
-				if !filepath.IsAbs(p) {
-					return toolErr(fmt.Errorf("local_paths must contain absolute paths, got: %s", p))
-				}
-			}
 			if err := service.UploadToDataroom(
 				ctx, cfg, client,
 				localPaths,
@@ -643,7 +649,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 			),
 			mcp.WithString("local_dir",
 				mcp.Required(),
-				mcp.Description("Absolute local destination directory"),
+				mcp.Description("Local destination directory"+absPathHint),
 			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -658,9 +664,6 @@ func registerDataroomTools(srv *server.MCPServer) {
 			localDir := req.GetString("local_dir", "")
 			if localDir == "" {
 				return toolErr(fmt.Errorf("local_dir is required"))
-			}
-			if !filepath.IsAbs(localDir) {
-				return toolErr(fmt.Errorf("local_dir must be an absolute path"))
 			}
 			files, err := service.DownloadFromDataroom(
 				ctx, cfg, client,
