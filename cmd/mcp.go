@@ -12,7 +12,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
@@ -175,39 +174,28 @@ func registerAuthTools(srv *server.MCPServer) {
 			mcp.WithDestructiveHintAnnotation(false),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			if tok, err := config.LoadToken(); err == nil && tok.Valid() {
-				return mcp.NewToolResultText(toJSON(map[string]any{
-					"already_authenticated": true,
-					"expires_at":            tok.Expiry.UTC().Format(time.RFC3339),
-				})), nil
-			}
 			cfg, err := config.Load()
 			if err != nil {
 				return toolErr(fmt.Errorf("loading config: %w", err))
 			}
-			httpClient := newHTTPClient(insecure, debug)
-			oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+			result, err := service.LoginStart(ctx, cfg.API.BaseURL, newHTTPClient(insecure, debug))
 			if err != nil {
-				return toolErr(fmt.Errorf("fetching OIDC config: %w", err))
+				return toolErr(err)
 			}
-			dar, err := auth.RequestDeviceCode(*oidcCfg, httpClient)
-			if err != nil {
-				return toolErr(fmt.Errorf("requesting device code: %w", err))
-			}
-			if dar.ExpiresIn == 0 {
-				dar.ExpiresIn = 300
-			}
-			if dar.Interval == 0 {
-				dar.Interval = 5
+			if result.AlreadyAuthenticated {
+				return mcp.NewToolResultText(toJSON(map[string]any{
+					"already_authenticated": true,
+					"expires_at":            result.ExpiresAt.UTC().Format(time.RFC3339),
+				})), nil
 			}
 
 			return mcp.NewToolResultText(toJSON(map[string]any{
-				"verification_uri_complete": dar.VerificationURIComplete,
-				"verification_uri":          dar.VerificationURI,
-				"user_code":                 dar.UserCode,
-				"device_code":               dar.DeviceCode,
-				"interval":                  dar.Interval,
-				"expires_in":                dar.ExpiresIn,
+				"verification_uri_complete": result.VerificationURIComplete,
+				"verification_uri":          result.VerificationURI,
+				"user_code":                 result.UserCode,
+				"device_code":               result.DeviceCode,
+				"interval":                  result.Interval,
+				"expires_in":                result.ExpiresIn,
 			})), nil
 		},
 	)
@@ -216,7 +204,9 @@ func registerAuthTools(srv *server.MCPServer) {
 		mcp.NewTool("auth_login_poll",
 			mcp.WithDescription(
 				"Poll for the result of a device flow started with auth_login_start. "+
-					"Call repeatedly, waiting interval seconds between calls, until done is true.",
+					"Call repeatedly, waiting interval seconds between calls, until done is true. "+
+					"When status is \"slow_down\", add extra_delay_seconds to your current interval "+
+					"and keep the increased interval for all subsequent calls.",
 			),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -231,38 +221,25 @@ func registerAuthTools(srv *server.MCPServer) {
 			if err != nil {
 				return toolErr(fmt.Errorf("loading config: %w", err))
 			}
-			httpClient := newHTTPClient(insecure, debug)
-			oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
+			result, err := service.LoginPoll(ctx, cfg.API.BaseURL, deviceCode, newHTTPClient(insecure, debug))
 			if err != nil {
-				return toolErr(fmt.Errorf("fetching OIDC config: %w", err))
+				return toolErr(err)
 			}
-			tok, err := auth.PollToken(*oidcCfg, deviceCode, httpClient)
-			if err != nil {
-				switch {
-				case errors.Is(err, auth.ErrDeviceCodeExpired):
-					return mcp.NewToolResultText(toJSON(map[string]any{"done": false, "status": "expired"})), nil
-				case errors.Is(err, auth.ErrAccessDenied):
-					return mcp.NewToolResultText(toJSON(map[string]any{"done": false, "status": "denied"})), nil
-				case errors.Is(err, auth.ErrSlowDown):
-					// RFC 8628: caller must add 5s to its current polling interval.
-					return mcp.NewToolResultText(toJSON(map[string]any{
-						"done": false, "status": "slow_down", "extra_delay_seconds": 5,
-					})), nil
-				default:
-					return toolErr(err)
-				}
+			switch result.Status {
+			case service.PollDone:
+				return mcp.NewToolResultText(toJSON(map[string]any{
+					"done":       true,
+					"expires_at": result.ExpiresAt.UTC().Format(time.RFC3339),
+				})), nil
+			case service.PollSlowDown:
+				return mcp.NewToolResultText(toJSON(map[string]any{
+					"done": false, "status": service.PollSlowDown, "extra_delay_seconds": result.ExtraDelaySecs,
+				})), nil
+			default:
+				return mcp.NewToolResultText(toJSON(map[string]any{
+					"done": false, "status": result.Status,
+				})), nil
 			}
-			if tok == nil {
-				return mcp.NewToolResultText(toJSON(map[string]any{"done": false, "status": "pending"})), nil
-			}
-			if err := config.SaveToken(tok); err != nil {
-				return toolErr(fmt.Errorf("saving token: %w", err))
-			}
-
-			return mcp.NewToolResultText(toJSON(map[string]any{
-				"done":       true,
-				"expires_at": tok.Expiry.UTC().Format(time.RFC3339),
-			})), nil
 		},
 	)
 
@@ -273,24 +250,23 @@ func registerAuthTools(srv *server.MCPServer) {
 			mcp.WithDestructiveHintAnnotation(false),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			// Best-effort server-side revocation — local credentials are always deleted.
-			tok, err := config.LoadToken()
-			if err == nil && tok.RefreshToken != "" {
-				cfg, err := config.Load()
-				if err == nil {
-					httpClient := newHTTPClient(insecure, debug)
-					oidcCfg, err := api.FetchOIDCConfig(ctx, cfg.API.BaseURL, httpClient)
-					if err == nil {
-						_ = auth.Revoke(ctx, *oidcCfg, tok.RefreshToken, httpClient)
-					}
-				}
+			cfg, err := config.Load()
+			if err != nil {
+				return toolErr(fmt.Errorf("loading config: %w", err))
+			}
+			warnings, err := service.Logout(ctx, cfg.API.BaseURL, newHTTPClient(insecure, debug))
+			if err != nil {
+				return toolErr(err)
+			}
+			warnStrs := make([]string, len(warnings))
+			for i, w := range warnings {
+				warnStrs[i] = w.Error()
 			}
 
-			if err := config.DeleteToken(); err != nil {
-				return toolErr(fmt.Errorf("removing token: %w", err))
-			}
-
-			return mcp.NewToolResultText(`{"ok":true}`), nil
+			return mcp.NewToolResultText(toJSON(map[string]any{
+				"ok":       true,
+				"warnings": warnStrs,
+			})), nil
 		},
 	)
 }
