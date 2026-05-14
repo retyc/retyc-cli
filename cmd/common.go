@@ -68,6 +68,15 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, 
 
 			return nil, fmt.Errorf("loading stored token: %w", err)
 		}
+	} else {
+		// RETYC_TOKEN is set but may be expired. If a disk token exists (e.g.
+		// saved by the MCP device flow), GetValidToken will fall through to it.
+		// In that case persist must be true so that future token refreshes are
+		// written back to disk — otherwise a rotated refresh token is lost and
+		// the user is forced to re-login on the next server start.
+		if _, err := config.LoadToken(); err == nil {
+			persist = true
+		}
 	}
 
 	httpClient := newHTTPClient(insecure, debug)

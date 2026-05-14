@@ -368,13 +368,19 @@ func (s *RefreshingTokenSource) Token() (*oauth2.Token, error) {
 func GetValidToken(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client) (*oauth2.Token, error) {
 	// CI/CD path: RETYC_TOKEN holds an offline refresh token.
 	// Exchange it for a fresh access token without touching disk.
+	// If the env token is expired or revoked (ErrNoRefreshToken / invalid_grant),
+	// fall through to the disk token so that users who logged in interactively
+	// via the MCP device flow are not locked out when RETYC_TOKEN is also set.
 	if envToken := os.Getenv("RETYC_TOKEN"); envToken != "" {
 		tok, err := Refresh(ctx, cfg, envToken, httpClient)
 		if err != nil {
-			return nil, fmt.Errorf("RETYC_TOKEN refresh failed: %w", err)
+			if !errors.Is(err, ErrNoRefreshToken) {
+				return nil, fmt.Errorf("RETYC_TOKEN refresh failed: %w", err)
+			}
+			// ErrNoRefreshToken (invalid_grant): fall through to disk token.
+		} else {
+			return tok, nil
 		}
-
-		return tok, nil
 	}
 
 	tok, err := config.LoadToken()
