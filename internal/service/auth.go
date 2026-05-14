@@ -76,8 +76,10 @@ type oidcCacheEntry struct {
 const oidcCacheTTL = 5 * time.Minute
 
 // fetchOIDCCached returns a cached OIDCConfig for baseURL, fetching it when
-// the cache is empty or expired. At most one redundant fetch can happen under
-// concurrent callers; the result is always correct.
+// the cache is empty or expired. Under concurrent callers on a cold cache,
+// multiple redundant fetches may occur; this is acceptable because the MCP
+// server serializes requests over a single stdio connection.
+// The returned pointer is shared — callers must not mutate it.
 func fetchOIDCCached(ctx context.Context, baseURL string, httpClient *http.Client) (*config.OIDCConfig, error) {
 	oidcCache.Lock()
 	if oidcCache.entries == nil {
@@ -199,7 +201,7 @@ func LoginPoll(ctx context.Context, baseURL, deviceCode string, httpClient *http
 // local deletion failure is fatal.
 func Logout(ctx context.Context, baseURL string, httpClient *http.Client) (warnings []error, err error) {
 	tok, lerr := config.LoadToken()
-	if lerr == nil && tok.RefreshToken != "" {
+	if lerr == nil && tok.RefreshToken != "" && baseURL != "" {
 		oidcCfg, oerr := fetchOIDCCached(ctx, baseURL, httpClient)
 		if oerr != nil {
 			warnings = append(warnings, fmt.Errorf("fetching OIDC config: %w", oerr))

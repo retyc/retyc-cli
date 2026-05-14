@@ -355,29 +355,34 @@ func (s *RefreshingTokenSource) Token() (*oauth2.Token, error) {
 
 // GetValidToken returns a valid token for the current session.
 //
-// If the RETYC_TOKEN environment variable is set, it is treated as an offline
-// refresh token: it is exchanged for a fresh access token without reading from
-// or writing to disk. This is the intended path for non-interactive CI/CD use.
+// If the RETYC_TOKEN environment variable is set, it is used as an offline
+// refresh token and exchanged for a fresh access token. If the exchange fails
+// with ErrNoRefreshToken (invalid_grant — the env token is expired or revoked),
+// GetValidToken logs a warning to stderr and falls through to the disk token.
+// This allows users who have both RETYC_TOKEN and a stored disk token (e.g.
+// after logging in via the MCP device flow) to keep working without re-login.
+// Note: on a developer workstation that has both RETYC_TOKEN and a disk token,
+// a revoked offline token will cause API calls to run as the disk identity.
 //
-// Otherwise it loads the stored token from disk and returns it immediately if
-// it is still valid. If it has expired and a refresh token is available, it
-// attempts a silent refresh and persists the new token before returning it.
+// When RETYC_TOKEN is empty or not set, the stored token is loaded from disk
+// and returned immediately if still valid. If expired and a refresh token is
+// available, a silent refresh is attempted and the new token is persisted.
 //
 // Callers should handle ErrNoToken (not authenticated) and ErrNoRefreshToken
 // (expired, must re-authenticate via DeviceFlow) as non-fatal states.
 func GetValidToken(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client) (*oauth2.Token, error) {
 	// CI/CD path: RETYC_TOKEN holds an offline refresh token.
-	// Exchange it for a fresh access token without touching disk.
-	// If the env token is expired or revoked (ErrNoRefreshToken / invalid_grant),
-	// fall through to the disk token so that users who logged in interactively
-	// via the MCP device flow are not locked out when RETYC_TOKEN is also set.
+	// If it is expired or revoked (invalid_grant → ErrNoRefreshToken), emit a
+	// warning and fall through to the disk token so that interactive MCP users
+	// are not locked out when RETYC_TOKEN is also configured with a stale value.
 	if envToken := os.Getenv("RETYC_TOKEN"); envToken != "" {
 		tok, err := Refresh(ctx, cfg, envToken, httpClient)
 		if err != nil {
 			if !errors.Is(err, ErrNoRefreshToken) {
 				return nil, fmt.Errorf("RETYC_TOKEN refresh failed: %w", err)
 			}
-			// ErrNoRefreshToken (invalid_grant): fall through to disk token.
+			fmt.Fprintf(os.Stderr, "warning: RETYC_TOKEN is expired or revoked, falling back to stored disk token\n")
+			// Fall through to the disk token path below.
 		} else {
 			return tok, nil
 		}
