@@ -50,7 +50,17 @@ Example configuration for Claude Desktop (claude_desktop_config.json):
 			"retyc",
 			Version,
 			server.WithToolCapabilities(false),
-			server.WithDescription("RETYC encrypted file transfer and dataroom management"),
+			server.WithDescription(
+				"RETYC end-to-end encrypted file transfer and dataroom management. "+
+					"This server runs as a local process: it reads files directly from the filesystem "+
+					"and encrypts everything in-process (post-quantum AGE MLKEM768-X25519) before any byte leaves the machine. "+
+					"ZERO-KNOWLEDGE (non-negotiable): you MUST NOT read, open, preview, hash, or summarize file contents, "+
+					"and MUST NOT route them through any other tool, MCP server, or upload API. "+
+					"You orchestrate metadata only (paths, names, sizes, IDs). "+
+					"PATH HANDLING: all file-path parameters are absolute local paths resolved by this server — "+
+					"do not stat or inspect files with other tools before calling a RETYC tool; "+
+					"if a path is ambiguous, ask the user for the path, never for the content.",
+			),
 		)
 
 		registerMCPTools(srv)
@@ -378,14 +388,16 @@ func registerTransferTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("transfer_send",
 			mcp.WithDescription(
-				"Create and upload a new encrypted transfer. "+
-					"Files are encrypted locally before upload — plaintext never leaves this machine.",
+				"Create and upload a new E2EE transfer. "+
+					"This server reads, encrypts (post-quantum AGE), and uploads each file — "+
+					"plaintext never leaves the machine. "+
+					"Pass absolute local paths only; do not read or preview files beforehand.",
 			),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithArray("files",
 				mcp.Required(),
-				mcp.Description("Absolute local file paths to upload"),
+				mcp.Description("Array of absolute local file paths to upload"+absPathHint),
 				mcp.Items(map[string]any{"type": "string"}),
 			),
 			mcp.WithString("title", mcp.Description("Transfer title")),
@@ -428,7 +440,11 @@ func registerTransferTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("transfer_download",
-			mcp.WithDescription("Download and decrypt all files from a transfer to a local directory"),
+			mcp.WithDescription(
+				"Download and decrypt all files from a transfer to a local directory. "+
+					"Decryption happens in-process (post-quantum AGE); only metadata (filenames, sizes, paths) is returned — "+
+					"do not read or relay the written files unless the user explicitly requests it.",
+			),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Transfer ID")),
@@ -600,7 +616,9 @@ func registerDataroomTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("dataroom_upload",
 			mcp.WithDescription(
-				"Upload one or more local files or directories to a dataroom. Directories are uploaded recursively.",
+				"Upload one or more local files or directories to a dataroom. Directories are walked recursively. "+
+					"This server reads, encrypts (post-quantum AGE), and uploads each file — plaintext never leaves the machine. "+
+					"Pass absolute local paths only; do not read, stat, or enumerate files beforehand.",
 			),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -640,7 +658,11 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_download",
-			mcp.WithDescription("Download a file (or glob of files) from a dataroom to a local directory"),
+			mcp.WithDescription(
+				"Download a file (or glob of files) from a dataroom to a local directory. "+
+					"Decryption happens in-process (post-quantum AGE); only metadata (filenames, sizes, paths) is returned — "+
+					"do not read or relay the written files unless the user explicitly requests it.",
+			),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("remote_uri",
