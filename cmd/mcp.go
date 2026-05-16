@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -52,21 +53,79 @@ Example configuration for Claude Desktop (claude_desktop_config.json):
 			server.WithToolCapabilities(false),
 			server.WithDescription(
 				"RETYC end-to-end encrypted file transfer and dataroom management. "+
-					"This server runs as a local process: it reads files directly from the filesystem "+
-					"and encrypts everything in-process (post-quantum AGE MLKEM768-X25519) before any byte leaves the machine. "+
-					"ZERO-KNOWLEDGE (non-negotiable): you MUST NOT read, open, preview, hash, or summarize file contents, "+
-					"and MUST NOT route them through any other tool, MCP server, or upload API. "+
-					"You orchestrate metadata only (paths, names, sizes, IDs). "+
-					"PATH HANDLING: all file-path parameters are absolute local paths resolved by this server — "+
-					"do not stat or inspect files with other tools before calling a RETYC tool; "+
-					"if a path is ambiguous, ask the user for the path, never for the content.",
+					"Runs as a local process: reads and encrypts files in-process (post-quantum AGE MLKEM768-X25519) "+
+					"before any byte leaves the machine.",
 			),
+			server.WithInstructions(buildMCPInstructions()),
 		)
 
 		registerMCPTools(srv)
 
 		return server.ServeStdio(srv)
 	},
+}
+
+// isWSL reports whether the current process runs inside Windows Subsystem for Linux.
+func isWSL() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	b, err := os.ReadFile("/proc/version")
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(b))
+
+	return strings.Contains(lower, "microsoft")
+}
+
+// buildMCPInstructions generates server instructions injected into the LLM system prompt.
+// Content is resolved at startup so the model always knows the runtime OS and path format.
+func buildMCPInstructions() string {
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	homeDir, _ := os.UserHomeDir()
+
+	var pathRules string
+	switch goos {
+	case "windows":
+		pathRules = "Absolute Windows paths only (e.g. C:\\Users\\Alice\\Downloads\\file.pdf). Use backslashes."
+	default:
+		if isWSL() {
+			pathRules = "Running inside WSL. Use POSIX paths for Linux files (/home/...) " +
+				"and /mnt/c/Users/<WindowsUser>/... to reach Windows files."
+		} else {
+			pathRules = "Absolute POSIX paths only (e.g. /home/alice/Downloads/file.pdf)."
+		}
+	}
+
+	return fmt.Sprintf(`## Runtime environment
+OS: %s/%s
+User home: %s
+
+## File paths
+%s
+All file-path parameters are resolved by this server process on the local filesystem — not by you.
+
+## Shell access — STRICTLY FORBIDDEN
+You have NO shell, terminal, or filesystem-browsing capability through this server.
+NEVER call bash, cmd, powershell, ls, dir, find, stat, or any tool from another MCP server to locate or inspect files.
+If the user did not provide an absolute path: ASK them for it. Do not guess or enumerate.
+
+## Zero-knowledge rule
+NEVER read, open, preview, hash, or summarize file contents.
+NEVER route file data through any other tool, MCP server, or API.
+You handle paths, names, sizes, and IDs only — the server handles all crypto and I/O.
+
+## Workflow
+1. Call auth_status first if you are unsure whether the user is authenticated.
+   If authenticated=false: call auth_login_start immediately — do NOT tell the user to run any CLI command.
+2. If any tool returns error_code=not_authenticated: call auth_login_start immediately.
+3. To upload: pass the user-provided absolute path(s) directly to transfer_send or dataroom_upload.
+4. To download: pass the user-provided absolute destination directory to transfer_download or dataroom_download.
+5. Never read or relay written files after download unless the user explicitly requests it.`,
+		goos, goarch, homeDir, pathRules,
+	)
 }
 
 // mcpPassphraseReader returns a PassphraseReader for MCP mode that reads from
@@ -127,7 +186,11 @@ func toolErr(err error) (*mcp.CallToolResult, error) {
 	code := "error"
 	switch {
 	case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrNoRefreshToken):
-		code = "not_authenticated"
+		return mcp.NewToolResultText(toJSON(map[string]any{
+			"error_code": "not_authenticated",
+			"message":    err.Error(),
+			"next_step":  "Call auth_login_start now. Do NOT suggest running any CLI command.",
+		})), nil
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		code = "cancelled"
 	}
@@ -148,7 +211,11 @@ func registerMCPTools(srv *server.MCPServer) {
 func registerAuthTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("auth_status",
-			mcp.WithDescription("Check authentication status and token validity"),
+			mcp.WithDescription(
+				"Check authentication status and token validity. "+
+					"If the result is authenticated=false, do NOT tell the user to run any CLI command — "+
+					"call auth_login_start immediately to initiate the login flow directly from this MCP server.",
+			),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -161,6 +228,7 @@ func registerAuthTools(srv *server.MCPServer) {
 				return mcp.NewToolResultText(toJSON(map[string]any{
 					"authenticated": false,
 					"error":         err.Error(),
+					"next_step":     "Call auth_login_start now. Do NOT suggest running any CLI command.",
 				})), nil
 			}
 			t, err := tok.Token()
@@ -286,6 +354,41 @@ func registerAuthTools(srv *server.MCPServer) {
 
 func registerUserTools(srv *server.MCPServer) {
 	srv.AddTool(
+		mcp.NewTool("system_info",
+			mcp.WithDescription(
+				"Return the runtime OS, architecture, and home directory of the MCP server process. "+
+					"home_dir is the home of the OS user running this process (normally the logged-in user). "+
+					"IMPORTANT: this server process has FULL access to the local filesystem — it reads and writes files directly. "+
+					"Call this whenever the user refers to a file by a relative location "+
+					"(e.g. 'on the desktop', 'in Downloads', 'sur le bureau') to get home_dir and path format. "+
+					"Then ask the user for the exact folder name if needed (Desktop folder name varies by OS locale). "+
+					"NEVER tell the user you cannot access the filesystem.",
+			),
+			mcp.WithReadOnlyHintAnnotation(true),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			homeDir, _ := os.UserHomeDir()
+			var pathFormat string
+			switch runtime.GOOS {
+			case "windows":
+				pathFormat = `absolute Windows path, e.g. C:\Users\Alice\Downloads\file.pdf`
+			default:
+				pathFormat = "absolute POSIX path, e.g. /home/alice/Downloads/file.pdf"
+				if isWSL() {
+					pathFormat += "; use /mnt/c/... to reach Windows files"
+				}
+			}
+
+			return mcp.NewToolResultText(toJSON(map[string]any{
+				"os":          runtime.GOOS,
+				"arch":        runtime.GOARCH,
+				"home_dir":    homeDir,
+				"path_format": pathFormat,
+			})), nil
+		},
+	)
+
+	srv.AddTool(
 		mcp.NewTool("user_info",
 			mcp.WithDescription("Get current user profile (email, role, plan, public key)"),
 			mcp.WithReadOnlyHintAnnotation(true),
@@ -389,9 +492,11 @@ func registerTransferTools(srv *server.MCPServer) {
 		mcp.NewTool("transfer_send",
 			mcp.WithDescription(
 				"Create and upload a new E2EE transfer. "+
-					"This server reads, encrypts (post-quantum AGE), and uploads each file — "+
-					"plaintext never leaves the machine. "+
-					"Pass absolute local paths only; do not read or preview files beforehand.",
+					"This server process has FULL access to the local filesystem: it reads, encrypts (post-quantum AGE), "+
+					"and uploads each file — plaintext never leaves the machine. "+
+					"If the user gives a relative location ('bureau', 'desktop', 'downloads'), "+
+					"call system_info to get home_dir, then ask for the exact folder name. "+
+					"Pass absolute local paths only; do not read or preview file contents beforehand.",
 			),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -617,7 +722,10 @@ func registerDataroomTools(srv *server.MCPServer) {
 		mcp.NewTool("dataroom_upload",
 			mcp.WithDescription(
 				"Upload one or more local files or directories to a dataroom. Directories are walked recursively. "+
-					"This server reads, encrypts (post-quantum AGE), and uploads each file — plaintext never leaves the machine. "+
+					"This server process has FULL access to the local filesystem: it reads, encrypts (post-quantum AGE), "+
+					"and uploads each file — plaintext never leaves the machine. "+
+					"If the user gives a relative location ('bureau', 'desktop', 'downloads'), "+
+					"call system_info to get home_dir, then ask for the exact folder name. "+
 					"Pass absolute local paths only; do not read, stat, or enumerate files beforehand.",
 			),
 			mcp.WithReadOnlyHintAnnotation(false),

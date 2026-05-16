@@ -59,7 +59,7 @@ Add the following to your client's MCP config file:
 
 The MCP server operates in two modes:
 
-1. **With token on disk** (default): Reads stored token from config directory (default: `.retyc/` or `~/.config/retyc/`).
+1. **With token on disk** (default): Reads stored token from config directory (default: `.retyc/` or`~/.config/retyc/`).
    Refreshes automatically if expired.
 2. **With `RETYC_TOKEN` env var**: Uses offline refresh token directly, bypassing disk storage.
 
@@ -69,7 +69,8 @@ You can authenticate without leaving your AI client by asking the agent to log y
 
 > *"Log me into Retyc."*
 
-The agent will call `auth_login_start`, which returns a one-time URL. Open it in your browser, complete the login, then tell the agent to continue — it will poll with `auth_login_poll` until the token is confirmed and saved to disk.
+The agent will call `auth_login_start`, which returns a one-time URL. Open it in your browser, complete the login, then
+tell the agent to continue. It will poll with `auth_login_poll` until the token is confirmed and saved to disk.
 
 The `auth_login_start` tool short-circuits if a valid token is already stored, so it is safe to call at any time.
 
@@ -111,18 +112,19 @@ Long-running operations (upload/download) emit progress notifications showing by
 
 ### Auth
 
-| Tool                | Description                                                                                                                                                      | Parameters                         |
-|---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------|
-| `auth_status`       | Check authentication status and token validity. Silently refreshes token if expired.                                                                             | None                               |
-| `auth_login_start`  | Initiate OIDC device flow. Returns a URL to open in the browser. Short-circuits with `already_authenticated: true` if a valid token is already stored on disk.   | None                               |
-| `auth_login_poll`   | Poll once for the device flow result. Returns `status: "pending"`, `"slow_down"`, `"expired"`, or `"denied"`. Saves the token to disk when `done` is `true`.    | **device_code**: string (required) |
+| Tool               | Description                                                                                                                                                    | Parameters                         |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------|
+| `auth_status`      | Check authentication status and token validity. Silently refreshes token if expired.                                                                           | None                               |
+| `auth_login_start` | Initiate OIDC device flow. Returns a URL to open in the browser. Short-circuits with `already_authenticated: true` if a valid token is already stored on disk. | None                               |
+| `auth_login_poll`  | Poll once for the device flow result. Returns `status: "pending"`, `"slow_down"`, `"expired"`, or `"denied"`. Saves the token to disk when `done` is `true`.   | **device_code**: string (required) |
 
 ### User
 
-| Tool         | Description                                                                        | Parameters |
-|--------------|------------------------------------------------------------------------------------|------------|
-| `user_info`  | Get current user profile: email, name, company, address, plan details, public key. | None       |
-| `user_quota` | Get storage and transfer quotas (used / limit).                                    | None       |
+| Tool          | Description                                                                                          | Parameters |
+|---------------|------------------------------------------------------------------------------------------------------|------------|
+| `system_info` | Return runtime OS, architecture, home directory, and expected path format of the MCP server process. | None       |
+| `user_info`   | Get current user profile: email, name, company, address, plan details, public key.                   | None       |
+| `user_quota`  | Get storage and transfer quotas (used / limit).                                                      | None       |
 
 ### Transfer
 
@@ -150,3 +152,42 @@ Long-running operations (upload/download) emit progress notifications showing by
 | `dataroom_mv`       | Move or rename a node within the same dataroom.                                   | **src_uri**: string in format `retyc://id/src` (required); **dst_uri**: string in format `retyc://id/dst` (required)                  |
 | `dataroom_user_add` | Add a member to a dataroom. Automatically re-encrypts for all members (rekey).    | **dataroom_id**: string (required); **email**: string (required); **role**: `"viewer"` (default), `"editor"`, or `"admin"` (optional) |
 | `dataroom_user_rm`  | Remove a member from a dataroom. Automatically re-encrypts for remaining members. | **dataroom_id**: string (required); **user_id**: string (required)                                                                    |
+
+## Client limitations
+
+### Destructive tools in Claude Desktop / Claude.ai
+
+`dataroom_rm` and `dataroom_user_rm` may be refused by Claude Desktop with a message like *"this action must be
+performed from the Retyc interface"*. This is **not caused by the MCP `destructiveHint` annotation**, it is a
+model-level conservative default applied in the absence of an operator system prompt.
+
+Per the MCP specification, `destructiveHint: true` is a hint for clients to show a confirmation dialog, not a mandate to
+refuse. The refusal is a behaviour of the Claude model itself, independent of the annotation. Removing the annotation
+would not change anything.
+
+**Behaviour varies by client:**
+
+| Client                     | Observed behaviour                                                                     |
+|----------------------------|----------------------------------------------------------------------------------------|
+| Claude Desktop / Claude.ai | May refuse destructive actions (conservative model default, no operator system prompt) |
+| Claude Code                | Has its own permission system (allowedTools, hooks), model defaults may still apply    |
+| Cursor                     | Implements its own confirmation prompts, independently of `destructiveHint`            |
+| Windsurf                   | Has been reported to ignore annotations and skip confirmation entirely                 |
+
+### Unlocking destructive actions via the Anthropic API
+
+When calling the Anthropic API directly you act as an operator and control the system prompt. Providing explicit context
+unlocks the model's conservative defaults:
+
+```json
+{
+  "model": "claude-sonnet-4-6",
+  "system": "You are an assistant for Retyc. You may delete files and remove users from datarooms when the user explicitly asks.",
+  "messages": [
+    ...
+  ]
+}
+```
+
+Anthropic grants operator system prompts a higher trust level than tool descriptions or observed content. This is the
+only reliable way to adjust these model defaults: no server-side MCP patch can achieve the same effect.

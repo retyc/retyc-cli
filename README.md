@@ -10,7 +10,8 @@
 # Retyc CLI
 
 > Official command-line interface for [Retyc](https://retyc.com) - send transfers and manage datarooms directly from
-> your terminal. Also runs as a local **[MCP server](doc/mcp.md)**: connect your AI agent and control Retyc in plain language.
+> your terminal. Also runs as a local **[MCP server](doc/mcp.md)**: connect your AI agent and control Retyc in plain
+> language.
 
 <img src=".media/demo_0.0.2.gif" width="500" alt="Retyc CLI demo" />
 
@@ -88,13 +89,15 @@ retyc transfer download <transfer-id>
 
 ## MCP Server
 
-`retyc-cli` runs as a [Model Context Protocol](https://modelcontextprotocol.io) server — connect it to your AI agent and control Retyc in plain language:
+`retyc-cli` runs as a [Model Context Protocol](https://modelcontextprotocol.io) server — connect it to your AI agent and
+control Retyc in plain language:
 
 > *"Create a dataroom called 'Release v2', upload ./dist/, and add alice@example.com as editor."*
 > *"Send all PDFs in ./reports/ to bob@example.com, expire in 7 days."*
 > *"List my latest transfers and download the most recent one into ~/Downloads/."*
 
 **Quick setup with Claude Code:**
+
 ```sh
 # Use read -s to avoid storing the passphrase in shell history
 read -rs RETYC_KEY_PASSPHRASE
