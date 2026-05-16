@@ -59,7 +59,7 @@ Add the following to your client's MCP config file:
 
 The MCP server operates in two modes:
 
-1. **With token on disk** (default): Reads stored token from config directory (default: `.retyc/` or`~/.config/retyc/`).
+1. **With token on disk** (default): Reads stored token from config directory (default: `.retyc/` or `~/.config/retyc/`).
    Refreshes automatically if expired.
 2. **With `RETYC_TOKEN` env var**: Uses offline refresh token directly, bypassing disk storage.
 

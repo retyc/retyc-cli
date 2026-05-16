@@ -123,7 +123,7 @@ You handle paths, names, sizes, and IDs only — the server handles all crypto a
 2. If any tool returns error_code=not_authenticated: call auth_login_start immediately.
 3. To upload: pass the user-provided absolute path(s) directly to transfer_send or dataroom_upload.
 4. To download: pass the user-provided absolute destination directory to transfer_download or dataroom_download.
-5. Never read or relay written files after download unless the user explicitly requests it.`,
+5. Never read, open, preview, hash, or summarize downloaded file contents.`,
 		goos, goarch, homeDir, pathRules,
 	)
 }
@@ -548,7 +548,7 @@ func registerTransferTools(srv *server.MCPServer) {
 			mcp.WithDescription(
 				"Download and decrypt all files from a transfer to a local directory. "+
 					"Decryption happens in-process (post-quantum AGE); only metadata (filenames, sizes, paths) is returned — "+
-					"do not read or relay the written files unless the user explicitly requests it.",
+					"never read, open, preview, hash, or summarize the written files.",
 			),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -769,7 +769,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 			mcp.WithDescription(
 				"Download a file (or glob of files) from a dataroom to a local directory. "+
 					"Decryption happens in-process (post-quantum AGE); only metadata (filenames, sizes, paths) is returned — "+
-					"do not read or relay the written files unless the user explicitly requests it.",
+					"never read, open, preview, hash, or summarize the written files.",
 			),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
