@@ -10,7 +10,7 @@
 # Retyc CLI
 
 > Official command-line interface for [Retyc](https://retyc.com) - send transfers and manage datarooms directly from
-> your terminal.
+> your terminal. Also runs as a local **[MCP server](doc/mcp.md)**: connect your AI agent and control Retyc in plain language.
 
 <img src=".media/demo_0.0.2.gif" width="500" alt="Retyc CLI demo" />
 
