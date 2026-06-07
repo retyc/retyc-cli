@@ -241,6 +241,40 @@ func resolvePath(
 	return currentParentID, nil
 }
 
+// resolvePathItem resolves a unix-style path to the full node item (including its
+// current version) of the final component. It locates the parent via resolvePath,
+// then lists the parent so the returned item carries node_version — which the
+// single-node endpoint (GET /dataroom/node/{id}) does not return.
+// Returns nil for an empty path or "/", indicating the dataroom root.
+func resolvePathItem(
+	ctx context.Context, client *api.Client, dataroomID, nodePath string, identity *age.HybridIdentity,
+) (*api.DataroomNodeItem, error) {
+	nodePath = strings.TrimSpace(nodePath)
+	if strings.Trim(nodePath, "/") == "" {
+		return nil, nil
+	}
+
+	parentPath, name := splitPathParent(nodePath)
+	parentID, err := resolvePath(ctx, client, dataroomID, parentPath, identity)
+	if err != nil {
+		return nil, err
+	}
+
+	nodes, err := fetchNodesWithNames(ctx, client, dataroomID, parentID, identity)
+	if err != nil {
+		return nil, err
+	}
+	for _, nn := range nodes {
+		if nn.name == name {
+			item := nn.item
+
+			return &item, nil
+		}
+	}
+
+	return nil, fmt.Errorf("path not found: %s", nodePath)
+}
+
 // resolveGlob resolves a path that may contain glob patterns in any component.
 func resolveGlob(
 	ctx context.Context, client *api.Client, dataroomID, rawPath string, identity *age.HybridIdentity,
@@ -380,7 +414,7 @@ func uploadDataroomFile(
 		if fetchErr != nil {
 			return fmt.Errorf("verifying existing node %q: %w", name, fetchErr)
 		}
-		if existing.Node.TypeEnc == nil {
+		if existing.TypeEnc == nil {
 			return fmt.Errorf("cannot upload file %q: a folder with that name already exists", name)
 		}
 		fmt.Fprintf(os.Stderr, "  %s: adding new version\n", displayName)
@@ -457,7 +491,7 @@ func uploadDataroomDir(
 					if fetchErr != nil {
 						return fmt.Errorf("verifying existing node %s: %w", e.Name(), fetchErr)
 					}
-					if existing.Node.TypeEnc != nil {
+					if existing.TypeEnc != nil {
 						return fmt.Errorf("cannot create folder %q: a file with that name already exists", e.Name())
 					}
 					folderID = existingID
@@ -750,17 +784,12 @@ func DownloadFromDataroom(
 		return downloaded, nil
 	}
 
-	nodeID, err := resolvePath(ctx, client, src.DataroomID, src.Path, sess.Identity)
+	item, err := resolvePathItem(ctx, client, src.DataroomID, src.Path, sess.Identity)
 	if err != nil {
 		return nil, err
 	}
-	if nodeID == nil {
+	if item == nil {
 		return nil, fmt.Errorf("cannot download the root folder")
-	}
-
-	item, err := client.GetDataroomNode(ctx, *nodeID)
-	if err != nil {
-		return nil, fmt.Errorf("fetching node: %w", err)
 	}
 	if item.Node.TypeEnc == nil {
 		return nil, fmt.Errorf("%s is a folder — use `ls` to browse it", src.Path)
@@ -771,7 +800,7 @@ func DownloadFromDataroom(
 
 	name, err := crypto.DecryptToString(item.Node.NameEnc, sess.Identity)
 	if err != nil {
-		name = *nodeID
+		name = item.Node.ID
 	}
 
 	if err := DownloadChunks(

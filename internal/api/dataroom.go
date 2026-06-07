@@ -18,8 +18,7 @@ type Dataroom struct {
 	// NodeNameSaltEnc is an armored AGE ciphertext (session key) containing
 	// the per-dataroom salt used as prefix for node name hashing. Nil when not set.
 	NodeNameSaltEnc *string   `json:"node_name_salt_enc"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // DataroomPage is a paginated list of datarooms.
@@ -211,9 +210,11 @@ func (c *Client) ListDataroomNodes(
 	return &result, nil
 }
 
-// GetDataroomNode fetches a single node and its current version by node ID.
-func (c *Client) GetDataroomNode(ctx context.Context, nodeID string) (*DataroomNodeItem, error) {
-	var result DataroomNodeItem
+// GetDataroomNode fetches a single node's metadata by node ID.
+// The API returns a flat node (DataroomNodeModel) without any version information;
+// use ListDataroomNodes to obtain a node together with its current version.
+func (c *Client) GetDataroomNode(ctx context.Context, nodeID string) (*DataroomNode, error) {
+	var result DataroomNode
 	if err := c.Get(ctx, "/dataroom/node/"+nodeID, &result); err != nil {
 		return nil, err
 	}
