@@ -96,8 +96,11 @@ type DataroomInfoResult struct {
 
 // DataroomNodeInfo holds the decrypted metadata of a single dataroom node.
 type DataroomNodeInfo struct {
-	ID   string
-	Name string
-	Type string // "file" or "dir"
-	Size int64
+	ID         string
+	Name       string
+	Type       string // "file" or "dir"
+	MIMEType   string // decrypted MIME type; empty for directories
+	Size       int64
+	VersionID  string // non-empty for file nodes; the current version's ID
+	ChunkCount int    // number of encrypted chunks; used for direct download without GetDataroomNode
 }

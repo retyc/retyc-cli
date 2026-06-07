@@ -160,6 +160,95 @@ func resolveDataroomSession(
 	}, nil
 }
 
+// DataroomSession is the exported alias for the per-dataroom crypto session.
+// Callers should cache it: resolving it requires two API calls and AGE crypto.
+type DataroomSession = dataroomSession
+
+// GetDataroomSession resolves and returns the cryptographic session for a dataroom.
+func GetDataroomSession(
+	ctx context.Context, cfg *config.Config, client *api.Client, dataroomID string, reader PassphraseReader,
+) (*DataroomSession, error) {
+	return resolveDataroomSession(ctx, cfg, client, dataroomID, reader)
+}
+
+// fetchNodeItems lists the raw API node items at nodePath, supporting glob patterns.
+// It is the shared fetch path behind ListNodes and ListNodesWithSession.
+func fetchNodeItems(
+	ctx context.Context, client *api.Client, dataroomID, nodePath string, identity *age.HybridIdentity,
+) ([]api.DataroomNodeItem, error) {
+	if hasGlob(nodePath) {
+		return resolveGlob(ctx, client, dataroomID, nodePath, identity)
+	}
+
+	parentID, err := resolvePath(ctx, client, dataroomID, nodePath, identity)
+	if err != nil {
+		return nil, err
+	}
+
+	var items []api.DataroomNodeItem
+	for page := 1; ; page++ {
+		pg, err := client.ListDataroomNodes(ctx, dataroomID, parentID, page, 50)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, pg.Items...)
+		if page >= pg.Pages {
+			break
+		}
+	}
+
+	return items, nil
+}
+
+// nodesFromItems decrypts API node items into DataroomNodeInfo using identity.
+func nodesFromItems(items []api.DataroomNodeItem, identity *age.HybridIdentity) []DataroomNodeInfo {
+	result := make([]DataroomNodeInfo, 0, len(items))
+	for _, item := range items {
+		name, decErr := crypto.DecryptToString(item.Node.NameEnc, identity)
+		if decErr != nil {
+			name = "(encrypted)"
+		}
+		nodeType := "dir"
+		var size int64
+		var versionID string
+		var chunkCount int
+		var mimeType string
+		if item.Node.TypeEnc != nil {
+			nodeType = "file"
+			mimeType, _ = crypto.DecryptToString(*item.Node.TypeEnc, identity)
+			if item.Version != nil {
+				size = item.Version.OriginalSize
+				versionID = item.Version.ID
+				chunkCount = item.Version.ChunkCount
+			}
+		}
+		result = append(result, DataroomNodeInfo{
+			ID:         item.Node.ID,
+			Name:       name,
+			Type:       nodeType,
+			MIMEType:   mimeType,
+			Size:       size,
+			VersionID:  versionID,
+			ChunkCount: chunkCount,
+		})
+	}
+
+	return result
+}
+
+// ListNodesWithSession lists all nodes at the given path using a pre-resolved session,
+// avoiding the redundant resolveDataroomSession call in ListNodes.
+func ListNodesWithSession(
+	ctx context.Context, client *api.Client, dataroomID, nodePath string, sess *DataroomSession,
+) ([]DataroomNodeInfo, error) {
+	items, err := fetchNodeItems(ctx, client, dataroomID, nodePath, sess.Identity)
+	if err != nil {
+		return nil, err
+	}
+
+	return nodesFromItems(items, sess.Identity), nil
+}
+
 // — Node traversal helpers ————————————————————————————————————————————————————
 
 // namedNode pairs a decrypted name with its API item.
@@ -234,7 +323,9 @@ func resolvePath(
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("path not found: /%s", strings.Join(parts[:depth+1], "/"))
+			// Wrap os.ErrNotExist so the WebDAV handler maps a missing intermediate
+			// path component to 404 instead of 500 (callers use errors.Is).
+			return nil, fmt.Errorf("path not found: /%s: %w", strings.Join(parts[:depth+1], "/"), os.ErrNotExist)
 		}
 	}
 
@@ -339,25 +430,94 @@ func resolveGlob(
 	return finalItems, nil
 }
 
-// findNodeByName scans a folder for a node whose decrypted name matches name.
-func findNodeByName(
+// findNodeAndTypeByName scans a folder for a node whose decrypted name matches name.
+// It uses the listing (TypeEnc from ListDataroomNodes) rather than GetDataroomNode, because
+// the GET /dataroom/node/{id} endpoint does not return type_enc in its response.
+func findNodeAndTypeByName(
 	ctx context.Context, client *api.Client, dataroomID string,
 	parentID *string, name string, identity *age.HybridIdentity,
-) (string, error) {
+) (id string, isFile bool, err error) {
 	nodes, err := fetchNodesWithNames(ctx, client, dataroomID, parentID, identity)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	for _, nn := range nodes {
 		if nn.name == name {
-			return nn.item.Node.ID, nil
+			return nn.item.Node.ID, nn.item.Node.TypeEnc != nil, nil
 		}
 	}
 
-	return "", fmt.Errorf("node %q not found in folder", name)
+	return "", false, fmt.Errorf("node %q not found in folder", name)
 }
 
 // — Upload / download helpers —————————————————————————————————————————————————
+
+// InitStreamUpload resolves the parent directory, creates the dataroom node and version,
+// and returns the identifiers needed to stream chunks. Call UploadChunks next.
+// newNode is true when a brand-new node was created; on upload failure after this call
+// returns, callers must delete the node when newNode is true (a new version of an existing
+// node is left as-is). This function only cleans up the node if version creation fails internally.
+func InitStreamUpload(
+	ctx context.Context,
+	client *api.Client,
+	dataroomID, parentPath, fileName string,
+	totalSize int64,
+	sess *DataroomSession,
+) (nodeID, versionID string, newNode bool, err error) {
+	parentID, err := resolvePath(ctx, client, dataroomID, parentPath, sess.Identity)
+	if err != nil {
+		return "", "", false, fmt.Errorf("resolving parent path: %w", err)
+	}
+
+	mimeType := mime.TypeByExtension(filepath.Ext(fileName))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	nameEnc, err := crypto.EncryptStringForKeys(fileName, []string{sess.PublicKey})
+	if err != nil {
+		return "", "", false, fmt.Errorf("encrypting filename: %w", err)
+	}
+	typeEnc, err := crypto.EncryptStringForKeys(mimeType, []string{sess.PublicKey})
+	if err != nil {
+		return "", "", false, fmt.Errorf("encrypting MIME type: %w", err)
+	}
+
+	node, createErr := client.CreateDataroomNode(
+		ctx, dataroomID, nameEnc, nodeNameHash(fileName, sess.NameSalt), &typeEnc, parentID,
+	)
+	var targetNodeID string
+	isNewNode := createErr == nil
+
+	if createErr != nil {
+		if !isConflict(createErr) {
+			return "", "", false, fmt.Errorf("creating file node: %w", createErr)
+		}
+		existingID, isFile, findErr := findNodeAndTypeByName(ctx, client, dataroomID, parentID, fileName, sess.Identity)
+		if findErr != nil {
+			return "", "", false, fmt.Errorf("node already exists but could not be located: %w", findErr)
+		}
+		if !isFile {
+			return "", "", false, fmt.Errorf("cannot upload file %q: a folder with that name already exists", fileName)
+		}
+		targetNodeID = existingID
+	} else {
+		targetNodeID = node.ID
+	}
+
+	version, err := client.CreateDataroomNodeVersion(ctx, targetNodeID, totalSize, typeEnc)
+	if err != nil {
+		if isNewNode {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_ = client.DeleteDataroomNode(cleanupCtx, targetNodeID)
+			cancel()
+		}
+
+		return "", "", false, fmt.Errorf("creating node version: %w", err)
+	}
+
+	return targetNodeID, version.ID, isNewNode, nil
+}
 
 // uploadDataroomFile creates a file node (or adds a new version on 409) and uploads chunks.
 //
@@ -406,15 +566,11 @@ func uploadDataroomFile(
 		if !isConflict(createErr) {
 			return fmt.Errorf("creating file node: %w", createErr)
 		}
-		existingID, findErr := findNodeByName(ctx, client, dataroomID, parentID, name, sessionIdentity)
+		existingID, isFile, findErr := findNodeAndTypeByName(ctx, client, dataroomID, parentID, name, sessionIdentity)
 		if findErr != nil {
 			return fmt.Errorf("node already exists but could not be located: %w", findErr)
 		}
-		existing, fetchErr := client.GetDataroomNode(ctx, existingID)
-		if fetchErr != nil {
-			return fmt.Errorf("verifying existing node %q: %w", name, fetchErr)
-		}
-		if existing.TypeEnc == nil {
+		if !isFile {
 			return fmt.Errorf("cannot upload file %q: a folder with that name already exists", name)
 		}
 		fmt.Fprintf(os.Stderr, "  %s: adding new version\n", displayName)
@@ -434,10 +590,10 @@ func uploadDataroomFile(
 		})
 	if uploadErr != nil && newNode {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
 		if delErr := client.DeleteDataroomNode(cleanupCtx, targetNodeID); delErr == nil {
 			fmt.Fprintf(os.Stderr, "  cleaned up: %s\n", displayName)
 		}
+		cleanupCancel()
 	}
 
 	return uploadErr
@@ -483,15 +639,13 @@ func uploadDataroomDir(
 					if !isConflict(createErr) {
 						return fmt.Errorf("creating folder %s: %w", e.Name(), createErr)
 					}
-					existingID, findErr := findNodeByName(ctx, client, dataroomID, entry.remoteParent, e.Name(), sessionIdentity)
+					existingID, isFile, findErr := findNodeAndTypeByName(
+						ctx, client, dataroomID, entry.remoteParent, e.Name(), sessionIdentity,
+					)
 					if findErr != nil {
 						return fmt.Errorf("folder %s already exists but could not be located: %w", e.Name(), findErr)
 					}
-					existing, fetchErr := client.GetDataroomNode(ctx, existingID)
-					if fetchErr != nil {
-						return fmt.Errorf("verifying existing node %s: %w", e.Name(), fetchErr)
-					}
-					if existing.TypeEnc != nil {
+					if isFile {
 						return fmt.Errorf("cannot create folder %q: a file with that name already exists", e.Name())
 					}
 					folderID = existingID
@@ -632,54 +786,7 @@ func ListNodes(
 		return nil, err
 	}
 
-	var items []api.DataroomNodeItem
-
-	if hasGlob(parsed.Path) {
-		items, err = resolveGlob(ctx, client, parsed.DataroomID, parsed.Path, sess.Identity)
-	} else {
-		var parentID *string
-		parentID, err = resolvePath(ctx, client, parsed.DataroomID, parsed.Path, sess.Identity)
-		if err == nil {
-			for page := 1; ; page++ {
-				var pg *api.DataroomNodePage
-				pg, err = client.ListDataroomNodes(ctx, parsed.DataroomID, parentID, page, 50)
-				if err != nil {
-					break
-				}
-				items = append(items, pg.Items...)
-				if page >= pg.Pages {
-					break
-				}
-			}
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]DataroomNodeInfo, 0, len(items))
-	for _, item := range items {
-		name, decErr := crypto.DecryptToString(item.Node.NameEnc, sess.Identity)
-		if decErr != nil {
-			name = "(encrypted)"
-		}
-		nodeType := "dir"
-		var size int64
-		if item.Node.TypeEnc != nil {
-			nodeType = "file"
-			if item.Version != nil {
-				size = item.Version.OriginalSize
-			}
-		}
-		result = append(result, DataroomNodeInfo{
-			ID:   item.Node.ID,
-			Name: name,
-			Type: nodeType,
-			Size: size,
-		})
-	}
-
-	return result, nil
+	return ListNodesWithSession(ctx, client, parsed.DataroomID, parsed.Path, sess)
 }
 
 // UploadToDataroom uploads one or more local paths into a remote retyc:// URI.
