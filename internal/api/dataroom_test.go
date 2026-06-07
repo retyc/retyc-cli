@@ -485,61 +485,56 @@ func TestGetDataroomUsers(t *testing.T) {
 }
 
 func TestGetDataroomNode(t *testing.T) {
-	typeEnc := "enc-mime"
-	parentID := "parent-1"
+	// The API returns a flat DataroomNodeModel (no "node" wrapper, no version),
+	// matching the real GET /dataroom/node/{id} response. See OpenAPI getDataroomNodeById.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/dataroom/node/node-abc" {
 			t.Errorf("path = %q, want /dataroom/node/node-abc", r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(DataroomNodeItem{
-			Node: DataroomNode{
-				ID:       "node-abc",
-				NameEnc:  "enc-name",
-				TypeEnc:  &typeEnc,
-				ParentID: &parentID,
-			},
-			Version: &DataroomNodeVersion{
-				ID:           "ver-1",
-				NodeID:       "node-abc",
-				OriginalSize: 2048,
-				ChunkCount:   1,
-			},
-		})
+		_, _ = w.Write([]byte(`{
+			"id": "node-abc",
+			"dataroom_id": "dr-1",
+			"parent_id": "parent-1",
+			"name_hash": "hash",
+			"name_enc": "enc-name",
+			"type_enc": "enc-mime"
+		}`))
 	}))
 	defer srv.Close()
 
-	item, err := newTestClient(srv).GetDataroomNode(context.Background(), "node-abc")
+	node, err := newTestClient(srv).GetDataroomNode(context.Background(), "node-abc")
 	if err != nil {
 		t.Fatalf("GetDataroomNode() error = %v", err)
 	}
-	if item.Node.ID != "node-abc" {
-		t.Errorf("Node.ID = %q, want node-abc", item.Node.ID)
+	if node.ID != "node-abc" {
+		t.Errorf("ID = %q, want node-abc", node.ID)
 	}
-	if item.Version == nil {
-		t.Fatal("Version is nil, want non-nil for file node")
+	if node.TypeEnc == nil {
+		t.Fatal("TypeEnc is nil, want non-nil for file node")
 	}
-	if item.Version.OriginalSize != 2048 {
-		t.Errorf("Version.OriginalSize = %d, want 2048", item.Version.OriginalSize)
+	if *node.TypeEnc != "enc-mime" {
+		t.Errorf("TypeEnc = %q, want enc-mime", *node.TypeEnc)
 	}
 }
 
 func TestGetDataroomNode_Directory(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(DataroomNodeItem{
-			Node:    DataroomNode{ID: "dir-1", NameEnc: "enc-name"},
-			Version: nil,
-		})
+		_, _ = w.Write([]byte(`{
+			"id": "dir-1",
+			"dataroom_id": "dr-1",
+			"parent_id": null,
+			"name_hash": "hash",
+			"name_enc": "enc-name",
+			"type_enc": null
+		}`))
 	}))
 	defer srv.Close()
 
-	item, err := newTestClient(srv).GetDataroomNode(context.Background(), "dir-1")
+	node, err := newTestClient(srv).GetDataroomNode(context.Background(), "dir-1")
 	if err != nil {
 		t.Fatalf("GetDataroomNode() error = %v", err)
 	}
-	if item.Node.TypeEnc != nil {
+	if node.TypeEnc != nil {
 		t.Errorf("TypeEnc should be nil for directory node")
-	}
-	if item.Version != nil {
-		t.Errorf("Version should be nil for directory node")
 	}
 }
