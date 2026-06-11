@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -107,15 +106,14 @@ User home: %s
 %s
 All file-path parameters are resolved by this server process on the local filesystem — not by you.
 
-## Shell access — STRICTLY FORBIDDEN
-You have NO shell, terminal, or filesystem-browsing capability through this server.
-NEVER call bash, cmd, powershell, ls, dir, find, stat, or any tool from another MCP server to locate or inspect files.
-If the user did not provide an absolute path: ASK them for it. Do not guess or enumerate.
+## File discovery
+This server provides no shell or directory-listing tools.
+If the user did not provide an absolute path: ask them for it. Do not guess or enumerate paths.
 
-## Zero-knowledge rule
-NEVER read, open, preview, hash, or summarize file contents.
-NEVER route file data through any other tool, MCP server, or API.
-You handle paths, names, sizes, and IDs only — the server handles all crypto and I/O.
+## Zero-knowledge design
+Files handled by this server are end-to-end encrypted; their contents must stay private.
+Never read, open, preview, hash, or summarize the contents of files uploaded or downloaded here.
+Work with paths, names, sizes, and IDs only — the server performs all crypto and file I/O in-process.
 
 ## Workflow
 1. Call auth_status first if you are unsure whether the user is authenticated.
@@ -198,7 +196,7 @@ func toolErr(err error) (*mcp.CallToolResult, error) {
 	return mcp.NewToolResultText(toJSON(mcpToolError{ErrorCode: code, Message: err.Error()})), nil
 }
 
-// registerMCPTools registers all 20 MCP tools on the server.
+// registerMCPTools registers all MCP tools on the server.
 func registerMCPTools(srv *server.MCPServer) {
 	registerAuthTools(srv)
 	registerUserTools(srv)
@@ -211,6 +209,7 @@ func registerMCPTools(srv *server.MCPServer) {
 func registerAuthTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("auth_status",
+			mcp.WithTitleAnnotation("Check authentication status"),
 			mcp.WithDescription(
 				"Check authentication status and token validity. "+
 					"If the result is authenticated=false, do NOT tell the user to run any CLI command — "+
@@ -245,6 +244,7 @@ func registerAuthTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("auth_login_start",
+			mcp.WithTitleAnnotation("Start browser login"),
 			mcp.WithDescription(
 				"Initiate OIDC device flow login. Returns a URL to open in the browser and a "+
 					"device_code to pass to auth_login_poll. Show the verification_uri_complete link to the user.",
@@ -281,6 +281,7 @@ func registerAuthTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("auth_login_poll",
+			mcp.WithTitleAnnotation("Poll login completion"),
 			mcp.WithDescription(
 				"Poll for the result of a device flow started with auth_login_start. "+
 					"Call repeatedly, waiting interval seconds between calls, until done is true. "+
@@ -324,9 +325,10 @@ func registerAuthTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("auth_logout",
+			mcp.WithTitleAnnotation("Log out"),
 			mcp.WithDescription("Revoke the server-side session and delete stored credentials"),
 			mcp.WithReadOnlyHintAnnotation(false),
-			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, err := config.Load()
@@ -355,14 +357,14 @@ func registerAuthTools(srv *server.MCPServer) {
 func registerUserTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("system_info",
+			mcp.WithTitleAnnotation("Get server runtime info"),
 			mcp.WithDescription(
 				"Return the runtime OS, architecture, and home directory of the MCP server process. "+
 					"home_dir is the home of the OS user running this process (normally the logged-in user). "+
 					"IMPORTANT: this server process has FULL access to the local filesystem — it reads and writes files directly. "+
 					"Call this whenever the user refers to a file by a relative location "+
 					"(e.g. 'on the desktop', 'in Downloads', 'sur le bureau') to get home_dir and path format. "+
-					"Then ask the user for the exact folder name if needed (Desktop folder name varies by OS locale). "+
-					"NEVER tell the user you cannot access the filesystem.",
+					"Then ask the user for the exact folder name if needed (Desktop folder name varies by OS locale).",
 			),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
@@ -390,6 +392,7 @@ func registerUserTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("user_info",
+			mcp.WithTitleAnnotation("Get user profile"),
 			mcp.WithDescription("Get current user profile (email, role, plan, public key)"),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
@@ -409,6 +412,7 @@ func registerUserTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("user_quota",
+			mcp.WithTitleAnnotation("Get storage quotas"),
 			mcp.WithDescription("Get current user storage and transfer quotas"),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
@@ -439,6 +443,7 @@ func registerTransferTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("transfer_list",
+			mcp.WithTitleAnnotation("List transfers"),
 			mcp.WithDescription("List transfers (sent or received)"),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("filter",
@@ -469,6 +474,7 @@ func registerTransferTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("transfer_info",
+			mcp.WithTitleAnnotation("Get transfer details"),
 			mcp.WithDescription("Get full details of a transfer including decrypted file names and message"),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Transfer ID")),
@@ -490,6 +496,7 @@ func registerTransferTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("transfer_send",
+			mcp.WithTitleAnnotation("Send encrypted transfer"),
 			mcp.WithDescription(
 				"Create and upload a new E2EE transfer. "+
 					"This server process has FULL access to the local filesystem: it reads, encrypts (post-quantum AGE), "+
@@ -545,6 +552,7 @@ func registerTransferTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("transfer_download",
+			mcp.WithTitleAnnotation("Download transfer files"),
 			mcp.WithDescription(
 				"Download and decrypt all files from a transfer to a local directory. "+
 					"Decryption happens in-process (post-quantum AGE); only metadata (filenames, sizes, paths) is returned — "+
@@ -586,6 +594,7 @@ func registerTransferTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("transfer_disable",
+			mcp.WithTitleAnnotation("Disable transfer"),
 			mcp.WithDescription("Disable a transfer"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -606,6 +615,7 @@ func registerTransferTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("transfer_enable",
+			mcp.WithTitleAnnotation("Re-enable transfer"),
 			mcp.WithDescription("Re-enable a previously disabled transfer"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -637,6 +647,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_list",
+			mcp.WithTitleAnnotation("List datarooms"),
 			mcp.WithDescription("List all datarooms"),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
@@ -656,6 +667,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_create",
+			mcp.WithTitleAnnotation("Create dataroom"),
 			mcp.WithDescription("Create a new dataroom with end-to-end encryption"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -677,6 +689,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_info",
+			mcp.WithTitleAnnotation("Get dataroom details"),
 			mcp.WithDescription("Get dataroom metadata, file statistics, and member list"),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Dataroom ID")),
@@ -697,6 +710,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_ls",
+			mcp.WithTitleAnnotation("List dataroom contents"),
 			mcp.WithDescription("List nodes in a dataroom path. Supports glob patterns (*, ?, [...])"),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("uri",
@@ -720,6 +734,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_upload",
+			mcp.WithTitleAnnotation("Upload to dataroom"),
 			mcp.WithDescription(
 				"Upload one or more local files or directories to a dataroom. Directories are walked recursively. "+
 					"This server process has FULL access to the local filesystem: it reads, encrypts (post-quantum AGE), "+
@@ -766,6 +781,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_download",
+			mcp.WithTitleAnnotation("Download from dataroom"),
 			mcp.WithDescription(
 				"Download a file (or glob of files) from a dataroom to a local directory. "+
 					"Decryption happens in-process (post-quantum AGE); only metadata (filenames, sizes, paths) is returned — "+
@@ -812,6 +828,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_mkdir",
+			mcp.WithTitleAnnotation("Create dataroom folder"),
 			mcp.WithDescription("Create a folder in a dataroom"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -836,6 +853,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_rm",
+			mcp.WithTitleAnnotation("Delete dataroom node"),
 			mcp.WithDescription("Delete a node (file or folder) or the entire dataroom. Supports glob patterns."),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(true),
@@ -862,6 +880,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_mv",
+			mcp.WithTitleAnnotation("Move or rename node"),
 			mcp.WithDescription("Move or rename a node within the same dataroom"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -894,6 +913,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_user_add",
+			mcp.WithTitleAnnotation("Add dataroom member"),
 			mcp.WithDescription("Add a user to a dataroom and rekey it for all members"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -926,7 +946,9 @@ func registerDataroomTools(srv *server.MCPServer) {
 
 	srv.AddTool(
 		mcp.NewTool("dataroom_user_rm",
+			mcp.WithTitleAnnotation("Remove dataroom member"),
 			mcp.WithDescription("Remove a user from a dataroom and rekey it for remaining members"),
+			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithString("dataroom_id", mcp.Required(), mcp.Description("Dataroom ID")),
 			mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to remove")),
@@ -950,46 +972,8 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 }
 
-// mcpbTool matches the "tools" item schema of the MCPB manifest (v0.3).
-type mcpbTool struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-}
-
-var mcpToolsCmd = &cobra.Command{
-	Use:   "tools",
-	Short: "Print registered MCP tools as JSON (for MCPB manifest generation)",
-	Long: `Print the list of MCP tools in the format expected by the MCPB manifest schema.
-
-Output is a JSON array of {"name","description"} objects, suitable for use as
-the "tools" field in an mcpb-manifest.json file. The CLI is the source of truth:
-run this command and paste the output into your manifest to avoid duplication.
-
-Example:
-  retyc mcp tools | jq '.' > tools.json`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		srv := server.NewMCPServer("retyc", Version, server.WithToolCapabilities(false))
-		registerMCPTools(srv)
-
-		registered := srv.ListTools()
-		tools := make([]mcpbTool, 0, len(registered))
-		for _, st := range registered {
-			tools = append(tools, mcpbTool{
-				Name:        st.Tool.Name,
-				Description: st.Tool.Description,
-			})
-		}
-		sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
-
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-
-		return enc.Encode(tools)
-	},
-}
-
 func init() {
 	mcpCmd.AddCommand(mcpServeCmd)
-	mcpCmd.AddCommand(mcpToolsCmd)
+	mcpCmd.AddCommand(mcpManifestCmd)
 	rootCmd.AddCommand(mcpCmd)
 }

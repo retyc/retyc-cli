@@ -112,7 +112,7 @@ var authStatusCmd = &cobra.Command{
 			return fmt.Errorf("loading config: %w", err)
 		}
 
-		envToken := os.Getenv("RETYC_TOKEN")
+		envToken := auth.EnvToken()
 
 		// Load the stored token from disk to detect silent refreshes and token type.
 		// Skipped when RETYC_TOKEN is set (no local credentials in that mode).

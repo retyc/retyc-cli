@@ -33,6 +33,11 @@ builds:
       - goos: netbsd
         goarch: arm64
 
+# macOS universal binary (arm64 + amd64) — required by the MCPB bundle, where
+# platform selection is per-OS only (no architecture dimension in the manifest).
+universal_binaries:
+  - replace: false
+
 archives:
   - formats: [binary]
     name_template: "retyc-{{ .Os }}-{{ .Arch }}"

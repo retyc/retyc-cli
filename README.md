@@ -106,6 +106,21 @@ claude mcp add --transport stdio retyc --env RETYC_KEY_PASSPHRASE="$RETYC_KEY_PA
 
 Full integration guide (Claude Desktop, Cursor, Windsurf, example prompts): [doc/mcp.md](doc/mcp.md)
 
+**Claude Desktop extension (MCPB):** each release ships a `retyc-<version>.mcpb` bundle —
+double-click to install in Claude Desktop, no terminal needed. See [doc/mcpb.md](doc/mcpb.md).
+
+---
+
+## Privacy Policy
+
+This software (CLI and MCP server) embeds the entire encryption layer: file
+contents and metadata are encrypted locally (post-quantum AGE) before
+transmission, and its only network endpoint is the Retyc API — Retyc servers
+never see plaintext. In MCP mode, tool responses return decrypted metadata
+(filenames, sizes, member lists) to your MCP client; file contents are never
+included in responses (see [SECURITY.md](SECURITY.md)).
+Full policy: <https://retyc.com/legal/data-policy>
+
 ---
 
 ## Documentation
@@ -115,6 +130,7 @@ Full integration guide (Claude Desktop, Cursor, Windsurf, example prompts): [doc
 | Full commands reference      | [doc/commands.md](doc/commands.md)           |
 | MCP server + tools reference | [doc/mcp.md](doc/mcp.md)                     |
 | Docker usage                 | [doc/docker.md](doc/docker.md)               |
+| Claude Desktop bundle (MCPB) | [doc/mcpb.md](doc/mcpb.md)                   |
 | CI / CD integration          | [doc/ci-cd.md](doc/ci-cd.md)                 |
 | Configuration & env vars     | [doc/configuration.md](doc/configuration.md) |
 | Roadmap                      | [doc/roadmap.md](doc/roadmap.md)             |

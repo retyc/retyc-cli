@@ -594,3 +594,25 @@ func TestGetValidToken_NoToken(t *testing.T) {
 		t.Errorf("error = %v, want ErrNoToken", err)
 	}
 }
+
+// TestEnvToken verifies that unsubstituted MCPB user_config placeholders
+// (injected by older MCPB clients when the optional token is left empty)
+// are treated as unset.
+func TestEnvToken(t *testing.T) {
+	cases := []struct {
+		name, value, want string
+	}{
+		{"unset", "", ""},
+		{"real token", "abc123", "abc123"},
+		{"mcpb placeholder", "${user_config.token}", ""},
+		{"placeholder fragment", "x${y}", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RETYC_TOKEN", tc.value)
+			if got := EnvToken(); got != tc.want {
+				t.Errorf("EnvToken() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

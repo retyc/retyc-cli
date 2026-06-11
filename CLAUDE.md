@@ -15,6 +15,9 @@ cmd/
                                #   newTransferBar, uploadChunks, downloadChunks
   transfer.go                  # transfer ls/info/create/download/enable/disable
   dataroom.go                  # dataroom commands (ls, cp, mv, rm, mkdir, create, info, user)
+  mcp.go                       # mcp serve (stdio MCP server) + tool registry
+  mcp_manifest.go              # mcp manifest — full MCPB manifest.json (version + tools injected)
+  mcpb_manifest_base.json      # static MCPB manifest metadata (go:embed into mcp_manifest.go)
   version.go                   # version command (shows version + build mode)
 internal/
   auth/oidc.go                  # DeviceFlow, Refresh, GetValidToken
@@ -33,6 +36,8 @@ internal/
     paths_prod.go               # configDir() + defaultAPIBaseURL for prod
   crypto/age.go                 # AGE encrypt/decrypt helpers (PQ-only, see below)
   keyring/keyring.go            # Linux kernel session keyring cache (TTL-based)
+mcpb/icon.png                   # MCPB bundle icon (512×512)
+scripts/build-mcpb.sh           # Builds dist/retyc-<version>.mcpb from goreleaser dist/ (jq+zip, no Node)
 Dockerfile                      # Multi-stage scratch image (golang:1.24 builder → scratch)
 .dockerignore
 .github/workflows/ci.yml        # CI + release workflow
@@ -275,6 +280,17 @@ the session material. Returns `*dataroomSession{Identity, PublicKey, PrivateKey,
 Fetches dataroom + user key concurrently (with internal spinner), stops spinner before passphrase
 prompt, decrypts the session key, then decrypts `node_name_salt_enc` if present. All node
 commands call this. The `NameSalt` is "" for datarooms that pre-date the salt field.
+
+## MCPB bundle (Claude Desktop extension)
+
+`make mcpb` → goreleaser snapshot + `scripts/build-mcpb.sh` → `dist/retyc-<version>.mcpb`.
+Single fat bundle: macOS universal binary (goreleaser `universal_binaries`), linux amd64,
+windows amd64, selected via manifest `platform_overrides` (MCPB has no arch dimension).
+`retyc mcp manifest` generates the full manifest.json (base embedded from
+`cmd/mcpb_manifest_base.json`, version from ldflags with `v` stripped, tools from the live
+registry). Release CI builds it after goreleaser, asserts manifest version == tag
+(`--expect-version`), validates with `npx @anthropic-ai/mcpb validate`, uploads to the
+release. Reference: `doc/mcpb.md`.
 
 ## API — backend nomenclature
 
