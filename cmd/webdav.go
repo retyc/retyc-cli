@@ -28,7 +28,10 @@ import (
 // webdavContextKey is a private type for context keys in the WebDAV handler.
 type webdavContextKey int
 
-const webdavContentLengthKey webdavContextKey = 1
+const (
+	webdavContentLengthKey webdavContextKey = 1
+	webdavIsPutKey         webdavContextKey = 2
+)
 
 func withContentLength(ctx context.Context, n int64) context.Context {
 	return context.WithValue(ctx, webdavContentLengthKey, n)
@@ -40,6 +43,19 @@ func contentLengthFromCtx(ctx context.Context) int64 {
 	}
 
 	return -1
+}
+
+func withIsPut(ctx context.Context) context.Context {
+	return context.WithValue(ctx, webdavIsPutKey, true)
+}
+
+// isPutFromCtx reports whether the OpenFile call originates from a real PUT (as
+// opposed to a LOCK creating a lock-null resource). It lets the buffered upload
+// path distinguish an intentional empty-file PUT from a LOCK placeholder.
+func isPutFromCtx(ctx context.Context) bool {
+	v, _ := ctx.Value(webdavIsPutKey).(bool)
+
+	return v
 }
 
 // webdavFileInfo implements os.FileInfo for virtual WebDAV entries.
@@ -418,6 +434,7 @@ type writeFileHandle struct {
 	cfg              *config.Config
 	client           *api.Client
 	passphraseReader service.PassphraseReader
+	isPut            bool // true = real PUT; false = LOCK-driven create
 }
 
 func (h *writeFileHandle) Close() error {
@@ -426,14 +443,17 @@ func (h *writeFileHandle) Close() error {
 
 		return err
 	}
-	// A zero-byte buffered write is almost always a WebDAV LOCK creating a
-	// lock-null resource (macOS Finder, MS Office) rather than a real upload.
-	// Genuine empty-file PUTs carry Content-Length: 0 and take the streaming path,
-	// so skipping the upload here avoids creating a phantom empty node.
-	if fi, statErr := os.Stat(h.tempFilePath); statErr == nil && fi.Size() == 0 {
-		_ = os.RemoveAll(h.tempDir)
+	// A zero-byte create that did NOT come from a PUT is a WebDAV LOCK creating a
+	// lock-null resource (macOS Finder, MS Office); uploading it would create a
+	// phantom empty node, so skip it. A real PUT — even an empty one sent with
+	// chunked transfer (unknown Content-Length, hence this buffered path) — is an
+	// intentional upload and must go through.
+	if !h.isPut {
+		if fi, statErr := os.Stat(h.tempFilePath); statErr == nil && fi.Size() == 0 {
+			_ = os.RemoveAll(h.tempDir)
 
-		return nil
+			return nil
+		}
 	}
 	err := service.UploadToDataroom(
 		context.Background(),
@@ -655,7 +675,7 @@ func (fs *webdavFS) openForRead(ctx context.Context, drID string, wfi *webdavFil
 	}, nil
 }
 
-func (fs *webdavFS) openForWriteTempFile(drID, parentPath, fileName string) (webdav.File, error) {
+func (fs *webdavFS) openForWriteTempFile(drID, parentPath, fileName string, isPut bool) (webdav.File, error) {
 	tempDir, err := os.MkdirTemp("", "retyc-webdav-*")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
@@ -679,6 +699,7 @@ func (fs *webdavFS) openForWriteTempFile(drID, parentPath, fileName string) (web
 		cfg:              fs.cfg,
 		client:           fs.client,
 		passphraseReader: fs.passphraseReader,
+		isPut:            isPut,
 	}, nil
 }
 
@@ -796,7 +817,7 @@ func (fs *webdavFS) openForWrite(ctx context.Context, drID, subPath string) (web
 		return fs.openForWriteStream(ctx, drID, parentPath, fileName, size)
 	}
 
-	return fs.openForWriteTempFile(drID, parentPath, fileName)
+	return fs.openForWriteTempFile(drID, parentPath, fileName, isPutFromCtx(ctx))
 }
 
 // Mkdir implements webdav.FileSystem.
@@ -1041,8 +1062,12 @@ Example:
 
 				return
 			}
-			if r.Method == "PUT" && r.ContentLength >= 0 {
-				r = r.WithContext(withContentLength(r.Context(), r.ContentLength))
+			if r.Method == "PUT" {
+				rctx := withIsPut(r.Context())
+				if r.ContentLength >= 0 {
+					rctx = withContentLength(rctx, r.ContentLength)
+				}
+				r = r.WithContext(rctx)
 			}
 			// Pre-set Content-Type to skip http.ServeContent's 512-byte sniff read,
 			// which would otherwise trigger a full buffered download before the
@@ -1069,7 +1094,12 @@ Example:
 		shutdown := func() {
 			shutdownOnce.Do(func() {
 				cancel()
-				_ = srv.Shutdown(context.Background())
+				// Bound the drain: a stuck streaming client must not keep the CLI
+				// process alive forever. After the timeout, Shutdown returns and the
+				// process exits, dropping any still-open connections.
+				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer shutdownCancel()
+				_ = srv.Shutdown(shutdownCtx)
 			})
 		}
 

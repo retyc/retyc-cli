@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -231,6 +232,39 @@ func TestStreamWriteHandle_ShortUploadFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "incomplete upload") {
 		t.Errorf("error = %v, want it to mention incomplete upload", err)
+	}
+}
+
+// TestWriteFileHandle_LockSkipsEmptyUpload verifies that a zero-byte create that
+// did not originate from a PUT (i.e. a LOCK lock-null resource) is dropped without
+// an upload attempt, and the temp dir is cleaned up.
+func TestWriteFileHandle_LockSkipsEmptyUpload(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "retyc-webdav-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	tempFilePath := filepath.Join(tempDir, "f.txt")
+	//nolint:gosec // G304: tempFilePath is our own MkdirTemp + a constant name
+	f, err := os.OpenFile(tempFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	h := &writeFileHandle{
+		file:         f,
+		tempDir:      tempDir,
+		tempFilePath: tempFilePath,
+		parentURI:    "retyc://dr/",
+		wfs:          &webdavFS{},
+		isPut:        false, // LOCK-driven create — must not upload
+	}
+
+	// nil cfg/client are never dereferenced on the skip path.
+	if err := h.Close(); err != nil {
+		t.Fatalf("Close (LOCK empty) = %v, want nil", err)
+	}
+	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
+		t.Error("temp dir should have been removed after skipping the empty upload")
 	}
 }
 
