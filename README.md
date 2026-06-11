@@ -113,10 +113,13 @@ double-click to install in Claude Desktop, no terminal needed. See [doc/mcpb.md]
 
 ## Privacy Policy
 
-This software (CLI and MCP server) communicates exclusively with the Retyc API.
-No data is sent to third parties. All file content and metadata are encrypted
-client-side (post-quantum AGE) before transmission; plaintext never leaves your
-machine. Full policy: <https://retyc.com/legal/data-policy>
+This software (CLI and MCP server) embeds the entire encryption layer: file
+contents and metadata are encrypted locally (post-quantum AGE) before
+transmission, and its only network endpoint is the Retyc API — Retyc servers
+never see plaintext. In MCP mode, tool responses return decrypted metadata
+(filenames, sizes, member lists) to your MCP client; file contents are never
+included in responses (see [SECURITY.md](SECURITY.md)).
+Full policy: <https://retyc.com/legal/data-policy>
 
 ---
 

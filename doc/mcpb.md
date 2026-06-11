@@ -31,9 +31,10 @@ retyc-<version>.mcpb
 ```
 
 One bundle covers all platforms: MCPB platform selection is **per OS only**
-(`server.mcp_config.platform_overrides` keyed on `darwin`/`win32`/`linux`, no
-architecture dimension), so the macOS binary must be a universal binary
-(built by goreleaser `universal_binaries`).
+(no architecture dimension) — the default `mcp_config.command` targets darwin,
+with `platform_overrides` entries for `linux` and `win32`. That is why the
+macOS binary must be a universal binary (built by goreleaser
+`universal_binaries`).
 
 ## Manifest generation — the Go code is the source of truth
 
