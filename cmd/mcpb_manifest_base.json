@@ -1,0 +1,79 @@
+{
+  "manifest_version": "0.3",
+  "name": "retyc",
+  "display_name": "Retyc",
+  "description": "End-to-end encrypted file transfer and secure dataroom management",
+  "long_description": "Retyc exposes all its encrypted file transfer and dataroom operations as MCP tools. Files are encrypted locally before upload: plaintext never leaves your machine. Supports sending/receiving transfers, managing datarooms (create, upload, download, share), and user management with end-to-end encryption.\n\nAuthentication is handled directly from your MCP client: call `auth_login_start` to get a login URL, then `auth_login_poll` until done. No terminal required.\n\n**Privacy**: this extension communicates exclusively with the Retyc API (api.retyc.com). No data is sent to third parties. All file content is encrypted client-side before transmission.",
+  "author": {
+    "name": "Triplestack",
+    "email": "tech@retyc.net",
+    "url": "https://retyc.com"
+  },
+  "icon": "icon.png",
+  "homepage": "https://retyc.com",
+  "documentation": "https://docs.retyc.com",
+  "support": "https://support.retyc.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/retyc/retyc-cli"
+  },
+  "license": "MIT",
+  "keywords": [
+    "file-transfer",
+    "file-storage",
+    "encryption",
+    "e2e",
+    "dataroom",
+    "secure",
+    "retyc"
+  ],
+  "privacy_policies": [
+    "https://retyc.com/legal/data-policy"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/retyc-darwin",
+    "mcp_config": {
+      "command": "${__dirname}/server/retyc-darwin",
+      "args": [
+        "mcp",
+        "serve"
+      ],
+      "env": {
+        "RETYC_KEY_PASSPHRASE": "${user_config.key_passphrase}",
+        "RETYC_TOKEN": "${user_config.token}"
+      },
+      "platform_overrides": {
+        "linux": {
+          "command": "${__dirname}/server/retyc-linux"
+        },
+        "win32": {
+          "command": "${__dirname}/server/retyc-windows.exe"
+        }
+      }
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  },
+  "user_config": {
+    "key_passphrase": {
+      "type": "string",
+      "title": "Encryption Key Passphrase",
+      "description": "Passphrase for your Retyc private key (minimum 8 characters). Required for all E2E encrypted operations: transfer_info, transfer_send, transfer_download, and all dataroom_* tools.",
+      "required": true,
+      "sensitive": true
+    },
+    "token": {
+      "type": "string",
+      "title": "Retyc Token",
+      "description": "Optional offline token to bypass the interactive login flow. Leave empty to authenticate via auth_login_start / auth_login_poll.",
+      "required": false,
+      "sensitive": true
+    }
+  }
+}
