@@ -353,6 +353,19 @@ func (s *RefreshingTokenSource) Token() (*oauth2.Token, error) {
 	return newTok, nil
 }
 
+// EnvToken returns the RETYC_TOKEN environment variable, treating an
+// unsubstituted MCPB placeholder as unset: older MCPB clients inject the
+// literal "${user_config.token}" when the optional user_config value is
+// left empty in the extension settings.
+func EnvToken() string {
+	v := os.Getenv("RETYC_TOKEN")
+	if strings.Contains(v, "${") {
+		return ""
+	}
+
+	return v
+}
+
 // GetValidToken returns a valid token for the current session.
 //
 // If the RETYC_TOKEN environment variable is set, it is used as an offline
@@ -375,7 +388,7 @@ func GetValidToken(ctx context.Context, cfg config.OIDCConfig, httpClient *http.
 	// If it is expired or revoked (invalid_grant → ErrNoRefreshToken), emit a
 	// warning and fall through to the disk token so that interactive MCP users
 	// are not locked out when RETYC_TOKEN is also configured with a stale value.
-	if envToken := os.Getenv("RETYC_TOKEN"); envToken != "" {
+	if envToken := EnvToken(); envToken != "" {
 		tok, err := Refresh(ctx, cfg, envToken, httpClient)
 		if err != nil {
 			if !errors.Is(err, ErrNoRefreshToken) {

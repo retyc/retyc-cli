@@ -54,7 +54,7 @@ func spinnerReader(s *ui.Spinner) func() (string, error) {
 // mustGetToken retrieves a refreshing OAuth2 token source, returning a
 // user-friendly error if authentication is missing or expired.
 func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, error) {
-	persist := os.Getenv("RETYC_TOKEN") == ""
+	persist := auth.EnvToken() == ""
 
 	// When using stored tokens, check the token file before making any HTTP
 	// calls. This avoids two unnecessary round-trips (FetchOIDCConfig) just to
