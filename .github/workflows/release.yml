@@ -51,3 +51,16 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fails if the manifest version (injected from the build version, which
+      # goreleaser derives from the tag) does not match the tag itself.
+      - name: Build MCPB bundle
+        run: scripts/build-mcpb.sh --expect-version "${GITHUB_REF_NAME#v}"
+
+      - name: Validate MCPB manifest
+        run: npx --yes @anthropic-ai/mcpb@2 validate dist/mcpb/manifest.json
+
+      - name: Upload MCPB bundle to release
+        run: gh release upload "${GITHUB_REF_NAME}" dist/retyc-*.mcpb
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
