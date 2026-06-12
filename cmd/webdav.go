@@ -2,9 +2,14 @@ package cmd
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -962,6 +967,54 @@ func webdavPassphraseReader() (string, error) {
 	return v, nil
 }
 
+// webdavAuthUser is the fixed Basic auth username when --auth is enabled.
+const webdavAuthUser = "retyc"
+
+// generateWebdavPassword returns a random URL-safe password (128 bits of entropy).
+func generateWebdavPassword() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generating password: %w", err)
+	}
+
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// basicAuthMiddleware wraps next with HTTP Basic authentication. Credentials are
+// compared via SHA-256 digests so the comparison is constant-time regardless of
+// the length of the submitted values.
+func basicAuthMiddleware(next http.Handler, username, password string) http.Handler {
+	userHash := sha256.Sum256([]byte(username))
+	passHash := sha256.Sum256([]byte(password))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if ok {
+			uh := sha256.Sum256([]byte(user))
+			ph := sha256.Sum256([]byte(pass))
+			// Bitwise & (not &&) so both comparisons always run.
+			if subtle.ConstantTimeCompare(uh[:], userHash[:])&subtle.ConstantTimeCompare(ph[:], passHash[:]) == 1 {
+				next.ServeHTTP(w, r)
+
+				return
+			}
+		}
+		w.Header().Set("WWW-Authenticate", `Basic realm="RETYC WebDAV", charset="UTF-8"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	})
+}
+
+// isLoopbackAddr reports whether the bind address is loopback-only.
+// An empty address means "all interfaces" and is therefore not loopback.
+func isLoopbackAddr(addr string) bool {
+	if addr == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(addr)
+
+	return ip != nil && ip.IsLoopback()
+}
+
 // tokenKeepalive pings tokenSource every 60s to keep the access token warm.
 // If the refresh token expires it invokes onFail(err) and returns, letting the
 // caller shut the server down gracefully (so in-flight uploads, orphaned-node
@@ -995,8 +1048,12 @@ var webdavServeCmd = &cobra.Command{
 
 Key passphrase: set RETYC_KEY_PASSPHRASE (env var).
 
+Authentication: pass --auth to require HTTP Basic credentials (user "retyc").
+The password is read from RETYC_WEBDAV_PASSWORD, or generated randomly and
+printed at startup when the variable is unset.
+
 Example:
-  RETYC_KEY_PASSPHRASE=your-passphrase retyc webdav serve --port 8888
+  RETYC_KEY_PASSPHRASE=your-passphrase retyc webdav serve --port 8888 --auth
   # Then mount http://localhost:8888 in your WebDAV client`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Fail-fast: passphrase must be set before any crypto operation.
@@ -1079,9 +1136,31 @@ Example:
 			handler.ServeHTTP(w, r)
 		})
 
+		authEnabled, _ := cmd.Flags().GetBool("auth")
+		var rootHandler http.Handler = mux
+		if authEnabled {
+			password := os.Getenv("RETYC_WEBDAV_PASSWORD")
+			if password == "" {
+				password, err = generateWebdavPassword()
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "WebDAV credentials: user %q, password %q (generated for this session)\n",
+					webdavAuthUser, password)
+			} else {
+				fmt.Fprintf(os.Stderr, "WebDAV auth enabled: user %q, password from RETYC_WEBDAV_PASSWORD\n",
+					webdavAuthUser)
+			}
+			rootHandler = basicAuthMiddleware(mux, webdavAuthUser, password)
+		} else if !isLoopbackAddr(addr) {
+			fmt.Fprintf(os.Stderr,
+				"WARNING: binding to %s without authentication exposes all dataroom contents "+
+					"in cleartext to the network; consider --auth\n", addr)
+		}
+
 		srv := &http.Server{ //nolint:gosec // G112: local-only server; Slowloris not a concern
 			Addr:              fmt.Sprintf("%s:%d", addr, port),
-			Handler:           mux,
+			Handler:           rootHandler,
 			ReadHeaderTimeout: 30 * time.Second,
 		}
 
@@ -1150,6 +1229,8 @@ var _ webdav.File = (*streamWriteHandle)(nil)
 func init() {
 	webdavServeCmd.Flags().IntP("port", "p", 8888, "port to listen on")
 	webdavServeCmd.Flags().String("addr", "127.0.0.1", "address to bind")
+	webdavServeCmd.Flags().Bool("auth", false,
+		"require HTTP Basic auth (password from RETYC_WEBDAV_PASSWORD or generated)")
 	webdavCmd.AddCommand(webdavServeCmd)
 	rootCmd.AddCommand(webdavCmd)
 }

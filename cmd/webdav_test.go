@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -286,6 +288,95 @@ func TestStreamWriteHandle_FullUploadSucceeds(t *testing.T) {
 
 	if err := h.Close(); err != nil {
 		t.Fatalf("expected success, got %v", err)
+	}
+}
+
+// — Basic auth ————————————————————————————————————————————————————————————————
+
+func authTestHandler() http.Handler {
+	return basicAuthMiddleware(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		"retyc", "s3cret",
+	)
+}
+
+func TestBasicAuthMiddleware_NoCredentials(t *testing.T) {
+	rec := httptest.NewRecorder()
+	authTestHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if h := rec.Header().Get("WWW-Authenticate"); !strings.HasPrefix(h, "Basic ") {
+		t.Errorf("WWW-Authenticate = %q, want a Basic challenge", h)
+	}
+}
+
+func TestBasicAuthMiddleware_WrongPassword(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.SetBasicAuth("retyc", "wrong")
+	rec := httptest.NewRecorder()
+	authTestHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestBasicAuthMiddleware_WrongUser(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.SetBasicAuth("admin", "s3cret")
+	rec := httptest.NewRecorder()
+	authTestHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestBasicAuthMiddleware_ValidCredentials(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.SetBasicAuth("retyc", "s3cret")
+	rec := httptest.NewRecorder()
+	authTestHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestGenerateWebdavPassword(t *testing.T) {
+	p1, err := generateWebdavPassword()
+	if err != nil {
+		t.Fatalf("generateWebdavPassword() error = %v", err)
+	}
+	if len(p1) < 20 {
+		t.Errorf("password %q too short for 128 bits of entropy", p1)
+	}
+	p2, err := generateWebdavPassword()
+	if err != nil {
+		t.Fatalf("generateWebdavPassword() error = %v", err)
+	}
+	if p1 == p2 {
+		t.Error("two generated passwords are identical")
+	}
+}
+
+func TestIsLoopbackAddr(t *testing.T) {
+	cases := map[string]bool{
+		"127.0.0.1":    true,
+		"localhost":    true,
+		"::1":          true,
+		"0.0.0.0":      false,
+		"192.168.1.10": false,
+		"":             false,
+	}
+	for addr, want := range cases {
+		if got := isLoopbackAddr(addr); got != want {
+			t.Errorf("isLoopbackAddr(%q) = %v, want %v", addr, got, want)
+		}
 	}
 }
 
