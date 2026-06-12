@@ -104,23 +104,45 @@ func (fi *webdavFileInfo) ContentType(_ context.Context) (string, error) {
 	return "application/octet-stream", nil
 }
 
-// parseWebdavPath splits a WebDAV path into (dataroomName, subPath, isRoot).
+// webdavPathKind classifies a parsed WebDAV path.
+type webdavPathKind int
+
+const (
+	pathRoot         webdavPathKind = iota // "/"
+	pathDataroomRoot                       // "/dataroom"
+	pathDataroomNode                       // "/dataroom/<name>[/...]"
+	pathUnknown                            // any other top-level entry
+)
+
+// webdavSectionDataroom is the root folder under which datarooms are exposed.
+// The root is namespaced by section so future element types can live alongside it.
+const webdavSectionDataroom = "dataroom"
+
+// parseWebdavPath classifies a WebDAV path and extracts the dataroom name and sub-path.
 //
-//	"/"                        → ("", "", true)
-//	"/My DR"  or "/My DR/"     → ("My DR", "/", false)
-//	"/My DR/folder/file.txt"   → ("My DR", "/folder/file.txt", false)
-func parseWebdavPath(name string) (drName, subPath string, isRoot bool) {
+//	"/"                                 → (pathRoot, "", "")
+//	"/dataroom" or "/dataroom/"         → (pathDataroomRoot, "", "")
+//	"/dataroom/My DR"                   → (pathDataroomNode, "My DR", "/")
+//	"/dataroom/My DR/folder/file.txt"   → (pathDataroomNode, "My DR", "/folder/file.txt")
+//	"/anything-else"                    → (pathUnknown, "", "")
+func parseWebdavPath(name string) (kind webdavPathKind, drName, subPath string) {
 	name = path.Clean(name)
 	if name == "/" || name == "." {
-		return "", "", true
+		return pathRoot, "", ""
 	}
-	trimmed := name[1:] // remove leading "/"
-	idx := strings.Index(trimmed, "/")
-	if idx < 0 {
-		return trimmed, "/", false
+	section, rest, _ := strings.Cut(name[1:], "/") // strip leading "/"
+	if section != webdavSectionDataroom {
+		return pathUnknown, "", ""
+	}
+	if rest == "" {
+		return pathDataroomRoot, "", ""
+	}
+	drName, sub, found := strings.Cut(rest, "/")
+	if !found {
+		return pathDataroomNode, drName, "/"
 	}
 
-	return trimmed[:idx], trimmed[idx:], false
+	return pathDataroomNode, drName, "/" + sub
 }
 
 // splitWebdavPath returns the parent path and the final component of p.
@@ -608,10 +630,16 @@ func nodesToFileInfos(nodes []service.DataroomNodeInfo) []os.FileInfo {
 
 // OpenFile implements webdav.FileSystem.
 func (fs *webdavFS) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
-	drName, subPath, isRoot := parseWebdavPath(name)
+	kind, drName, subPath := parseWebdavPath(name)
 
-	if isRoot {
-		return fs.openRootDir(ctx)
+	switch kind {
+	case pathRoot:
+		return fs.openRootDir(), nil
+	case pathDataroomRoot:
+		return fs.openDataroomRootDir(ctx)
+	case pathUnknown:
+		return nil, os.ErrNotExist
+	case pathDataroomNode:
 	}
 
 	drID, err := fs.cache.idForName(ctx, drName)
@@ -641,7 +669,18 @@ func (fs *webdavFS) OpenFile(ctx context.Context, name string, flag int, perm os
 	return fs.openForRead(ctx, drID, wfi)
 }
 
-func (fs *webdavFS) openRootDir(ctx context.Context) (webdav.File, error) {
+// openRootDir lists the static top-level sections ("dataroom" for now).
+func (fs *webdavFS) openRootDir() webdav.File {
+	return &dirHandle{
+		info: &webdavFileInfo{name: "/", isDir: true},
+		entries: []os.FileInfo{
+			&webdavFileInfo{name: webdavSectionDataroom, isDir: true},
+		},
+	}
+}
+
+// openDataroomRootDir lists all datarooms under the "dataroom" section.
+func (fs *webdavFS) openDataroomRootDir(ctx context.Context) (webdav.File, error) {
 	names, err := fs.cache.allNames(ctx)
 	if err != nil {
 		return nil, err
@@ -652,7 +691,7 @@ func (fs *webdavFS) openRootDir(ctx context.Context) (webdav.File, error) {
 	}
 
 	return &dirHandle{
-		info:    &webdavFileInfo{name: "/", isDir: true},
+		info:    &webdavFileInfo{name: webdavSectionDataroom, isDir: true},
 		entries: entries,
 	}, nil
 }
@@ -827,8 +866,8 @@ func (fs *webdavFS) openForWrite(ctx context.Context, drID, subPath string) (web
 
 // Mkdir implements webdav.FileSystem.
 func (fs *webdavFS) Mkdir(ctx context.Context, name string, _ os.FileMode) error {
-	drName, subPath, isRoot := parseWebdavPath(name)
-	if isRoot || subPath == "/" {
+	kind, drName, subPath := parseWebdavPath(name)
+	if kind != pathDataroomNode || subPath == "/" {
 		return os.ErrPermission
 	}
 	drID, err := fs.cache.idForName(ctx, drName)
@@ -846,8 +885,8 @@ func (fs *webdavFS) Mkdir(ctx context.Context, name string, _ os.FileMode) error
 
 // RemoveAll implements webdav.FileSystem.
 func (fs *webdavFS) RemoveAll(ctx context.Context, name string) error {
-	drName, subPath, isRoot := parseWebdavPath(name)
-	if isRoot || subPath == "/" {
+	kind, drName, subPath := parseWebdavPath(name)
+	if kind != pathDataroomNode || subPath == "/" {
 		return os.ErrPermission
 	}
 	drID, err := fs.cache.idForName(ctx, drName)
@@ -865,10 +904,10 @@ func (fs *webdavFS) RemoveAll(ctx context.Context, name string) error {
 
 // Rename implements webdav.FileSystem.
 func (fs *webdavFS) Rename(ctx context.Context, oldName, newName string) error {
-	oldDR, oldSub, oldRoot := parseWebdavPath(oldName)
-	newDR, newSub, newRoot := parseWebdavPath(newName)
+	oldKind, oldDR, oldSub := parseWebdavPath(oldName)
+	newKind, newDR, newSub := parseWebdavPath(newName)
 
-	if oldRoot || newRoot || oldSub == "/" || newSub == "/" {
+	if oldKind != pathDataroomNode || newKind != pathDataroomNode || oldSub == "/" || newSub == "/" {
 		return os.ErrPermission
 	}
 
@@ -902,10 +941,16 @@ func (fs *webdavFS) Rename(ctx context.Context, oldName, newName string) error {
 
 // Stat implements webdav.FileSystem.
 func (fs *webdavFS) Stat(ctx context.Context, name string) (os.FileInfo, error) {
-	drName, subPath, isRoot := parseWebdavPath(name)
+	kind, drName, subPath := parseWebdavPath(name)
 
-	if isRoot {
+	switch kind {
+	case pathRoot:
 		return &webdavFileInfo{name: "/", isDir: true}, nil
+	case pathDataroomRoot:
+		return &webdavFileInfo{name: webdavSectionDataroom, isDir: true}, nil
+	case pathUnknown:
+		return nil, os.ErrNotExist
+	case pathDataroomNode:
 	}
 
 	drID, err := fs.cache.idForName(ctx, drName)
@@ -1046,6 +1091,9 @@ var webdavServeCmd = &cobra.Command{
 	Short: "Start a local WebDAV server exposing your datarooms",
 	Long: `Start a local WebDAV server on localhost that exposes all your RETYC datarooms.
 
+Datarooms are exposed under the /dataroom folder; other element types may be
+added at the root in the future.
+
 Key passphrase: set RETYC_KEY_PASSPHRASE (env var).
 
 Authentication: pass --auth to require HTTP Basic credentials (user "retyc").
@@ -1054,7 +1102,8 @@ printed at startup when the variable is unset.
 
 Example:
   RETYC_KEY_PASSPHRASE=your-passphrase retyc webdav serve --port 8888 --auth
-  # Then mount http://localhost:8888 in your WebDAV client`,
+  # Then mount http://localhost:8888 in your WebDAV client
+  # Datarooms appear under /dataroom`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Fail-fast: passphrase must be set before any crypto operation.
 		if os.Getenv("RETYC_KEY_PASSPHRASE") == "" {

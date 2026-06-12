@@ -45,34 +45,29 @@ func TestWebdavFileInfo_File(t *testing.T) {
 
 // — parseWebdavPath ———————————————————————————————————————————————————————————
 
-func TestParseWebdavPath_Root(t *testing.T) {
-	drName, subPath, isRoot := parseWebdavPath("/")
-	if !isRoot || drName != "" || subPath != "" {
-		t.Errorf("parseWebdavPath(\"/\") = (%q, %q, %v), want (\"\", \"\", true)", drName, subPath, isRoot)
+func TestParseWebdavPath(t *testing.T) {
+	cases := []struct {
+		in      string
+		kind    webdavPathKind
+		drName  string
+		subPath string
+	}{
+		{"/", pathRoot, "", ""},
+		{"/dataroom", pathDataroomRoot, "", ""},
+		{"/dataroom/", pathDataroomRoot, "", ""},
+		{"/dataroom/My Dataroom", pathDataroomNode, "My Dataroom", "/"},
+		{"/dataroom/My Dataroom/", pathDataroomNode, "My Dataroom", "/"},
+		{"/dataroom/My Dataroom/folder/file.txt", pathDataroomNode, "My Dataroom", "/folder/file.txt"},
+		{"/other", pathUnknown, "", ""},
+		{"/other/sub/path", pathUnknown, "", ""},
+		{"/datarooms", pathUnknown, "", ""},
 	}
-}
-
-func TestParseWebdavPath_DataroomOnly(t *testing.T) {
-	drName, subPath, isRoot := parseWebdavPath("/My Dataroom")
-	if isRoot || drName != "My Dataroom" || subPath != "/" {
-		t.Errorf("parseWebdavPath(\"/My Dataroom\") = (%q, %q, %v), want (\"My Dataroom\", \"/\", false)",
-			drName, subPath, isRoot)
-	}
-}
-
-func TestParseWebdavPath_DataroomTrailingSlash(t *testing.T) {
-	drName, subPath, isRoot := parseWebdavPath("/My Dataroom/")
-	if isRoot || drName != "My Dataroom" || subPath != "/" {
-		t.Errorf("parseWebdavPath(\"/My Dataroom/\") = (%q, %q, %v), want (\"My Dataroom\", \"/\", false)",
-			drName, subPath, isRoot)
-	}
-}
-
-func TestParseWebdavPath_DeepPath(t *testing.T) {
-	drName, subPath, isRoot := parseWebdavPath("/My Dataroom/folder/file.txt")
-	if isRoot || drName != "My Dataroom" || subPath != "/folder/file.txt" {
-		t.Errorf("parseWebdavPath(\"/My Dataroom/folder/file.txt\") = (%q, %q, %v)",
-			drName, subPath, isRoot)
+	for _, c := range cases {
+		kind, drName, subPath := parseWebdavPath(c.in)
+		if kind != c.kind || drName != c.drName || subPath != c.subPath {
+			t.Errorf("parseWebdavPath(%q) = (%v, %q, %q), want (%v, %q, %q)",
+				c.in, kind, drName, subPath, c.kind, c.drName, c.subPath)
+		}
 	}
 }
 
