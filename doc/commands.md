@@ -41,6 +41,20 @@ Glob patterns (`*`, `?`, `[...]`) are supported in remote paths.
 | `retyc dataroom user add <id> <email> [--role viewer\|editor\|admin]` | Add a member                             |
 | `retyc dataroom user rm <id> <user-id>`                               | Remove a member                          |
 
+## WebDAV
+
+Expose your datarooms as a mountable network drive (Finder, Explorer, file managers,
+any WebDAV client) with the same end-to-end encryption. See [webdav.md](webdav.md).
+
+| Command                                     | Description                                             |
+|---------------------------------------------|---------------------------------------------------------|
+| `retyc webdav serve`                        | Start a local WebDAV server (default `127.0.0.1:8888`)  |
+| `retyc webdav serve --port <n>`             | Listen on a custom port                                 |
+| `retyc webdav serve --addr <addr>`          | Bind to a specific address                              |
+| `retyc webdav serve --auth`                 | Require HTTP Basic auth (user `retyc`)                  |
+
+Requires `RETYC_KEY_PASSPHRASE`. Datarooms appear under `/dataroom`.
+
 ### Examples
 
 ```sh

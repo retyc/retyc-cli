@@ -111,6 +111,25 @@ double-click to install in Claude Desktop, no terminal needed. See [doc/mcpb.md]
 
 ---
 
+## WebDAV Server
+
+`retyc-cli` also runs as a local **WebDAV server** — mount your datarooms as a network
+drive in Finder, Windows Explorer or any WebDAV client and browse, open, upload, rename
+and delete files with the same end-to-end encryption. Files are encrypted and decrypted
+locally; the servers never see plaintext.
+
+```sh
+read -rs RETYC_KEY_PASSPHRASE
+export RETYC_KEY_PASSPHRASE
+
+retyc webdav serve            # → http://localhost:8888  (datarooms under /dataroom)
+```
+
+Full guide (mounting on macOS/Windows/Linux, authentication, limitations):
+[doc/webdav.md](doc/webdav.md).
+
+---
+
 ## Privacy Policy
 
 This software (CLI and MCP server) embeds the entire encryption layer: file
@@ -128,6 +147,7 @@ Full policy: <https://retyc.com/legal/data-policy>
 | Topic                        | Link                                         |
 |------------------------------|----------------------------------------------|
 | Full commands reference      | [doc/commands.md](doc/commands.md)           |
+| WebDAV server                | [doc/webdav.md](doc/webdav.md)               |
 | MCP server + tools reference | [doc/mcp.md](doc/mcp.md)                     |
 | Docker usage                 | [doc/docker.md](doc/docker.md)               |
 | Claude Desktop bundle (MCPB) | [doc/mcpb.md](doc/mcpb.md)                   |
