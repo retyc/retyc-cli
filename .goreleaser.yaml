@@ -46,5 +46,8 @@ checksum:
   name_template: '{{ .ProjectName }}_sha256_checksums.txt'
   algorithm: sha256
 
+release:
+  replace_existing_artifacts: true
+
 changelog:
   use: github-native
