@@ -4,6 +4,7 @@
 /main
 *.exe
 /dist
+/config.yaml
 
 # Config
 /.retyc
