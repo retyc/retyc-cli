@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 	"golang.org/x/oauth2"
@@ -40,10 +41,20 @@ type KeyringConfig struct {
 	TTL     int  `yaml:"ttl" mapstructure:"ttl"`
 }
 
+// AdminConfig holds the admin (organization public API) parameters.
+// The API key authenticates as a bearer token; the private key file holds the
+// organization AGE identity, kept outside the platform.
+type AdminConfig struct {
+	APIKey         string `yaml:"api_key" mapstructure:"api_key"`
+	PrivateKeyFile string `yaml:"private_key_file" mapstructure:"private_key_file"`
+	BaseURL        string `yaml:"base_url" mapstructure:"base_url"`
+}
+
 // Config is the top-level configuration structure.
 type Config struct {
 	API     APIConfig     `yaml:"api" mapstructure:"api"`
 	Keyring KeyringConfig `yaml:"keyring" mapstructure:"keyring"`
+	Admin   AdminConfig   `yaml:"admin" mapstructure:"admin"`
 }
 
 // SetDefaults registers the default configuration values in viper.
@@ -53,6 +64,11 @@ func SetDefaults() {
 	viper.SetDefault("api.base_url", defaultAPIBaseURL)
 	viper.SetDefault("keyring.enabled", true)
 	viper.SetDefault("keyring.ttl", 60)
+	viper.SetDefault("admin.base_url", "")
+	viper.SetDefault("admin.api_key", "")
+	viper.SetDefault("admin.private_key_file", "")
+	_ = viper.BindEnv("admin.api_key", "RETYC_ADMIN_API_KEY")
+	_ = viper.BindEnv("admin.private_key_file", "RETYC_ADMIN_PRIVATE_KEY_FILE")
 }
 
 // Load reads the active viper configuration and returns a Config struct.
@@ -64,6 +80,16 @@ func Load() (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// AdminBaseURL returns the admin API base URL. When not explicitly configured,
+// it is derived from the member API base URL by appending the /v1 prefix.
+func (c *Config) AdminBaseURL() string {
+	if c.Admin.BaseURL != "" {
+		return c.Admin.BaseURL
+	}
+
+	return strings.TrimRight(c.API.BaseURL, "/") + "/v1"
 }
 
 // tokenPath returns the path to the stored token file.
