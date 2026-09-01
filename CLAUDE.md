@@ -15,6 +15,7 @@ cmd/
                                #   newTransferBar, uploadChunks, downloadChunks
   transfer.go                  # transfer ls/info/create/download/enable/disable
   dataroom.go                  # dataroom commands (ls, cp, mv, rm, mkdir, create, info, user)
+  admin*.go                    # admin org/member/blacklist/dataroom/transfer (organization API key auth)
   mcp.go                       # mcp serve (stdio MCP server) + tool registry
   mcp_manifest.go              # mcp manifest — full MCPB manifest.json (version + tools injected)
   mcpb_manifest_base.json      # static MCPB manifest metadata (go:embed into mcp_manifest.go)
@@ -30,6 +31,9 @@ internal/
                                 #   CompleteTransfer, DisableTransfer, EnableTransfer
     dataroom.go                 # Dataroom types + all dataroom API methods
     user.go                     # UserKey type + GetActiveKey
+    admin*.go                   # Admin* types + Admin* API methods (org/member/blacklist/dataroom/transfer)
+  service/
+    admin*.go                    # AdminListNodes, AdminDownloadNodes, AdminRekeyDataroom/Transfer, LoadAdminIdentity
   config/
     config.go                   # Structs, SetDefaults(), Load(), token persistence
     paths_dev.go                # configDir() + defaultAPIBaseURL for dev
@@ -280,6 +284,51 @@ the session material. Returns `*dataroomSession{Identity, PublicKey, PrivateKey,
 Fetches dataroom + user key concurrently (with internal spinner), stops spinner before passphrase
 prompt, decrypts the session key, then decrypts `node_name_salt_enc` if present. All node
 commands call this. The `NameSalt` is "" for datarooms that pre-date the salt field.
+
+## Admin commands (`retyc admin`)
+
+Organization administration through the public API (`<api.base_url>/v1`,
+OpenAPI at `/v1/openapi.json`). Auth: organization API key (`ryc_...`) as a
+bearer token — the existing `api.Client` is reused with
+`oauth2.StaticTokenSource`. Scopes: `organization|dataroom|transfer` ×
+`read|write`; on 403 the CLI hints at `retyc admin org scopes`.
+
+Config (`admin:` section / env):
+- `admin.api_key` / `RETYC_ADMIN_API_KEY` — required by all admin commands
+- `admin.private_key_file` / `RETYC_ADMIN_PRIVATE_KEY_FILE` — organization
+  organization AGE PQ identity file; only required by decrypt/rekey commands
+- `admin.base_url` — default `<api.base_url>/v1`
+
+Crypto: the organization private key stays local (never fetched, no passphrase, no
+keyring). `service.ResolveAdminDataroomSession` decrypts
+`session_private_key_enc` with it (NameSalt empty — admin is read-only on
+nodes, no name_hash). Rekey (dataroom + transfer): decrypt session key with
+the organization identity, re-encrypt with `expected_public_key` (falling back to
+`public_key`) of every current member/recipient — service account included,
+keyless external recipients skipped (their passphrase access is separate) —
+then PUT the blob; the server stores it as-is. `admin dataroom user rm`
+chains a rekey automatically.
+
+`admin dataroom download <id> [glob]` recreates the dataroom's folder tree
+under the output directory (`-o`, default `.`) — files are written at their
+relative path, not flattened; folders matched by the glob are skipped
+(admin download does not recurse into them).
+
+Command groups: `admin org` (info/update/scopes), `admin member`
+(ls/info/role/enable/disable/rm — rm warns when membership is MANAGED),
+`admin blacklist` (ls/add/rm), `admin dataroom`
+(ls/info/activity/nodes/download/chown/user rm/rekey/rm), `admin transfer`
+(ls/info/tracking/disable/enable/rm --force/rekey).
+
+`admin export-all-data <output_dir>` (`service.AdminExportAll`) exports the
+whole organization for data reversibility: `export.json` manifest,
+`organization.json`, `members.json` (with identity details),
+`blacklist_domains.json`, and per dataroom `meta.json` + `messages/N.json`
+(one file per activity page, chat decrypted when possible) + `data/`
+(decrypted tree via `AdminDownloadNodes`). Output dir must be missing or
+empty. Undecryptable datarooms keep meta+messages, are listed as skipped in
+the manifest; per-dataroom failures are recorded and the export continues
+(non-zero exit at the end). Transfers excluded (no admin file download).
 
 ## MCPB bundle (Claude Desktop extension)
 

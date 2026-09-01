@@ -167,3 +167,44 @@ func TestConfigDir_EnvOverride(t *testing.T) {
 		t.Errorf("ConfigDir() = %q, want %q", got, dir)
 	}
 }
+
+func TestAdminBaseURL_Derived(t *testing.T) {
+	cfg := &Config{API: APIConfig{BaseURL: "https://api.example.com"}}
+	if got := cfg.AdminBaseURL(); got != "https://api.example.com/v1" {
+		t.Errorf("AdminBaseURL() = %q, want %q", got, "https://api.example.com/v1")
+	}
+}
+
+func TestAdminBaseURL_DerivedTrailingSlash(t *testing.T) {
+	cfg := &Config{API: APIConfig{BaseURL: "https://api.example.com/"}}
+	if got := cfg.AdminBaseURL(); got != "https://api.example.com/v1" {
+		t.Errorf("AdminBaseURL() = %q, want %q", got, "https://api.example.com/v1")
+	}
+}
+
+func TestAdminBaseURL_Explicit(t *testing.T) {
+	cfg := &Config{
+		API:   APIConfig{BaseURL: "https://api.example.com"},
+		Admin: AdminConfig{BaseURL: "https://other.example.com/v2"},
+	}
+	if got := cfg.AdminBaseURL(); got != "https://other.example.com/v2" {
+		t.Errorf("AdminBaseURL() = %q, want %q", got, "https://other.example.com/v2")
+	}
+}
+
+func TestAdminEnvBinding(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_ADMIN_API_KEY", "ryc_test123")
+	t.Setenv("RETYC_ADMIN_PRIVATE_KEY_FILE", "/tmp/key.txt")
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Admin.APIKey != "ryc_test123" {
+		t.Errorf("Admin.APIKey = %q, want ryc_test123", cfg.Admin.APIKey)
+	}
+	if cfg.Admin.PrivateKeyFile != "/tmp/key.txt" {
+		t.Errorf("Admin.PrivateKeyFile = %q, want /tmp/key.txt", cfg.Admin.PrivateKeyFile)
+	}
+}

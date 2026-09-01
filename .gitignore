@@ -4,9 +4,13 @@
 /main
 *.exe
 /dist
+/config.yaml
 
 # Config
 /.retyc
+
+# Local dev admin key material — never committed
+/dev-priv-key.txt
 
 # Test coverage
 coverage.out
@@ -24,3 +28,6 @@ vendor/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local design docs (superpowers specs/plans) — never committed
+/docs/superpowers/
