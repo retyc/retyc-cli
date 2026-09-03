@@ -42,8 +42,15 @@ Transfers are not exported: the admin API exposes no transfer file download.`,
 		}
 
 		m := result.Manifest
-		fmt.Printf("Export complete: %d member(s), %d blacklisted domain(s), %d/%d dataroom(s) to %s\n",
-			m.Members, m.BlacklistDomains, m.DataroomsExported, m.Datarooms, args[0])
+		if jsonOutput {
+			// The manifest is the same document written to export.json.
+			if err := printJSON(m); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("Export complete: %d member(s), %d blacklisted domain(s), %d/%d dataroom(s) to %s\n",
+				m.Members, m.BlacklistDomains, m.DataroomsExported, m.Datarooms, args[0])
+		}
 		for _, s := range m.DataroomsSkipped {
 			fmt.Fprintf(os.Stderr, "Skipped dataroom %s (%s): %s\n", s.ID, s.Title, s.Reason)
 		}

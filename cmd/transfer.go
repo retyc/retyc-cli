@@ -53,6 +53,10 @@ var transferLsCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			return printJSON(newPagedJSON(result.Items, result.Total, result.Page, result.Pages))
+		}
+
 		if len(result.Items) == 0 {
 			fmt.Printf("No %s transfers found.\n", listType)
 
@@ -102,6 +106,10 @@ var transferInfoCmd = &cobra.Command{
 		s.Stop()
 		if err != nil {
 			return err
+		}
+
+		if jsonOutput {
+			return printJSON(newTransferInfoJSON(info))
 		}
 
 		d := info.Details
@@ -219,7 +227,11 @@ func fetchTransferDetailsAndKey(
 }
 
 // confirmFileList prints a summary of files and prompts the user to proceed.
-func confirmFileList(names []string, sizes []int64, totalSize int64, extras []string) bool {
+// With --json it returns errJSONNeedsYes without printing anything.
+func confirmFileList(names []string, sizes []int64, totalSize int64, extras []string) (bool, error) {
+	if jsonOutput {
+		return false, errJSONNeedsYes
+	}
 	const lineWidth = 44
 	fmt.Fprintln(os.Stderr)
 	for i, name := range names {
@@ -240,11 +252,8 @@ func confirmFileList(names []string, sizes []int64, totalSize int64, extras []st
 		fmt.Fprintln(os.Stderr, extra)
 	}
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprint(os.Stderr, "Proceed? [y/N] ")
-	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	fmt.Fprintln(os.Stderr)
 
-	return strings.ToLower(strings.TrimSpace(answer)) == "y"
+	return confirm("Proceed?", false)
 }
 
 // printBoxedMessage prints a decrypted message with a left vertical bar.
@@ -318,7 +327,11 @@ var transferCreateCmd = &cobra.Command{
 				extras = append(extras, fmt.Sprintf("  To:       %s", strings.Join(toEmails, ", ")))
 			}
 			extras = append(extras, fmt.Sprintf("  Expires:  %s", formatExpiry(expire)))
-			if !confirmFileList(names, sizes, totalSize, extras) {
+			ok, err := confirmFileList(names, sizes, totalSize, extras)
+			if err != nil {
+				return err
+			}
+			if !ok {
 				fmt.Fprintln(os.Stderr, "Aborted.")
 
 				return nil
@@ -376,6 +389,15 @@ var transferCreateCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			out := transferCreateJSON{ID: result.ID, WebURL: result.WebURL}
+			if genPassphrase {
+				out.Passphrase = result.Passphrase
+			}
+
+			return printJSON(out)
+		}
+
 		fmt.Printf("Transfer %s ready.\n", result.ID)
 		if result.WebURL != "" {
 			fmt.Printf("URL: %s\n", result.WebURL)
@@ -422,6 +444,9 @@ var transferDisableCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			return printJSON(idStatusJSON{ID: args[0], Status: "disabled"})
+		}
 		fmt.Printf("Transfer %s disabled.\n", args[0])
 
 		return nil
@@ -447,6 +472,9 @@ var transferEnableCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			return printJSON(idStatusJSON{ID: args[0], Status: "enabled"})
+		}
 		fmt.Printf("Transfer %s enabled.\n", args[0])
 
 		return nil
@@ -511,7 +539,11 @@ var transferDownloadCmd = &cobra.Command{
 			if dest == "" {
 				dest = "transfer-<random>"
 			}
-			if !confirmFileList(names, sizes, totalSize, []string{fmt.Sprintf("  Destination:  %s/", dest)}) {
+			ok, err := confirmFileList(names, sizes, totalSize, []string{fmt.Sprintf("  Destination:  %s/", dest)})
+			if err != nil {
+				return err
+			}
+			if !ok {
 				fmt.Fprintln(os.Stderr, "Aborted.")
 
 				return nil
@@ -528,6 +560,9 @@ var transferDownloadCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			return printJSON(downloadJSON{OutputDir: result.OutputDir, Files: nonNil(result.Files)})
+		}
 		fmt.Fprintf(os.Stderr, "\nDownloaded to %s/\n", result.OutputDir)
 
 		return nil

@@ -13,6 +13,7 @@ cmd/
   auth.go                      # auth login / logout / status + newHTTPClient + debugTransport
   common.go                    # Shared helpers: constants, newAPIClient, resolveUserIdentity,
                                #   newTransferBar, uploadChunks, downloadChunks
+  output.go                    # --json support: printJSON, printError, confirm, JSON view types
   transfer.go                  # transfer ls/info/create/download/enable/disable
   dataroom.go                  # dataroom commands (ls, cp, mv, rm, mkdir, create, info, user)
   admin*.go                    # admin org/member/blacklist/dataroom/transfer (organization API key auth)
@@ -98,6 +99,24 @@ All overridable from `~/.config/retyc/config.yaml` (prod) or `.retyc/config.yaml
 | `--insecure` | `-k` | false | Skip TLS verification (self-signed certs) |
 | `--debug` | `-d` | false | Print all HTTP requests + raw responses to stderr |
 | `--config` | | auto | Override config file path |
+| `--json` | | false | Results as JSON on stdout, errors as `{"error":...}` on stderr |
+
+## JSON output (`--json`)
+
+Convention: **stdout = results only, stderr = everything else** (prompts, spinners,
+progress bars, service warnings, device-flow instructions). `cmd/output.go` holds
+`jsonOutput`, `printJSON`, `printError` (used by `Execute()`), `confirm(prompt, yes)`
+and the CLI-only JSON view types (`pagedJSON`, `itemsJSON`, `idStatusJSON`,
+`transferInfoJSON`, `dataroomNodeJSON`, `rekeyJSON`, ...).
+
+Rules when adding a command:
+- Branch `if jsonOutput { return printJSON(v) }` right where human formatting starts.
+- Reuse tagged `api.*` structs directly; **never add `json` tags to `internal/service`
+  result structs** — they are marshalled as-is by the MCP server and its output must
+  not change. Build a view type in `cmd/output.go` instead.
+- Confirmation prompts go through `confirm()`: with `--json` and no `--yes` it returns
+  `errJSONNeedsYes` instead of prompting.
+- Empty lists are `[]`, never `null` (`nonNil`, `newPagedJSON`, `newItemsJSON`).
 
 `--debug` covers **all** HTTP traffic: API calls (via `api.Client.do` / `GetBytes`) and unauthenticated calls (`FetchOIDCConfig`, device flow, token refresh) via `debugTransport` wrapping the `*http.Client` RoundTripper in `newHTTPClient`.
 
