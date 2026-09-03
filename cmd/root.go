@@ -45,7 +45,8 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: "+defaultCfgHint+")")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "print raw API responses to stderr")
-	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "print results as JSON on stdout (errors as JSON on stderr)")
+	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false,
+		"print results as JSON on stdout (errors as JSON on stderr)")
 }
 
 // cliUserAgent returns the User-Agent string used for all outgoing HTTP requests.
