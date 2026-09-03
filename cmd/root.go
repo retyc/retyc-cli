@@ -63,7 +63,8 @@ func initConfig() {
 	} else {
 		dir, err := config.ConfigDir()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "could not determine config directory:", err)
+			// Flags are already parsed here (cobra.OnInitialize), so --json is honoured.
+			printError(fmt.Errorf("could not determine config directory: %w", err))
 			os.Exit(1)
 		}
 

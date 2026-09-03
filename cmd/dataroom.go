@@ -86,7 +86,7 @@ var dataroomLsCmd = &cobra.Command{
 		}
 
 		if jsonOutput {
-			return printJSON(newDataroomNodesJSON(nodes))
+			return printJSON(newItemsJSON(newDataroomNodesJSON(nodes)))
 		}
 
 		if len(nodes) == 0 {
