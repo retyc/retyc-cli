@@ -46,6 +46,10 @@ var adminOrgInfoCmd = &cobra.Command{
 			return adminErrHint(qr.err)
 		}
 
+		if jsonOutput {
+			return printJSON(adminOrgInfoJSON{Organization: or.v, Quota: qr.v})
+		}
+
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(w, "ID:\t%s\n", or.v.ID)
 		fmt.Fprintf(w, "Name:\t%s\n", or.v.Name)
@@ -98,6 +102,9 @@ var adminOrgUpdateCmd = &cobra.Command{
 		if err != nil {
 			return adminErrHint(err)
 		}
+		if jsonOutput {
+			return printJSON(org)
+		}
 		fmt.Printf("Organization %q updated.\n", org.Name)
 
 		return nil
@@ -116,6 +123,11 @@ var adminOrgScopesCmd = &cobra.Command{
 		scopes, err := client.AdminGetScopes(cmd.Context())
 		if err != nil {
 			return adminErrHint(err)
+		}
+		if jsonOutput {
+			return printJSON(struct {
+				Scopes []string `json:"scopes"`
+			}{nonNil(scopes)})
 		}
 		fmt.Println(strings.Join(scopes, "\n"))
 

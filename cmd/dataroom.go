@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -48,6 +47,9 @@ var dataroomLsCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
+			if jsonOutput {
+				return printJSON(newPagedJSON(result.Items, result.Total, result.Page, result.Pages))
+			}
 			if len(result.Items) == 0 {
 				fmt.Println("No datarooms found.")
 
@@ -81,6 +83,10 @@ var dataroomLsCmd = &cobra.Command{
 		s.Stop()
 		if err != nil {
 			return err
+		}
+
+		if jsonOutput {
+			return printJSON(newItemsJSON(newDataroomNodesJSON(nodes)))
 		}
 
 		if len(nodes) == 0 {
@@ -126,6 +132,9 @@ var dataroomCreateCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			return printJSON(dataroomCreateJSON{ID: result.ID, Title: result.Title})
+		}
 		fmt.Printf("Dataroom %s created.\n", result.ID)
 		if result.Title != "" {
 			fmt.Printf("Title: %s\n", result.Title)
@@ -156,6 +165,11 @@ var dataroomInfoCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			return printJSON(dataroomInfoJSON{
+				Dataroom: info.Dataroom, Stats: info.Stats, Users: nonNil(info.Users),
+			})
+		}
 		fmt.Printf("ID:      %s\n", info.Dataroom.ID)
 		fmt.Printf("Title:   %s\n", info.Dataroom.Title)
 		fmt.Printf("Created: %s\n", info.Dataroom.CreatedAt.Format("2006-01-02 15:04"))
@@ -203,6 +217,13 @@ var dataroomUserAddCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			return printJSON(struct {
+				DataroomID string `json:"dataroom_id"`
+				Email      string `json:"email"`
+				Role       string `json:"role"`
+			}{drID, email, role})
+		}
 		fmt.Printf("Added %s with role %s.\n", email, role)
 
 		return nil
@@ -233,6 +254,13 @@ var dataroomUserRmCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			return printJSON(struct {
+				DataroomID string `json:"dataroom_id"`
+				UserID     string `json:"user_id"`
+				Status     string `json:"status"`
+			}{drID, userID, "removed"})
+		}
 		fmt.Printf("User %s removed.\n", userID)
 
 		return nil
@@ -312,6 +340,9 @@ func dataroomUpload(ctx context.Context, localPaths []string, dstURI string, yes
 	}
 
 	if !yes {
+		if jsonOutput {
+			return errJSONNeedsYes
+		}
 		const lineWidth = 44
 		fmt.Fprintln(os.Stderr)
 		for _, e := range entries {
@@ -349,10 +380,11 @@ func dataroomUpload(ctx context.Context, localPaths []string, dstURI string, yes
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintf(os.Stderr, "  Destination:  %s\n", dstURI)
 		fmt.Fprintln(os.Stderr)
-		fmt.Fprint(os.Stderr, "Proceed? [y/N] ")
-		answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		fmt.Fprintln(os.Stderr)
-		if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+		ok, err := confirm("Proceed?", false)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			fmt.Fprintln(os.Stderr, "Aborted.")
 
 			return nil
@@ -382,7 +414,22 @@ func dataroomUpload(ctx context.Context, localPaths []string, dstURI string, yes
 
 	bars := make(map[string]*progressbar.ProgressBar)
 
-	return service.UploadToDataroom(uploadCtx, cfg, client, localPaths, dstURI, readKeyPassphrase, cliProgressFn(bars))
+	if err := service.UploadToDataroom(
+		uploadCtx, cfg, client, localPaths, dstURI, readKeyPassphrase, cliProgressFn(bars),
+	); err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		// UploadToDataroom reports no per-node result, so only completion is reported.
+		return printJSON(struct {
+			Uploaded    bool     `json:"uploaded"`
+			Sources     []string `json:"sources"`
+			Destination string   `json:"destination"`
+		}{true, localPaths, dstURI})
+	}
+
+	return nil
 }
 
 func dataroomDownload(ctx context.Context, srcURI, localDst string) error {
@@ -400,6 +447,9 @@ func dataroomDownload(ctx context.Context, srcURI, localDst string) error {
 		return err
 	}
 
+	if jsonOutput {
+		return printJSON(downloadJSON{OutputDir: localDst, Files: nonNil(files)})
+	}
 	fmt.Fprintf(os.Stderr, "\nDownloaded %d file(s) to %s/\n", len(files), localDst)
 
 	return nil
@@ -426,6 +476,12 @@ var dataroomMvCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			return printJSON(struct {
+				Source      string `json:"source"`
+				Destination string `json:"destination"`
+			}{args[0], args[1]})
+		}
 		fmt.Printf("Moved %s → %s\n", args[0], args[1])
 
 		return nil
@@ -450,18 +506,18 @@ var dataroomRmCmd = &cobra.Command{
 			return err
 		}
 
-		if !yes {
-			if parsed.IsRoot() {
-				fmt.Fprintf(os.Stderr, "Delete dataroom %s and all its contents? [y/N] ", parsed.DataroomID)
-			} else {
-				fmt.Fprintf(os.Stderr, "Delete %s? [y/N] ", uri)
-			}
-			answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			if strings.ToLower(strings.TrimSpace(answer)) != "y" {
-				fmt.Fprintln(os.Stderr, "Aborted.")
+		prompt := fmt.Sprintf("Delete %s?", uri)
+		if parsed.IsRoot() {
+			prompt = fmt.Sprintf("Delete dataroom %s and all its contents?", parsed.DataroomID)
+		}
+		ok, err := confirm(prompt, yes)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Aborted.")
 
-				return nil
-			}
+			return nil
 		}
 
 		cfg, client, err := newAPIClient(ctx)
@@ -475,6 +531,14 @@ var dataroomRmCmd = &cobra.Command{
 		s.Stop()
 		if err != nil {
 			return err
+		}
+
+		if jsonOutput {
+			return printJSON(struct {
+				DataroomID   string `json:"dataroom_id"`
+				URI          string `json:"uri"`
+				DeletedCount int    `json:"deleted_count"`
+			}{parsed.DataroomID, uri, count})
 		}
 
 		if parsed.IsRoot() {
@@ -510,6 +574,12 @@ var dataroomMkdirCmd = &cobra.Command{
 			return err
 		}
 
+		if jsonOutput {
+			return printJSON(struct {
+				NodeID string `json:"node_id"`
+				URI    string `json:"uri"`
+			}{nodeID, args[0]})
+		}
 		fmt.Printf("Created %s (id: %s)\n", args[0], nodeID)
 
 		return nil

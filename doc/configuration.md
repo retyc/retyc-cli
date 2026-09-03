@@ -68,3 +68,4 @@ the API and is not cached in the keyring.
 | `--config <file>` |       | Use a specific config file                                                                                            |
 | `--insecure`      | `-k`  | Skip TLS certificate verification *(dev builds only — can be set persistently via `insecure: true` in `config.yaml`)* |
 | `--debug`         |       | Enable debug mode                                                                                                     |
+| `--json`          |       | Print results as JSON on stdout, errors as `{"error": "..."}` on stderr (see [JSON output](commands.md#json-output))  |

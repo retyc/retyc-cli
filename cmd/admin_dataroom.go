@@ -39,6 +39,9 @@ var adminDataroomLsCmd = &cobra.Command{
 				break
 			}
 		}
+		if jsonOutput {
+			return printJSON(newItemsJSON(rooms))
+		}
 		if len(rooms) == 0 {
 			fmt.Println("No datarooms found.")
 
@@ -87,13 +90,6 @@ var adminDataroomInfoCmd = &cobra.Command{
 			return adminErrHint(ur.err)
 		}
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintf(w, "ID:\t%s\n", dr.v.ID)
-		fmt.Fprintf(w, "Title:\t%s\n", dr.v.Title)
-		fmt.Fprintf(w, "Owner:\t%s\n", dr.v.OwnerEmail)
-		fmt.Fprintf(w, "Status:\t%s\n", dr.v.Status)
-		fmt.Fprintf(w, "Created:\t%s\n", dr.v.CreatedAt.Format("2006-01-02 15:04"))
-
 		// The organization key opens the dataroom only if it was rekeyed for the org.
 		orgKeyAccess := "unknown (no organization key file configured)"
 		if cfg.Admin.PrivateKeyFile != "" {
@@ -109,6 +105,19 @@ var adminDataroomInfoCmd = &cobra.Command{
 				}
 			}
 		}
+
+		if jsonOutput {
+			return printJSON(adminDataroomInfoJSON{
+				Dataroom: dr.v, Users: nonNil(ur.v), OrganizationKeyAccess: orgKeyAccess,
+			})
+		}
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintf(w, "ID:\t%s\n", dr.v.ID)
+		fmt.Fprintf(w, "Title:\t%s\n", dr.v.Title)
+		fmt.Fprintf(w, "Owner:\t%s\n", dr.v.OwnerEmail)
+		fmt.Fprintf(w, "Status:\t%s\n", dr.v.Status)
+		fmt.Fprintf(w, "Created:\t%s\n", dr.v.CreatedAt.Format("2006-01-02 15:04"))
 		fmt.Fprintf(w, "Organization key access:\t%s\n", orgKeyAccess)
 		_ = w.Flush()
 
@@ -154,7 +163,7 @@ var adminDataroomActivityCmd = &cobra.Command{
 				break
 			}
 		}
-		if len(msgs) == 0 {
+		if len(msgs) == 0 && !jsonOutput {
 			fmt.Println("No activity.")
 
 			return nil
@@ -168,6 +177,23 @@ var adminDataroomActivityCmd = &cobra.Command{
 			if orgKey, idErr := adminIdentity(cfg); idErr == nil {
 				sess, _ = service.ResolveAdminDataroomSession(ctx, client, orgKey, args[0])
 			}
+		}
+
+		if jsonOutput {
+			// Same shape as the export's messages/N.json: raw message + decrypted
+			// chat content when the organization key opens the dataroom.
+			items := make([]service.AdminExportMessage, 0, len(msgs))
+			for _, m := range msgs {
+				entry := service.AdminExportMessage{AdminDataroomMessage: m}
+				if m.MessageType == "chat" && sess != nil && m.ContentEnc != nil {
+					if content, decErr := crypto.DecryptToString(*m.ContentEnc, sess.Identity); decErr == nil {
+						entry.Content = &content
+					}
+				}
+				items = append(items, entry)
+			}
+
+			return printJSON(newItemsJSON(items))
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -216,6 +242,9 @@ var adminDataroomNodesCmd = &cobra.Command{
 		s.Stop()
 		if err != nil {
 			return adminErrHint(err)
+		}
+		if jsonOutput {
+			return printJSON(newItemsJSON(newAdminNodesJSON(nodes)))
 		}
 		if len(nodes) == 0 {
 			fmt.Println("Empty dataroom.")
@@ -270,6 +299,13 @@ var adminDataroomDownloadCmd = &cobra.Command{
 		}
 		// The dataroom's folder structure is recreated under outputDir, so
 		// result.Downloaded holds paths relative to outputDir, not bare filenames.
+		if jsonOutput {
+			return printJSON(adminDownloadJSON{
+				OutputDir:      outputDir,
+				Downloaded:     nonNil(result.Downloaded),
+				SkippedFolders: nonNil(result.SkippedFolders),
+			})
+		}
 		fmt.Printf("Downloaded %d file(s) to %s\n", len(result.Downloaded), outputDir)
 
 		return nil
@@ -287,6 +323,12 @@ var adminDataroomChownCmd = &cobra.Command{
 		}
 		if err := client.AdminTransferDataroomOwnership(cmd.Context(), args[0], args[1]); err != nil {
 			return adminErrHint(err)
+		}
+		if jsonOutput {
+			return printJSON(struct {
+				DataroomID string `json:"dataroom_id"`
+				OwnerID    string `json:"owner_id"`
+			}{args[0], args[1]})
 		}
 		fmt.Printf("Dataroom %s ownership transferred to %s.\n", args[0], args[1])
 
@@ -313,7 +355,11 @@ var adminDataroomUserRmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if !yes && !askConfirm(fmt.Sprintf("Remove user %s from dataroom %s and rekey?", args[1], args[0])) {
+		ok, err := confirm(fmt.Sprintf("Remove user %s from dataroom %s and rekey?", args[1], args[0]), yes)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			fmt.Fprintln(os.Stderr, "Aborted.")
 
 			return nil
@@ -325,6 +371,14 @@ var adminDataroomUserRmCmd = &cobra.Command{
 		result, err := service.AdminRekeyDataroom(cmd.Context(), client, orgKey, args[0])
 		if err != nil {
 			return fmt.Errorf("user removed but rekey FAILED (the user may still decrypt): %w", err)
+		}
+		if jsonOutput {
+			return printJSON(struct {
+				DataroomID string    `json:"dataroom_id"`
+				UserID     string    `json:"user_id"`
+				Status     string    `json:"status"`
+				Rekey      rekeyJSON `json:"rekey"`
+			}{args[0], args[1], "removed", newRekeyJSON(result)})
 		}
 		fmt.Printf("User removed; session key re-encrypted for %d key(s).\n", result.Reencrypted)
 
@@ -349,6 +403,9 @@ var adminDataroomRekeyCmd = &cobra.Command{
 		if err != nil {
 			return adminErrHint(err)
 		}
+		if jsonOutput {
+			return printJSON(newRekeyJSON(result))
+		}
 		fmt.Printf("Session key re-encrypted for %d key(s).\n", result.Reencrypted)
 		for _, s := range result.Skipped {
 			fmt.Fprintf(os.Stderr, "Skipped %s (no public key)\n", s)
@@ -368,13 +425,20 @@ var adminDataroomRmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if !yes && !askConfirm(fmt.Sprintf("Delete dataroom %s and all its contents?", args[0])) {
+		ok, err := confirm(fmt.Sprintf("Delete dataroom %s and all its contents?", args[0]), yes)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			fmt.Fprintln(os.Stderr, "Aborted.")
 
 			return nil
 		}
 		if err := client.AdminDeleteDataroom(cmd.Context(), args[0]); err != nil {
 			return adminErrHint(err)
+		}
+		if jsonOutput {
+			return printJSON(idStatusJSON{ID: args[0], Status: "deleted"})
 		}
 		fmt.Printf("Dataroom %s deleted.\n", args[0])
 

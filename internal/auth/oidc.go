@@ -69,9 +69,10 @@ func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Cli
 		return nil, fmt.Errorf("requesting device code: %w", err)
 	}
 
-	// Prompt the user to visit the verification URI
-	fmt.Printf("\nOpen the following URL in your browser:\n\n  %s\n\n", devResp.VerificationURIComplete)
-	fmt.Printf("Enter code: %s\n\n", devResp.UserCode)
+	// Prompt the user to visit the verification URI. Written to stderr so that
+	// stdout stays reserved for command results (e.g. --json output).
+	fmt.Fprintf(os.Stderr, "\nOpen the following URL in your browser:\n\n  %s\n\n", devResp.VerificationURIComplete)
+	fmt.Fprintf(os.Stderr, "Enter code: %s\n\n", devResp.UserCode)
 
 	spinner := ui.NewSpinner("Waiting for authentication…")
 	spinner.Start()

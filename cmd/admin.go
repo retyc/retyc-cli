@@ -2,9 +2,7 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"strings"
 
 	"filippo.io/age"
@@ -69,14 +67,6 @@ func adminErrHint(err error) error {
 	}
 
 	return err
-}
-
-// askConfirm prints prompt on stderr and returns true when the user answers y.
-func askConfirm(prompt string) bool {
-	fmt.Fprintf(os.Stderr, "%s [y/N] ", prompt)
-	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-
-	return strings.ToLower(strings.TrimSpace(answer)) == "y"
 }
 
 func init() {

@@ -62,6 +62,9 @@ var authLoginCmd = &cobra.Command{
 			}
 			// Do not persist to disk: the offline token is intended to be copied
 			// into RETYC_TOKEN and used non-interactively in CI/CD pipelines.
+			if jsonOutput {
+				return printJSON(authLoginJSON{Authenticated: true, OfflineToken: token.RefreshToken})
+			}
 			fmt.Println("Authentication successful.")
 			fmt.Println()
 			fmt.Println("Offline token (set as RETYC_TOKEN in CI):")
@@ -74,6 +77,9 @@ var authLoginCmd = &cobra.Command{
 			return fmt.Errorf("saving token: %w", err)
 		}
 
+		if jsonOutput {
+			return printJSON(authLoginJSON{Authenticated: true})
+		}
 		fmt.Println("Authentication successful.")
 
 		return nil
@@ -97,6 +103,11 @@ var authLogoutCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if jsonOutput {
+			return printJSON(struct {
+				LoggedOut bool `json:"logged_out"`
+			}{true})
+		}
 		fmt.Println("Logged out.")
 
 		return nil
@@ -114,15 +125,25 @@ var authStatusCmd = &cobra.Command{
 
 		envToken := auth.EnvToken()
 
+		// notAuthenticated reports a non-authenticated state: JSON on stdout
+		// with --json, otherwise the human message. Exit code stays 0 — this
+		// is a status report, not a failure.
+		notAuthenticated := func(reason, msg string) error {
+			if jsonOutput {
+				return printJSON(authStatusJSON{Authenticated: false, Reason: reason})
+			}
+			fmt.Println(msg)
+
+			return nil
+		}
+
 		// Load the stored token from disk to detect silent refreshes and token type.
 		// Skipped when RETYC_TOKEN is set (no local credentials in that mode).
 		var stored *oauth2.Token
 		if envToken == "" {
 			stored, err = config.LoadToken()
 			if err != nil {
-				fmt.Println("Not authenticated. Run `retyc auth login`.")
-
-				return nil
+				return notAuthenticated("no_token", "Not authenticated. Run `retyc auth login`.")
 			}
 		}
 
@@ -138,28 +159,38 @@ var authStatusCmd = &cobra.Command{
 		if err != nil {
 			switch {
 			case errors.Is(err, auth.ErrNoToken):
-				fmt.Println("Not authenticated. Run `retyc auth login`.")
+				return notAuthenticated("no_token", "Not authenticated. Run `retyc auth login`.")
 			case errors.Is(err, auth.ErrNoRefreshToken):
-				fmt.Println("Token expired and no refresh token available. Run `retyc auth login`.")
+				return notAuthenticated("no_refresh_token",
+					"Token expired and no refresh token available. Run `retyc auth login`.")
 			default:
-				fmt.Printf("Token expired and refresh failed: %v\nRun `retyc auth login`.\n", err)
+				return notAuthenticated("refresh_failed: "+err.Error(),
+					fmt.Sprintf("Token expired and refresh failed: %v\nRun `retyc auth login`.", err))
 			}
-
-			return nil
 		}
 
-		// Inform the user when a silent refresh happened (disk token path only).
-		if stored != nil && !stored.Valid() {
-			fmt.Println("Token was expired and has been refreshed silently.")
-		}
+		// A silent refresh happened when the disk token was expired (disk token path only).
+		refreshed := stored != nil && !stored.Valid()
 
 		// Determine the refresh token to inspect: disk token or RETYC_TOKEN env var.
 		refreshToken := envToken
 		if stored != nil {
 			refreshToken = stored.RefreshToken
 		}
+		offline := isOfflineToken(refreshToken)
 
-		if isOfflineToken(refreshToken) {
+		if jsonOutput {
+			expiry := tok.Expiry
+
+			return printJSON(authStatusJSON{
+				Authenticated: true, Offline: offline, Refreshed: refreshed, ExpiresAt: &expiry,
+			})
+		}
+
+		if refreshed {
+			fmt.Println("Token was expired and has been refreshed silently.")
+		}
+		if offline {
 			fmt.Printf("Authenticated — offline token (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))
 		} else {
 			fmt.Printf("Authenticated (expires: %s)\n", tok.Expiry.Format("2006-01-02 15:04:05"))

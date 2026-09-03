@@ -1,5 +1,29 @@
 # Commands reference
 
+## JSON output
+
+Every command accepts the global `--json` flag for scripting:
+
+- **stdout** carries the result only, as indented JSON. Prompts, spinners,
+  progress bars and warnings always go to stderr, so `retyc --json ... | jq`
+  is safe.
+- **errors** are written to stderr as `{"error": "..."}` with a non-zero exit
+  code; stdout is then empty.
+- Commands that ask for confirmation (`transfer create`, `transfer download`,
+  `dataroom cp`, `dataroom rm`, `admin member rm`, `admin dataroom rm`,
+  `admin dataroom user rm`, `admin transfer rm`) refuse to prompt under
+  `--json`: pass `--yes` / `-y` explicitly.
+- Listings are `{"items": [...]}` (plus `total`/`page`/`pages` when the API
+  paginates). Detail commands return the API object as-is; state changes
+  return a small acknowledgement such as `{"id": "...", "status": "disabled"}`.
+- `dataroom cp` upload only reports completion (`{"uploaded": true, ...}`),
+  not per-file node IDs.
+
+```bash
+retyc --json transfer ls | jq -r '.items[] | select(.status == "active") | .id'
+retyc --json user quota | jq .used_storage
+```
+
 ## Auth
 
 | Command                      | Description                                            |

@@ -34,6 +34,9 @@ var adminBlacklistLsCmd = &cobra.Command{
 				break
 			}
 		}
+		if jsonOutput {
+			return printJSON(newItemsJSON(domains))
+		}
 		if len(domains) == 0 {
 			fmt.Println("No blacklisted domains.")
 
@@ -63,6 +66,9 @@ var adminBlacklistAddCmd = &cobra.Command{
 		if err != nil {
 			return adminErrHint(err)
 		}
+		if jsonOutput {
+			return printJSON(d)
+		}
 		fmt.Printf("Domain %s blacklisted (id %s).\n", d.DomainName, d.ID)
 
 		return nil
@@ -80,6 +86,9 @@ var adminBlacklistRmCmd = &cobra.Command{
 		}
 		if err := client.AdminRemoveBlacklistDomain(cmd.Context(), args[0]); err != nil {
 			return adminErrHint(err)
+		}
+		if jsonOutput {
+			return printJSON(idStatusJSON{ID: args[0], Status: "removed"})
 		}
 		fmt.Printf("Domain %s removed from the blacklist.\n", args[0])
 

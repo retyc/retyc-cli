@@ -29,6 +29,9 @@ var userInfoCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("fetching user info: %w", err)
 		}
+		if jsonOutput {
+			return printJSON(u)
+		}
 
 		fullName := "-"
 		if u.FullName != nil && *u.FullName != "" {
@@ -62,6 +65,9 @@ var userQuotaCmd = &cobra.Command{
 		s.Stop()
 		if err != nil {
 			return fmt.Errorf("fetching quota: %w", err)
+		}
+		if jsonOutput {
+			return printJSON(q)
 		}
 
 		readOnly := ""

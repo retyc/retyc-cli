@@ -37,6 +37,9 @@ var adminTransferLsCmd = &cobra.Command{
 				break
 			}
 		}
+		if jsonOutput {
+			return printJSON(newItemsJSON(transfers))
+		}
 		if len(transfers) == 0 {
 			fmt.Println("No transfers found.")
 
@@ -66,6 +69,10 @@ var adminTransferInfoCmd = &cobra.Command{
 		tr, err := client.AdminGetTransfer(cmd.Context(), args[0])
 		if err != nil {
 			return adminErrHint(err)
+		}
+
+		if jsonOutput {
+			return printJSON(tr)
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -126,6 +133,10 @@ var adminTransferTrackingCmd = &cobra.Command{
 			return adminErrHint(err)
 		}
 
+		if jsonOutput {
+			return printJSON(tr)
+		}
+
 		fmt.Printf("Total downloads: %d (%d identified, %d anonymous)\n",
 			tr.TotalDownloadCount, tr.IdentifiedCount, tr.AnonymousCount)
 		if tr.Truncated {
@@ -166,6 +177,9 @@ var adminTransferDisableCmd = &cobra.Command{
 		if err := client.AdminDisableTransfer(cmd.Context(), args[0]); err != nil {
 			return adminErrHint(err)
 		}
+		if jsonOutput {
+			return printJSON(idStatusJSON{ID: args[0], Status: "disabled"})
+		}
 		fmt.Printf("Transfer %s disabled.\n", args[0])
 
 		return nil
@@ -183,6 +197,9 @@ var adminTransferEnableCmd = &cobra.Command{
 		}
 		if err := client.AdminEnableTransfer(cmd.Context(), args[0]); err != nil {
 			return adminErrHint(err)
+		}
+		if jsonOutput {
+			return printJSON(idStatusJSON{ID: args[0], Status: "enabled"})
 		}
 		fmt.Printf("Transfer %s enabled.\n", args[0])
 
@@ -204,13 +221,20 @@ var adminTransferRmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if !yes && !askConfirm(fmt.Sprintf("PERMANENTLY delete the data of transfer %s?", args[0])) {
+		ok, err := confirm(fmt.Sprintf("PERMANENTLY delete the data of transfer %s?", args[0]), yes)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			fmt.Fprintln(os.Stderr, "Aborted.")
 
 			return nil
 		}
 		if err := client.AdminForceDeleteTransfer(cmd.Context(), args[0]); err != nil {
 			return adminErrHint(err)
+		}
+		if jsonOutput {
+			return printJSON(idStatusJSON{ID: args[0], Status: "deleted"})
 		}
 		fmt.Printf("Transfer %s permanently deleted.\n", args[0])
 
@@ -234,6 +258,9 @@ var adminTransferRekeyCmd = &cobra.Command{
 		result, err := service.AdminRekeyTransfer(cmd.Context(), client, orgKey, args[0])
 		if err != nil {
 			return adminErrHint(err)
+		}
+		if jsonOutput {
+			return printJSON(newRekeyJSON(result))
 		}
 		fmt.Printf("Session key re-encrypted for %d key(s).\n", result.Reencrypted)
 		for _, s := range result.Skipped {

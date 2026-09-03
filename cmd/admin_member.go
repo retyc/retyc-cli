@@ -37,6 +37,9 @@ var adminMemberLsCmd = &cobra.Command{
 				break
 			}
 		}
+		if jsonOutput {
+			return printJSON(newItemsJSON(members))
+		}
 		if len(members) == 0 {
 			fmt.Println("No members found.")
 
@@ -70,6 +73,10 @@ var adminMemberInfoCmd = &cobra.Command{
 			return adminErrHint(err)
 		}
 
+		if jsonOutput {
+			return printJSON(m)
+		}
+
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(w, "ID:\t%s\n", m.ID)
 		fmt.Fprintf(w, "Email:\t%s\n", m.Email)
@@ -101,6 +108,12 @@ var adminMemberRoleCmd = &cobra.Command{
 		if err := client.AdminSetMemberRole(cmd.Context(), args[0], args[1]); err != nil {
 			return adminErrHint(err)
 		}
+		if jsonOutput {
+			return printJSON(struct {
+				ID   string `json:"id"`
+				Role string `json:"role"`
+			}{args[0], args[1]})
+		}
 		fmt.Printf("Member %s role set to %s.\n", args[0], args[1])
 
 		return nil
@@ -119,6 +132,9 @@ var adminMemberEnableCmd = &cobra.Command{
 		if err := client.AdminEnableMember(cmd.Context(), args[0]); err != nil {
 			return adminErrHint(err)
 		}
+		if jsonOutput {
+			return printJSON(idStatusJSON{ID: args[0], Status: "enabled"})
+		}
 		fmt.Printf("Member %s enabled.\n", args[0])
 
 		return nil
@@ -136,6 +152,9 @@ var adminMemberDisableCmd = &cobra.Command{
 		}
 		if err := client.AdminDisableMember(cmd.Context(), args[0]); err != nil {
 			return adminErrHint(err)
+		}
+		if jsonOutput {
+			return printJSON(idStatusJSON{ID: args[0], Status: "disabled"})
 		}
 		fmt.Printf("Member %s disabled.\n", args[0])
 
@@ -160,20 +179,29 @@ var adminMemberRmCmd = &cobra.Command{
 		if err != nil {
 			return adminErrHint(err)
 		}
-		if !yes {
-			prompt := fmt.Sprintf("Remove %s (%s) from the organization?", m.Email, m.OrganizationRole)
-			if m.Identity != nil && m.Identity.MembershipType == "MANAGED" {
-				prompt = fmt.Sprintf(
-					"Remove %s from the organization? Their membership is MANAGED: their account will be DELETED.", m.Email)
-			}
-			if !askConfirm(prompt) {
-				fmt.Fprintln(os.Stderr, "Aborted.")
+		prompt := fmt.Sprintf("Remove %s (%s) from the organization?", m.Email, m.OrganizationRole)
+		if m.Identity != nil && m.Identity.MembershipType == "MANAGED" {
+			prompt = fmt.Sprintf(
+				"Remove %s from the organization? Their membership is MANAGED: their account will be DELETED.", m.Email)
+		}
+		ok, err := confirm(prompt, yes)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Aborted.")
 
-				return nil
-			}
+			return nil
 		}
 		if err := client.AdminRemoveMember(cmd.Context(), args[0]); err != nil {
 			return adminErrHint(err)
+		}
+		if jsonOutput {
+			return printJSON(struct {
+				ID     string `json:"id"`
+				Email  string `json:"email"`
+				Status string `json:"status"`
+			}{args[0], m.Email, "removed"})
 		}
 		fmt.Printf("Member %s removed.\n", m.Email)
 
