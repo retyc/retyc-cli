@@ -706,7 +706,8 @@ func (fs *webdavFS) fetchNodes(ctx context.Context, drID, nodePath string) ([]se
 		return nil, err
 	}
 
-	return service.ListNodesWithSession(ctx, fs.client, drID, nodePath, sess)
+	// Literal resolution: WebDAV paths are client names, never glob patterns.
+	return service.ListNodesLiteralWithSession(ctx, fs.client, drID, nodePath, sess)
 }
 
 // nodesToFileInfos converts a slice of DataroomNodeInfo to []os.FileInfo.
@@ -1015,7 +1016,7 @@ func (fs *webdavFS) RemoveAll(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("dataroom session: %w", err)
 	}
-	_, err = service.DeleteDataroomNodeWithSession(ctx, fs.client, drID, subPath, sess)
+	_, err = service.DeleteDataroomNodeLiteralWithSession(ctx, fs.client, drID, subPath, sess)
 	if err == nil {
 		parentPath, _ := splitWebdavPath(subPath)
 		fs.invalidateNodeCache(dataroomURI(drID, parentPath))
