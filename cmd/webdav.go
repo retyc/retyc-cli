@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"filippo.io/age"
 	"github.com/spf13/cobra"
 	"golang.org/x/net/webdav"
 	"golang.org/x/oauth2"
@@ -585,6 +586,10 @@ type webdavFS struct {
 	client           *api.Client
 	cache            *dataroomCache
 	passphraseReader service.PassphraseReader
+	// identity is the user's AGE identity unlocked once at startup; when set,
+	// sessions are resolved from it without fetching the user key or running
+	// scrypt again. nil falls back to passphraseReader (tests).
+	identity *age.HybridIdentity
 	// listFn performs the actual listing; nil means fetchNodes (tests inject a fake).
 	listFn func(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error)
 	// sessionFn resolves a dataroom session; nil means service.GetDataroomSession
@@ -593,7 +598,7 @@ type webdavFS struct {
 
 	nodeMu       sync.Mutex
 	nodeCache    map[string]*nodeCacheEntry
-	nodeGen      map[string]uint64    // bumped by every invalidation of that URI
+	nodeGen      map[string]uint64     // bumped by every invalidation of that URI
 	nodeInflight map[string]*nodeFetch // listings currently running, by URI
 
 	// sessions holds one resolved session per dataroom for the life of the
@@ -632,6 +637,9 @@ func (fs *webdavFS) getSession(ctx context.Context, drID string) (*service.Datar
 func (fs *webdavFS) resolveSession(ctx context.Context, drID string) (*service.DataroomSession, error) {
 	if fs.sessionFn != nil {
 		return fs.sessionFn(ctx, drID)
+	}
+	if fs.identity != nil {
+		return service.GetDataroomSessionWithIdentity(ctx, fs.client, drID, fs.identity)
 	}
 
 	return service.GetDataroomSession(ctx, fs.cfg, fs.client, drID, fs.passphraseReader)
@@ -1198,6 +1206,25 @@ var webdavCmd = &cobra.Command{
 	Short: "WebDAV server integration",
 }
 
+// webdavStartupCheck runs the validation calls performed before the server
+// binds its port: a dataroom listing (auth + API reachability) and the key
+// unlock, which bypasses the keyring so a wrong RETYC_KEY_PASSPHRASE fails at
+// startup rather than at the first dataroom access. The unlocked identity is
+// returned so the server never runs scrypt again.
+func webdavStartupCheck(
+	ctx context.Context, client *api.Client, reader service.PassphraseReader,
+) (*age.HybridIdentity, error) {
+	if _, err := service.ListDatarooms(ctx, client); err != nil {
+		return nil, fmt.Errorf("API connectivity check failed: %w", err)
+	}
+	identity, err := service.UnlockUserIdentity(ctx, client, reader)
+	if err != nil {
+		return nil, fmt.Errorf("key passphrase check failed: %w", err)
+	}
+
+	return identity, nil
+}
+
 var webdavServeCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start a local WebDAV server exposing your datarooms",
@@ -1232,9 +1259,12 @@ Example:
 		}
 		client := api.New(cfg.API.BaseURL, cliUserAgent(), tokSrc, insecure, debug)
 
-		// Validation call — confirms auth + API reachability before binding the port.
-		if _, err := service.ListDatarooms(cmd.Context(), client); err != nil {
-			return fmt.Errorf("API connectivity check failed: %w", err)
+		// Fail-fast before binding the port: auth + API reachability, then the
+		// key passphrase itself (a wrong one would otherwise only surface on the
+		// first dataroom access). The unlocked identity is kept for the whole run.
+		identity, err := webdavStartupCheck(cmd.Context(), client, webdavPassphraseReader)
+		if err != nil {
+			return err
 		}
 
 		addr, _ := cmd.Flags().GetString("addr")
@@ -1256,6 +1286,7 @@ Example:
 				return items, nil
 			}),
 			passphraseReader: webdavPassphraseReader,
+			identity:         identity,
 		}
 
 		handler := &webdav.Handler{

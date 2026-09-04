@@ -1,14 +1,19 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"golang.org/x/oauth2"
 )
 
 // — ParseRetycURI —————————————————————————————————————————————————————————————
@@ -233,5 +238,59 @@ func TestNodesFromItems_ModTime(t *testing.T) {
 	}
 	if !nodes[1].ModTime().IsZero() {
 		t.Errorf("dir ModTime() = %v, want zero (API exposes no timestamp for folders)", nodes[1].ModTime())
+	}
+}
+
+// — GetDataroomSessionWithIdentity ———————————————————————————————————————————
+
+// A caller that already holds the unlocked user identity (webdav serve unlocks
+// it once at startup) must get a session without fetching the user key again:
+// only /dataroom/{id} may be hit.
+func TestGetDataroomSessionWithIdentity_SkipsUserKey(t *testing.T) {
+	userKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessPrivEnc, err := crypto.EncryptStringForKeys(sessKey.String(), []string{userKey.Recipient().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saltEnc, err := crypto.EncryptStringForKeys("salt-123", []string{sessKey.Recipient().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dataroom/dr1" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.Dataroom{
+			ID: "dr1", SessionPublicKey: sessKey.Recipient().String(),
+			SessionPrivateKeyEnc: sessPrivEnc, NodeNameSaltEnc: &saltEnc,
+		})
+	}))
+	t.Cleanup(srv.Close)
+	client := api.New(srv.URL, "retyc-test/1.0",
+		oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test", TokenType: "Bearer"}), false, false)
+
+	sess, err := GetDataroomSessionWithIdentity(context.Background(), client, "dr1", userKey)
+	if err != nil {
+		t.Fatalf("GetDataroomSessionWithIdentity() error = %v", err)
+	}
+	if sess.PublicKey != sessKey.Recipient().String() {
+		t.Errorf("PublicKey = %q, want %q", sess.PublicKey, sessKey.Recipient().String())
+	}
+	if sess.PrivateKey != sessKey.String() {
+		t.Error("PrivateKey does not match the dataroom session key")
+	}
+	if sess.NameSalt != "salt-123" {
+		t.Errorf("NameSalt = %q, want salt-123", sess.NameSalt)
 	}
 }

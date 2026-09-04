@@ -149,7 +149,13 @@ func resolveDataroomSessionUncached(
 		return nil, err
 	}
 
-	sessionPrivKey, err := crypto.DecryptToString(dr.v.SessionPrivateKeyEnc, userIdentity)
+	return buildDataroomSession(dr.v, userIdentity)
+}
+
+// buildDataroomSession decrypts the dataroom's session key and per-dataroom
+// name salt with an already unlocked user identity.
+func buildDataroomSession(dr *api.Dataroom, userIdentity *age.HybridIdentity) (*dataroomSession, error) {
+	sessionPrivKey, err := crypto.DecryptToString(dr.SessionPrivateKeyEnc, userIdentity)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting dataroom session key: %w", err)
 	}
@@ -160,8 +166,8 @@ func resolveDataroomSessionUncached(
 	}
 
 	var nameSalt string
-	if dr.v.NodeNameSaltEnc != nil {
-		nameSalt, err = crypto.DecryptToString(*dr.v.NodeNameSaltEnc, sessionIdentity)
+	if dr.NodeNameSaltEnc != nil {
+		nameSalt, err = crypto.DecryptToString(*dr.NodeNameSaltEnc, sessionIdentity)
 		if err != nil {
 			return nil, fmt.Errorf("decrypting name salt: %w", err)
 		}
@@ -169,7 +175,7 @@ func resolveDataroomSessionUncached(
 
 	return &dataroomSession{
 		Identity:   sessionIdentity,
-		PublicKey:  dr.v.SessionPublicKey,
+		PublicKey:  dr.SessionPublicKey,
 		PrivateKey: sessionPrivKey,
 		NameSalt:   nameSalt,
 	}, nil
@@ -185,6 +191,20 @@ func GetDataroomSession(
 	ctx context.Context, cfg *config.Config, client *api.Client, dataroomID string, reader PassphraseReader,
 ) (*DataroomSession, error) {
 	return resolveDataroomSession(ctx, cfg, client, dataroomID, reader)
+}
+
+// GetDataroomSessionWithIdentity resolves the cryptographic session for a
+// dataroom using an already unlocked user identity (see UnlockUserIdentity):
+// one API call, no user-key fetch, no passphrase, no scrypt.
+func GetDataroomSessionWithIdentity(
+	ctx context.Context, client *api.Client, dataroomID string, userIdentity *age.HybridIdentity,
+) (*DataroomSession, error) {
+	dr, err := client.GetDataroom(ctx, dataroomID)
+	if err != nil {
+		return nil, fmt.Errorf("fetching dataroom: %w", err)
+	}
+
+	return buildDataroomSession(dr, userIdentity)
 }
 
 // fetchNodeItems lists the raw API node items at nodePath, supporting glob patterns.
