@@ -213,6 +213,7 @@ func nodesFromItems(items []api.DataroomNodeItem, identity *age.HybridIdentity) 
 		var versionID string
 		var chunkCount int
 		var mimeType string
+		var modTime time.Time
 		if item.Node.TypeEnc != nil {
 			nodeType = "file"
 			mimeType, _ = crypto.DecryptToString(*item.Node.TypeEnc, identity)
@@ -220,6 +221,7 @@ func nodesFromItems(items []api.DataroomNodeItem, identity *age.HybridIdentity) 
 				size = item.Version.OriginalSize
 				versionID = item.Version.ID
 				chunkCount = item.Version.ChunkCount
+				modTime = item.Version.CreatedAt
 			}
 		}
 		result = append(result, DataroomNodeInfo{
@@ -230,6 +232,7 @@ func nodesFromItems(items []api.DataroomNodeItem, identity *age.HybridIdentity) 
 			Size:       size,
 			VersionID:  versionID,
 			ChunkCount: chunkCount,
+			modTime:    modTime,
 		})
 	}
 
@@ -805,7 +808,16 @@ func UploadToDataroom(
 		return err
 	}
 
-	destParentID, err := resolvePath(ctx, client, dst.DataroomID, dst.Path, sess.Identity)
+	return UploadToDataroomWithSession(ctx, client, dst.DataroomID, dst.Path, localPaths, sess, progress)
+}
+
+// UploadToDataroomWithSession is UploadToDataroom for callers that already hold
+// the dataroom session (the WebDAV server caches it per dataroom).
+func UploadToDataroomWithSession(
+	ctx context.Context, client *api.Client, dataroomID, dstPath string,
+	localPaths []string, sess *DataroomSession, progress ProgressFn,
+) error {
+	destParentID, err := resolvePath(ctx, client, dataroomID, dstPath, sess.Identity)
 	if err != nil {
 		return err
 	}
@@ -817,14 +829,14 @@ func UploadToDataroom(
 		}
 		if info.IsDir() {
 			if err := uploadDataroomDir(
-				ctx, client, dst.DataroomID, localPath, destParentID,
+				ctx, client, dataroomID, localPath, destParentID,
 				sess.PublicKey, sess.Identity, sess.NameSalt, progress,
 			); err != nil {
 				return fmt.Errorf("%s: %w", info.Name(), err)
 			}
 		} else {
 			if err := uploadDataroomFile(
-				ctx, client, dst.DataroomID, localPath, destParentID,
+				ctx, client, dataroomID, localPath, destParentID,
 				sess.PublicKey, sess.Identity, "", sess.NameSalt, progress,
 			); err != nil {
 				return fmt.Errorf("%s: %w", info.Name(), err)
@@ -935,17 +947,25 @@ func MkdirDataroom(
 		return "", err
 	}
 
-	parentPath, name := splitPathParent(parsed.Path)
-	if name == "" {
-		return "", fmt.Errorf("path must include a folder name: %s", uri)
-	}
-
 	sess, err := resolveDataroomSession(ctx, cfg, client, parsed.DataroomID, reader)
 	if err != nil {
 		return "", err
 	}
 
-	parentID, err := resolvePath(ctx, client, parsed.DataroomID, parentPath, sess.Identity)
+	return MkdirDataroomWithSession(ctx, client, parsed.DataroomID, parsed.Path, sess)
+}
+
+// MkdirDataroomWithSession is MkdirDataroom for callers that already hold the
+// dataroom session.
+func MkdirDataroomWithSession(
+	ctx context.Context, client *api.Client, dataroomID, nodePath string, sess *DataroomSession,
+) (string, error) {
+	parentPath, name := splitPathParent(nodePath)
+	if name == "" {
+		return "", fmt.Errorf("path must include a folder name: %s", nodePath)
+	}
+
+	parentID, err := resolvePath(ctx, client, dataroomID, parentPath, sess.Identity)
 	if err != nil {
 		return "", err
 	}
@@ -956,7 +976,7 @@ func MkdirDataroom(
 	}
 
 	node, err := client.CreateDataroomNode(
-		ctx, parsed.DataroomID, nameEnc, nodeNameHash(name, sess.NameSalt), nil, parentID,
+		ctx, dataroomID, nameEnc, nodeNameHash(name, sess.NameSalt), nil, parentID,
 	)
 	if err != nil {
 		return "", fmt.Errorf("creating folder: %w", err)
@@ -988,13 +1008,22 @@ func DeleteDataroomNode(
 		return 0, err
 	}
 
-	if hasGlob(parsed.Path) {
-		matches, err := resolveGlob(ctx, client, parsed.DataroomID, parsed.Path, sess.Identity)
+	return DeleteDataroomNodeWithSession(ctx, client, parsed.DataroomID, parsed.Path, sess)
+}
+
+// DeleteDataroomNodeWithSession deletes the node(s) at nodePath (glob allowed)
+// for callers that already hold the dataroom session. Deleting the dataroom
+// itself ("/") needs no session and stays in DeleteDataroomNode.
+func DeleteDataroomNodeWithSession(
+	ctx context.Context, client *api.Client, dataroomID, nodePath string, sess *DataroomSession,
+) (int, error) {
+	if hasGlob(nodePath) {
+		matches, err := resolveGlob(ctx, client, dataroomID, nodePath, sess.Identity)
 		if err != nil {
 			return 0, err
 		}
 		if len(matches) == 0 {
-			return 0, fmt.Errorf("no nodes match %s", parsed.Path)
+			return 0, fmt.Errorf("no nodes match %s", nodePath)
 		}
 		for _, item := range matches {
 			if err := client.DeleteDataroomNode(ctx, item.Node.ID); err != nil {
@@ -1005,7 +1034,7 @@ func DeleteDataroomNode(
 		return len(matches), nil
 	}
 
-	nodeID, err := resolvePath(ctx, client, parsed.DataroomID, parsed.Path, sess.Identity)
+	nodeID, err := resolvePath(ctx, client, dataroomID, nodePath, sess.Identity)
 	if err != nil {
 		return 0, err
 	}
@@ -1040,7 +1069,15 @@ func MoveDataroomNode(
 		return err
 	}
 
-	srcNodeID, err := resolvePath(ctx, client, src.DataroomID, src.Path, sess.Identity)
+	return MoveDataroomNodeWithSession(ctx, client, src.DataroomID, src.Path, dst.Path, sess)
+}
+
+// MoveDataroomNodeWithSession renames/moves srcPath to dstPath within one
+// dataroom for callers that already hold the dataroom session.
+func MoveDataroomNodeWithSession(
+	ctx context.Context, client *api.Client, dataroomID, srcPath, dstPath string, sess *DataroomSession,
+) error {
+	srcNodeID, err := resolvePath(ctx, client, dataroomID, srcPath, sess.Identity)
 	if err != nil {
 		return err
 	}
@@ -1048,12 +1085,12 @@ func MoveDataroomNode(
 		return fmt.Errorf("cannot move the root folder")
 	}
 
-	dstParentPath, newName := splitPathParent(dst.Path)
+	dstParentPath, newName := splitPathParent(dstPath)
 	if newName == "" {
-		return fmt.Errorf("destination path must include a name: %s", dstURI)
+		return fmt.Errorf("destination path must include a name: %s", dstPath)
 	}
 
-	dstParentID, err := resolvePath(ctx, client, dst.DataroomID, dstParentPath, sess.Identity)
+	dstParentID, err := resolvePath(ctx, client, dataroomID, dstParentPath, sess.Identity)
 	if err != nil {
 		return err
 	}

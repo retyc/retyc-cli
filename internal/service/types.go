@@ -1,7 +1,11 @@
 // Package service contains the business logic shared between the CLI and the MCP server.
 package service
 
-import "github.com/retyc/retyc-cli/internal/api"
+import (
+	"time"
+
+	"github.com/retyc/retyc-cli/internal/api"
+)
 
 // ProgressFn is called after each chunk is processed during an upload or download.
 // filename is the file being processed, chunkBytes is the plaintext byte count for
@@ -103,4 +107,19 @@ type DataroomNodeInfo struct {
 	Size       int64
 	VersionID  string // non-empty for file nodes; the current version's ID
 	ChunkCount int    // number of encrypted chunks; used for direct download without GetDataroomNode
+	// modTime is the current version's creation time (zero for folders). Kept
+	// unexported so the JSON shape emitted by the MCP server does not change;
+	// read it through ModTime.
+	modTime time.Time
+}
+
+// ModTime returns the current version's creation time, or the zero time for
+// folders and versionless nodes.
+func (n DataroomNodeInfo) ModTime() time.Time { return n.modTime }
+
+// WithModTime returns a copy of n carrying t as its modification time.
+func (n DataroomNodeInfo) WithModTime(t time.Time) DataroomNodeInfo {
+	n.modTime = t
+
+	return n
 }

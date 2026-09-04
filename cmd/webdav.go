@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -86,6 +87,18 @@ func (fi *webdavFileInfo) Mode() os.FileMode {
 	}
 
 	return 0644
+}
+
+// ETag implements webdav.ETager. The version ID identifies the file's content
+// exactly, whereas the x/net/webdav default (ModTime+Size) gives two versions of
+// equal size the same ETag and lets clients keep stale content. Folders and
+// versionless nodes fall back to the default.
+func (fi *webdavFileInfo) ETag(_ context.Context) (string, error) {
+	if fi.isDir || fi.versionID == "" {
+		return "", webdav.ErrNotImplemented
+	}
+
+	return `"` + fi.versionID + `"`, nil
 }
 
 // ContentType implements the webdav.ContentTyper interface, avoiding file downloads during PROPFIND.
@@ -277,11 +290,18 @@ func (c *dataroomCache) allNames(ctx context.Context) ([]string, error) {
 	return e.names, nil
 }
 
-// dirHandle is a webdav.File for directories. It holds a pre-built list of entries.
+// dirHandle is a webdav.File for directories.
+//
+// Entries are either given up front (static sections) or produced by load on the
+// first Readdir. Laziness matters: PROPFIND opens every listed resource just to
+// Stat it (x/net/webdav props()), and only walkFS goes on to Readdir — listing
+// children eagerly would cost one API listing per sub-folder per PROPFIND.
 type dirHandle struct {
 	info    os.FileInfo
 	entries []os.FileInfo
 	offset  int
+	load    func() ([]os.FileInfo, error) // nil = entries already populated
+	loaded  bool
 }
 
 func (h *dirHandle) Close() error                       { return nil }
@@ -290,6 +310,14 @@ func (h *dirHandle) Write(_ []byte) (int, error)        { return 0, os.ErrPermis
 func (h *dirHandle) Seek(_ int64, _ int) (int64, error) { return 0, os.ErrPermission }
 func (h *dirHandle) Stat() (os.FileInfo, error)         { return h.info, nil }
 func (h *dirHandle) Readdir(count int) ([]os.FileInfo, error) {
+	if h.load != nil && !h.loaded {
+		entries, err := h.load()
+		if err != nil {
+			return nil, err
+		}
+		h.entries = entries
+		h.loaded = true
+	}
 	if count <= 0 {
 		result := h.entries[h.offset:]
 		h.offset = len(h.entries)
@@ -318,6 +346,7 @@ type readFileHandle struct {
 	drID       string
 	versionID  string // avoids a GetDataroomNode round-trip on download
 	chunkCount int
+	parentURI  string // retyc://id/parent — the listing this handle was built from
 	info       os.FileInfo
 	// Buffered path (set by ensureDownloaded)
 	file    *os.File
@@ -351,7 +380,7 @@ func (h *readFileHandle) ensureDownloaded() error {
 		},
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "webdav: download error (%s): %v\n", name, err)
+		h.onDownloadError(err)
 		_ = os.RemoveAll(tempDir)
 
 		return err
@@ -387,10 +416,38 @@ func (h *readFileHandle) startStream() error {
 				return h.wfs.client.DownloadDataroomChunk(ctx, h.versionID, chunkID)
 			},
 		)
+		if err != nil && !isClientGoneErr(err) {
+			h.onDownloadError(err)
+		}
 		_ = pipeW.CloseWithError(err)
 	}()
 
 	return nil
+}
+
+// isClientGoneErr reports whether err comes from the reader side going away — a
+// client disconnect, or a Range seek tearing the stream down in Seek — rather than
+// from a genuine download failure. Both surface on the writer side of the pipe.
+func isClientGoneErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, io.ErrClosedPipe)
+}
+
+// onDownloadError reports a failed chunk download and drops the cached listing of
+// the file's parent directory.
+//
+// That listing is what supplied this handle's versionID, so a download failure
+// means it may describe a node that no longer exists — typically deleted from the
+// web app or another client, which never goes through invalidateNodeCache. Without
+// this, every read for the rest of nodeCacheTTL replays the dead version and dies
+// mid-body: http.ServeContent has already committed 200 plus the stale
+// Content-Length by the time the first chunk is fetched, so the client sees a
+// truncated response and reports an I/O error. Dropping the entry makes the next
+// request re-list and answer a clean 404.
+func (h *readFileHandle) onDownloadError(err error) {
+	fmt.Fprintf(os.Stderr, "webdav: download error (%s): %v\n", h.info.Name(), err)
+	if h.parentURI != "" {
+		h.wfs.invalidateNodeCache(h.parentURI)
+	}
 }
 
 func (h *readFileHandle) Close() error {
@@ -453,15 +510,14 @@ func (h *readFileHandle) Readdir(_ int) ([]os.FileInfo, error) { return nil, os.
 // writeFileHandle is a webdav.File for uploading a file. Writes accumulate in a temp file;
 // Close uploads the temp file then deletes the temp directory.
 type writeFileHandle struct {
-	file             *os.File
-	tempDir          string
-	tempFilePath     string
-	parentURI        string // retyc://id/parent — passed to UploadToDataroom
-	wfs              *webdavFS
-	cfg              *config.Config
-	client           *api.Client
-	passphraseReader service.PassphraseReader
-	isPut            bool // true = real PUT; false = LOCK-driven create
+	file         *os.File
+	tempDir      string
+	tempFilePath string
+	drID         string
+	parentPath   string
+	parentURI    string // retyc://id/parent — key of the listing to invalidate
+	wfs          *webdavFS
+	isPut        bool // true = real PUT; false = LOCK-driven create
 }
 
 func (h *writeFileHandle) Close() error {
@@ -482,13 +538,15 @@ func (h *writeFileHandle) Close() error {
 			return nil
 		}
 	}
-	err := service.UploadToDataroom(
-		context.Background(),
-		h.cfg, h.client,
-		[]string{h.tempFilePath},
-		h.parentURI,
-		h.passphraseReader,
-		nil,
+	ctx := context.Background()
+	sess, err := h.wfs.getSession(ctx, h.drID)
+	if err != nil {
+		_ = os.RemoveAll(h.tempDir)
+
+		return fmt.Errorf("dataroom session: %w", err)
+	}
+	err = service.UploadToDataroomWithSession(
+		ctx, h.wfs.client, h.drID, h.parentPath, []string{h.tempFilePath}, sess, nil,
 	)
 	_ = os.RemoveAll(h.tempDir)
 	if err == nil {
@@ -509,6 +567,15 @@ type nodeCacheEntry struct {
 	fetchedAt time.Time
 }
 
+// nodeFetch is an in-flight listing shared by every caller that misses the cache
+// for the same URI while it runs (single-flight). nodes/err are written once,
+// before done is closed.
+type nodeFetch struct {
+	done  chan struct{}
+	nodes []service.DataroomNodeInfo
+	err   error
+}
+
 // sessionCacheEntry caches a resolved dataroom session (2 API calls + AGE crypto).
 type sessionCacheEntry struct {
 	sess      *service.DataroomSession
@@ -527,10 +594,16 @@ type webdavFS struct {
 	client           *api.Client
 	cache            *dataroomCache
 	passphraseReader service.PassphraseReader
-	nodeMu           sync.RWMutex
-	nodeCache        map[string]*nodeCacheEntry
-	sessMu           sync.RWMutex
-	sessionCache     map[string]*sessionCacheEntry
+	// listFn performs the actual listing; nil means fetchNodes (tests inject a fake).
+	listFn func(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error)
+
+	nodeMu       sync.Mutex
+	nodeCache    map[string]*nodeCacheEntry
+	nodeGen      map[string]uint64    // bumped by every invalidation of that URI
+	nodeInflight map[string]*nodeFetch // listings currently running, by URI
+
+	sessMu       sync.RWMutex
+	sessionCache map[string]*sessionCacheEntry
 }
 
 var _ webdav.FileSystem = (*webdavFS)(nil)
@@ -538,9 +611,18 @@ var _ webdav.FileSystem = (*webdavFS)(nil)
 // invalidateNodeCache removes uri from the node listing cache.
 // Called after any mutation (upload, mkdir, delete, rename) so that the next
 // PROPFIND or Stat on the affected directory fetches fresh data from the API.
+//
+// It also bumps the URI's generation so that a listing already in flight — which
+// may have been answered by the API before the mutation landed — is not stored
+// on completion (see listNodes). Without that, a read racing a write from
+// another client could pin a pre-mutation listing for a whole TTL.
 func (fs *webdavFS) invalidateNodeCache(uri string) {
 	fs.nodeMu.Lock()
 	delete(fs.nodeCache, uri)
+	if fs.nodeGen == nil {
+		fs.nodeGen = make(map[string]uint64)
+	}
+	fs.nodeGen[uri]++
 	fs.nodeMu.Unlock()
 }
 
@@ -572,37 +654,65 @@ func (fs *webdavFS) getSession(ctx context.Context, drID string) (*service.Datar
 }
 
 // listNodes returns the decrypted children of drID at nodePath, using a TTL cache.
-// Uses the session cache to avoid redundant resolveDataroomSession calls.
+//
+// Cache misses are single-flighted: concurrent callers for the same URI (a file
+// manager fires PROPFINDs in parallel) share one API listing instead of each
+// running their own. The result is stored only if the URI was not invalidated
+// while the listing ran, so a mutation that lands mid-fetch wins.
 func (fs *webdavFS) listNodes(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error) {
 	uri := dataroomURI(drID, nodePath)
 
-	fs.nodeMu.RLock()
+	fs.nodeMu.Lock()
 	if e, ok := fs.nodeCache[uri]; ok && time.Since(e.fetchedAt) < nodeCacheTTL {
-		nodes := e.nodes
-		fs.nodeMu.RUnlock()
+		fs.nodeMu.Unlock()
 
-		return nodes, nil
+		return e.nodes, nil
 	}
-	fs.nodeMu.RUnlock()
+	if f, ok := fs.nodeInflight[uri]; ok {
+		fs.nodeMu.Unlock()
+		select {
+		case <-f.done:
+			return f.nodes, f.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	f := &nodeFetch{done: make(chan struct{})}
+	if fs.nodeInflight == nil {
+		fs.nodeInflight = make(map[string]*nodeFetch)
+	}
+	fs.nodeInflight[uri] = f
+	gen := fs.nodeGen[uri]
+	fs.nodeMu.Unlock()
 
+	fetch := fs.listFn
+	if fetch == nil {
+		fetch = fs.fetchNodes
+	}
+	f.nodes, f.err = fetch(ctx, drID, nodePath)
+
+	fs.nodeMu.Lock()
+	delete(fs.nodeInflight, uri)
+	if f.err == nil && fs.nodeGen[uri] == gen {
+		if fs.nodeCache == nil {
+			fs.nodeCache = make(map[string]*nodeCacheEntry)
+		}
+		fs.nodeCache[uri] = &nodeCacheEntry{nodes: f.nodes, fetchedAt: time.Now()}
+	}
+	fs.nodeMu.Unlock()
+	close(f.done)
+
+	return f.nodes, f.err
+}
+
+// fetchNodes is the real listing behind listNodes: cached session + API walk.
+func (fs *webdavFS) fetchNodes(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error) {
 	sess, err := fs.getSession(ctx, drID)
 	if err != nil {
 		return nil, err
 	}
 
-	nodes, err := service.ListNodesWithSession(ctx, fs.client, drID, nodePath, sess)
-	if err != nil {
-		return nil, err
-	}
-
-	fs.nodeMu.Lock()
-	if fs.nodeCache == nil {
-		fs.nodeCache = make(map[string]*nodeCacheEntry)
-	}
-	fs.nodeCache[uri] = &nodeCacheEntry{nodes: nodes, fetchedAt: time.Now()}
-	fs.nodeMu.Unlock()
-
-	return nodes, nil
+	return service.ListNodesWithSession(ctx, fs.client, drID, nodePath, sess)
 }
 
 // nodesToFileInfos converts a slice of DataroomNodeInfo to []os.FileInfo.
@@ -621,6 +731,10 @@ func nodesToFileInfos(nodes []service.DataroomNodeInfo) []os.FileInfo {
 			name:        n.Name,
 			size:        n.Size,
 			isDir:       n.Type == "dir",
+			modTime:     n.ModTime(),
+			nodeID:      n.ID,
+			versionID:   n.VersionID,
+			chunkCount:  n.ChunkCount,
 			contentType: n.MIMEType,
 		})
 	}
@@ -665,8 +779,9 @@ func (fs *webdavFS) OpenFile(ctx context.Context, name string, flag int, perm os
 	if wfi.isDir {
 		return fs.openNodeDir(ctx, wfi.name, drID, subPath)
 	}
+	parentPath, _ := splitWebdavPath(subPath)
 
-	return fs.openForRead(ctx, drID, wfi)
+	return fs.openForRead(ctx, drID, parentPath, wfi)
 }
 
 // openRootDir lists the static top-level sections ("dataroom" for now).
@@ -697,24 +812,29 @@ func (fs *webdavFS) openDataroomRootDir(ctx context.Context) (webdav.File, error
 }
 
 func (fs *webdavFS) openNodeDir(ctx context.Context, displayName, drID, subPath string) (webdav.File, error) {
-	nodes, err := fs.listNodes(ctx, drID, subPath)
-	if err != nil {
-		return nil, err
-	}
-
 	return &dirHandle{
-		info:    &webdavFileInfo{name: displayName, isDir: true},
-		entries: nodesToFileInfos(nodes),
+		info: &webdavFileInfo{name: displayName, isDir: true},
+		load: func() ([]os.FileInfo, error) {
+			nodes, err := fs.listNodes(ctx, drID, subPath)
+			if err != nil {
+				return nil, err
+			}
+
+			return nodesToFileInfos(nodes), nil
+		},
 	}, nil
 }
 
-func (fs *webdavFS) openForRead(ctx context.Context, drID string, wfi *webdavFileInfo) (webdav.File, error) {
+func (fs *webdavFS) openForRead(
+	ctx context.Context, drID, parentPath string, wfi *webdavFileInfo,
+) (webdav.File, error) {
 	return &readFileHandle{
 		ctx:        ctx,
 		wfs:        fs,
 		drID:       drID,
 		versionID:  wfi.versionID,
 		chunkCount: wfi.chunkCount,
+		parentURI:  dataroomURI(drID, parentPath),
 		info:       wfi,
 	}, nil
 }
@@ -735,15 +855,14 @@ func (fs *webdavFS) openForWriteTempFile(drID, parentPath, fileName string, isPu
 	}
 
 	return &writeFileHandle{
-		file:             f,
-		tempDir:          tempDir,
-		tempFilePath:     tempFilePath,
-		parentURI:        dataroomURI(drID, parentPath),
-		wfs:              fs,
-		cfg:              fs.cfg,
-		client:           fs.client,
-		passphraseReader: fs.passphraseReader,
-		isPut:            isPut,
+		file:         f,
+		tempDir:      tempDir,
+		tempFilePath: tempFilePath,
+		drID:         drID,
+		parentPath:   parentPath,
+		parentURI:    dataroomURI(drID, parentPath),
+		wfs:          fs,
+		isPut:        isPut,
 	}, nil
 }
 
@@ -848,7 +967,8 @@ func (fs *webdavFS) openForWriteStream(
 		pipeW:     pipeW,
 		done:      done,
 		parentURI: dataroomURI(drID, parentPath),
-		info:      &webdavFileInfo{name: fileName, size: size},
+		// versionID lets the PUT response carry the new version's ETag.
+		info: &webdavFileInfo{name: fileName, size: size, nodeID: nodeID, versionID: versionID},
 	}, nil
 }
 
@@ -874,7 +994,11 @@ func (fs *webdavFS) Mkdir(ctx context.Context, name string, _ os.FileMode) error
 	if err != nil {
 		return err
 	}
-	_, err = service.MkdirDataroom(ctx, fs.cfg, fs.client, dataroomURI(drID, subPath), fs.passphraseReader)
+	sess, err := fs.getSession(ctx, drID)
+	if err != nil {
+		return fmt.Errorf("dataroom session: %w", err)
+	}
+	_, err = service.MkdirDataroomWithSession(ctx, fs.client, drID, subPath, sess)
 	if err == nil {
 		parentPath, _ := splitWebdavPath(subPath)
 		fs.invalidateNodeCache(dataroomURI(drID, parentPath))
@@ -893,7 +1017,11 @@ func (fs *webdavFS) RemoveAll(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	_, err = service.DeleteDataroomNode(ctx, fs.cfg, fs.client, dataroomURI(drID, subPath), fs.passphraseReader)
+	sess, err := fs.getSession(ctx, drID)
+	if err != nil {
+		return fmt.Errorf("dataroom session: %w", err)
+	}
+	_, err = service.DeleteDataroomNodeWithSession(ctx, fs.client, drID, subPath, sess)
 	if err == nil {
 		parentPath, _ := splitWebdavPath(subPath)
 		fs.invalidateNodeCache(dataroomURI(drID, parentPath))
@@ -923,12 +1051,11 @@ func (fs *webdavFS) Rename(ctx context.Context, oldName, newName string) error {
 		return fmt.Errorf("moving between datarooms is not supported: %w", os.ErrPermission)
 	}
 
-	err = service.MoveDataroomNode(
-		ctx, fs.cfg, fs.client,
-		dataroomURI(oldID, oldSub),
-		dataroomURI(newID, newSub),
-		fs.passphraseReader,
-	)
+	sess, err := fs.getSession(ctx, oldID)
+	if err != nil {
+		return fmt.Errorf("dataroom session: %w", err)
+	}
+	err = service.MoveDataroomNodeWithSession(ctx, fs.client, oldID, oldSub, newSub, sess)
 	if err == nil {
 		oldParent, _ := splitWebdavPath(oldSub)
 		fs.invalidateNodeCache(dataroomURI(oldID, oldParent))
@@ -973,6 +1100,7 @@ func (fs *webdavFS) Stat(ctx context.Context, name string) (os.FileInfo, error) 
 				name:        n.Name,
 				size:        n.Size,
 				isDir:       n.Type == "dir",
+				modTime:     n.ModTime(),
 				nodeID:      n.ID,
 				versionID:   n.VersionID,
 				chunkCount:  n.ChunkCount,
