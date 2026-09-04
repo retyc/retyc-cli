@@ -60,6 +60,11 @@ Example configuration for Claude Desktop (claude_desktop_config.json):
 
 		registerMCPTools(srv)
 
+		// Resolve each dataroom session once per process: without it every tool
+		// call re-runs the scrypt that unlocks the user key (~256 MiB) whenever
+		// no keyring caches the identity (macOS, Windows, containers).
+		service.EnableSessionCache()
+
 		return server.ServeStdio(srv)
 	},
 }

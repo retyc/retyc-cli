@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -44,6 +45,11 @@ func ResolveUserIdentity(cfg *config.Config, userKey *api.UserKey, reader Passph
 		if err != nil {
 			return nil, fmt.Errorf("wrong key passphrase: %w", err)
 		}
+		// The scrypt above needs ~256 MiB of working memory (age work factor 2^18).
+		// Hand it back to the OS now rather than letting the runtime scavenge it over
+		// minutes: long-running servers (webdav, mcp) would otherwise sit at a
+		// misleading RSS and trip container memory limits.
+		debug.FreeOSMemory()
 	}
 
 	identity, err := crypto.ParseIdentity(identityStr)

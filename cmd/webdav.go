@@ -576,17 +576,8 @@ type nodeFetch struct {
 	err   error
 }
 
-// sessionCacheEntry caches a resolved dataroom session (2 API calls + AGE crypto).
-type sessionCacheEntry struct {
-	sess      *service.DataroomSession
-	fetchedAt time.Time
-}
-
 // nodeCacheTTL is longer than before because mutations now explicitly invalidate the cache.
 const nodeCacheTTL = 30 * time.Second
-
-// sessionCacheTTL: sessions only change on dataroom rekey (user add/remove), which WebDAV doesn't perform.
-const sessionCacheTTL = 30 * time.Minute
 
 // webdavFS implements webdav.FileSystem over RETYC datarooms.
 type webdavFS struct {
@@ -596,14 +587,18 @@ type webdavFS struct {
 	passphraseReader service.PassphraseReader
 	// listFn performs the actual listing; nil means fetchNodes (tests inject a fake).
 	listFn func(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error)
+	// sessionFn resolves a dataroom session; nil means service.GetDataroomSession
+	// (tests inject a fake).
+	sessionFn func(ctx context.Context, drID string) (*service.DataroomSession, error)
 
 	nodeMu       sync.Mutex
 	nodeCache    map[string]*nodeCacheEntry
 	nodeGen      map[string]uint64    // bumped by every invalidation of that URI
 	nodeInflight map[string]*nodeFetch // listings currently running, by URI
 
-	sessMu       sync.RWMutex
-	sessionCache map[string]*sessionCacheEntry
+	// sessions holds one resolved session per dataroom for the life of the
+	// process (no TTL, single-flight, one scrypt at a time — see service.SessionCache).
+	sessions service.SessionCache
 }
 
 var _ webdav.FileSystem = (*webdavFS)(nil)
@@ -626,31 +621,20 @@ func (fs *webdavFS) invalidateNodeCache(uri string) {
 	fs.nodeMu.Unlock()
 }
 
-// getSession returns the cached session for drID, resolving it on first access or after TTL expiry.
-// Caching avoids two API calls (GetDataroom + GetActiveKey) per listing or download.
+// getSession returns the session for drID, resolved on first access and cached
+// for the life of the process. Caching avoids two API calls (GetDataroom +
+// GetActiveKey) and an scrypt per listing or download.
 func (fs *webdavFS) getSession(ctx context.Context, drID string) (*service.DataroomSession, error) {
-	fs.sessMu.RLock()
-	if e, ok := fs.sessionCache[drID]; ok && time.Since(e.fetchedAt) < sessionCacheTTL {
-		sess := e.sess
-		fs.sessMu.RUnlock()
+	return fs.sessions.Get(ctx, drID, fs.resolveSession)
+}
 
-		return sess, nil
-	}
-	fs.sessMu.RUnlock()
-
-	sess, err := service.GetDataroomSession(ctx, fs.cfg, fs.client, drID, fs.passphraseReader)
-	if err != nil {
-		return nil, err
+// resolveSession performs the actual resolution (see sessionFn).
+func (fs *webdavFS) resolveSession(ctx context.Context, drID string) (*service.DataroomSession, error) {
+	if fs.sessionFn != nil {
+		return fs.sessionFn(ctx, drID)
 	}
 
-	fs.sessMu.Lock()
-	if fs.sessionCache == nil {
-		fs.sessionCache = make(map[string]*sessionCacheEntry)
-	}
-	fs.sessionCache[drID] = &sessionCacheEntry{sess: sess, fetchedAt: time.Now()}
-	fs.sessMu.Unlock()
-
-	return sess, nil
+	return service.GetDataroomSession(ctx, fs.cfg, fs.client, drID, fs.passphraseReader)
 }
 
 // listNodes returns the decrypted children of drID at nodePath, using a TTL cache.
