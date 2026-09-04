@@ -216,3 +216,72 @@ func TestGetDataroomSession_UsesProcessCacheWhenEnabled(t *testing.T) {
 		t.Errorf("passphrase reader ran %d times, want 1", reads)
 	}
 }
+
+// Logout must drop every cached dataroom session: the process-wide cache is
+// keyed by dataroom ID only, so material decrypted with user A's key would
+// otherwise be served to user B after a login in the same mcp serve process.
+func TestLogout_ResetsProcessSessionCache(t *testing.T) {
+	t.Setenv("RETYC_CONFIG_DIR", t.TempDir())
+	t.Setenv("RETYC_TOKEN", "")
+	EnableSessionCache()
+	t.Cleanup(disableSessionCacheForTest)
+	processSessions.Load().Store("dr1", &DataroomSession{PublicKey: "user-a"})
+
+	if _, err := Logout(context.Background(), "", http.DefaultClient); err != nil {
+		t.Fatalf("Logout() error = %v", err)
+	}
+
+	resolved := false
+	sess, err := processSessions.Load().Get(context.Background(), "dr1",
+		func(context.Context, string) (*DataroomSession, error) {
+			resolved = true
+
+			return &DataroomSession{PublicKey: "user-b"}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolved || sess.PublicKey != "user-b" {
+		t.Errorf("session after logout = %+v (resolved=%v), want a fresh resolution", sess, resolved)
+	}
+}
+
+// A resolution in flight when Reset is called completes for its callers but is
+// not cached: it was started under the identity being dropped.
+func TestSessionCache_ResetDropsInflightResult(t *testing.T) {
+	release := make(chan struct{})
+	resolve, calls, _ := countingResolver(release)
+	var c SessionCache
+	ctx := context.Background()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := c.Get(ctx, "dr1", resolve); err != nil {
+			t.Error(err)
+		}
+	}()
+	waitFor(t, func() bool { return calls.Load() == 1 })
+	c.Reset()
+	close(release)
+	<-done
+
+	if _, err := c.Get(ctx, "dr1", resolve); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("resolver ran %d times, want 2 (in-flight result must not be cached after Reset)", got)
+	}
+}
+
+// waitFor polls cond until it holds or the test times out.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met in time")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}

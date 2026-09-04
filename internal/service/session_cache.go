@@ -32,6 +32,8 @@ type sessionFetch struct {
 	done chan struct{}
 	sess *DataroomSession
 	err  error
+	// dropped is set by Reset while the fetch runs: do not cache its result.
+	dropped bool
 }
 
 // Get returns the session for drID, calling resolve on the first access and
@@ -67,7 +69,7 @@ func (c *SessionCache) Get(
 
 	c.mu.Lock()
 	delete(c.inflight, drID)
-	if f.err == nil {
+	if f.err == nil && !f.dropped {
 		c.put(drID, f.sess)
 	}
 	c.mu.Unlock()
@@ -91,6 +93,17 @@ func (c *SessionCache) Store(drID string, sess *DataroomSession) {
 	c.mu.Unlock()
 }
 
+// Reset drops every cached session. In-flight resolutions complete but their
+// result is not stored: they were started under the identity being dropped.
+func (c *SessionCache) Reset() {
+	c.mu.Lock()
+	c.sessions = nil
+	for drID := range c.inflight {
+		c.inflight[drID].dropped = true
+	}
+	c.mu.Unlock()
+}
+
 // processSessions is the process-wide cache consulted by resolveDataroomSession
 // once EnableSessionCache has been called. nil for one-shot CLI commands, which
 // resolve a session at most once per invocation anyway.
@@ -101,6 +114,15 @@ var processSessions atomic.Pointer[SessionCache]
 // call it at startup; one-shot commands never do.
 func EnableSessionCache() {
 	processSessions.CompareAndSwap(nil, &SessionCache{})
+}
+
+// ResetSessionCache drops every session held by the process-wide cache, if any.
+// Called on logout: the cache is keyed by dataroom ID only, so sessions
+// decrypted under one user must not survive into a later login.
+func ResetSessionCache() {
+	if c := processSessions.Load(); c != nil {
+		c.Reset()
+	}
 }
 
 // disableSessionCacheForTest drops the process-wide cache (tests only).

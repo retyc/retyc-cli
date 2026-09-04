@@ -250,6 +250,9 @@ func Logout(ctx context.Context, baseURL string, httpClient *http.Client) (warni
 			warnings = append(warnings, fmt.Errorf("revoking token: %w", rerr))
 		}
 	}
+	// Drop decrypted dataroom material before the token: even if the token
+	// removal fails, nothing resolved under this identity must outlive it.
+	ResetSessionCache()
 	if err = config.DeleteToken(); err != nil {
 		return warnings, fmt.Errorf("removing token: %w", err)
 	}
