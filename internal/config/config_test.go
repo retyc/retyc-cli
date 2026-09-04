@@ -192,6 +192,16 @@ func TestAdminBaseURL_Explicit(t *testing.T) {
 	}
 }
 
+func TestAdminBaseURL_ExplicitTrailingSlash(t *testing.T) {
+	cfg := &Config{
+		API:   APIConfig{BaseURL: "https://api.example.com"},
+		Admin: AdminConfig{BaseURL: "https://other.example.com/v2/"},
+	}
+	if got := cfg.AdminBaseURL(); got != "https://other.example.com/v2" {
+		t.Errorf("AdminBaseURL() = %q, want %q", got, "https://other.example.com/v2")
+	}
+}
+
 func TestAdminEnvBinding(t *testing.T) {
 	resetViper(t)
 	t.Setenv("RETYC_ADMIN_API_KEY", "ryc_test123")
