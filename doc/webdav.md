@@ -95,6 +95,14 @@ Notes and limitations:
 - Listings and dataroom sessions are cached briefly (30 s / 30 min respectively);
   mutations made through the server invalidate the relevant cache immediately, but
   changes made elsewhere (web app, another client) may take up to a minute to appear.
+  A read that fails because the cached listing pointed at a deleted node drops that
+  listing straight away, so the following request sees the current state (`404`)
+  rather than replaying the stale entry until the TTL expires. Concurrent requests
+  for the same folder share a single listing, and a listing that was in flight when
+  a mutation landed is discarded rather than cached.
+- Files expose the version ID as their `ETag` and the version's creation time as
+  `Last-Modified`, so clients can detect a new version even when the size is
+  unchanged. Folders have no timestamp in the API and report none.
 
 ## Authentication (`--auth`)
 

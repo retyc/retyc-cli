@@ -3,13 +3,24 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"golang.org/x/net/webdav"
+	"golang.org/x/oauth2"
+
+	"github.com/retyc/retyc-cli/internal/api"
+	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/service"
 )
 
 // — webdavFileInfo ————————————————————————————————————————————————————————————
@@ -390,4 +401,433 @@ func TestDataroomCache_AllNames(t *testing.T) {
 	if len(names) != 2 || names[0] != "Alpha" || names[1] != "Zebra" {
 		t.Errorf("allNames() = %v, want [Alpha Zebra]", names)
 	}
+}
+
+// — Stale listing cache after an out-of-band delete ————————————————————————————
+
+// newWebdavTestFS builds a webdavFS whose API client points at srv, with the
+// listing and session caches pre-warmed for dataroom "dr1" — the state the server
+// is in when a file is deleted from the web app while our cache is still warm.
+func newWebdavTestFS(srv *httptest.Server) *webdavFS {
+	client := api.New(srv.URL, "retyc-test/1.0", oauth2.StaticTokenSource(&oauth2.Token{
+		AccessToken: "test-token",
+		TokenType:   "Bearer",
+		Expiry:      time.Now().Add(time.Hour),
+	}), false, false)
+
+	return &webdavFS{
+		client: client,
+		nodeCache: map[string]*nodeCacheEntry{
+			"retyc://dr1/": {
+				nodes:     []service.DataroomNodeInfo{{ID: "n1", Name: "log.txt", Type: "file"}},
+				fetchedAt: time.Now(),
+			},
+		},
+		sessionCache: map[string]*sessionCacheEntry{
+			"dr1": {sess: &service.DataroomSession{}, fetchedAt: time.Now()},
+		},
+	}
+}
+
+// newStaleReadHandle returns a handle built from the stale listing: its versionID
+// points at a node that no longer exists server-side.
+func newStaleReadHandle(fs *webdavFS) *readFileHandle {
+	return &readFileHandle{
+		ctx:        context.Background(),
+		wfs:        fs,
+		drID:       "dr1",
+		versionID:  "v-deleted",
+		chunkCount: 1,
+		parentURI:  "retyc://dr1/",
+		info:       &webdavFileInfo{name: "log.txt", size: 42},
+	}
+}
+
+func nodeCacheHas(fs *webdavFS, uri string) bool {
+	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	_, ok := fs.nodeCache[uri]
+
+	return ok
+}
+
+func notFoundServer() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "node not found", http.StatusNotFound)
+	}))
+}
+
+// TestReadFileHandle_StreamErrorInvalidatesNodeCache covers the streaming read path:
+// a failed chunk download must drop the parent listing from the cache so the next
+// request re-lists and answers 404, instead of replaying the dead version for the
+// rest of nodeCacheTTL.
+func TestReadFileHandle_StreamErrorInvalidatesNodeCache(t *testing.T) {
+	srv := notFoundServer()
+	defer srv.Close()
+
+	fs := newWebdavTestFS(srv)
+	h := newStaleReadHandle(fs)
+
+	if _, err := h.Read(make([]byte, 16)); err == nil {
+		t.Fatal("Read() = nil error, want the 404 from the chunk download")
+	}
+	if nodeCacheHas(fs, "retyc://dr1/") {
+		t.Error("listing cache entry still present after a failed chunk download")
+	}
+}
+
+// TestReadFileHandle_BufferedErrorInvalidatesNodeCache covers the buffered read path,
+// which a Range request takes (Seek to a non-zero offset).
+func TestReadFileHandle_BufferedErrorInvalidatesNodeCache(t *testing.T) {
+	srv := notFoundServer()
+	defer srv.Close()
+
+	fs := newWebdavTestFS(srv)
+	h := newStaleReadHandle(fs)
+
+	if _, err := h.Seek(8, io.SeekStart); err == nil {
+		t.Fatal("Seek() = nil error, want the 404 from the chunk download")
+	}
+	if nodeCacheHas(fs, "retyc://dr1/") {
+		t.Error("listing cache entry still present after a failed chunk download")
+	}
+}
+
+// TestIsClientGoneErr guards against invalidating the cache when the reader side
+// simply went away (client disconnect, or a Range seek tearing down the stream) —
+// that is not evidence the node was deleted.
+func TestIsClientGoneErr(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{fmt.Errorf("writing chunk 0: %w", context.Canceled), true},
+		{fmt.Errorf("writing chunk 0: %w", io.ErrClosedPipe), true},
+		{errors.New("downloading chunk 0: API error 404: node not found"), false},
+		{nil, false},
+	}
+	for _, c := range cases {
+		if got := isClientGoneErr(c.err); got != c.want {
+			t.Errorf("isClientGoneErr(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}
+
+// — dirHandle: lazy listing ———————————————————————————————————————————————————
+
+// PROPFIND calls OpenFile + Stat + Close on every listed resource (x/net/webdav
+// props()); only walkFS goes on to Readdir. A directory handle must therefore
+// not list its children until Readdir is actually called, or listing a folder
+// with K sub-folders costs K extra API listings.
+func TestDirHandle_LazyLoad(t *testing.T) {
+	calls := 0
+	h := &dirHandle{
+		info: &webdavFileInfo{name: "d", isDir: true},
+		load: func() ([]os.FileInfo, error) {
+			calls++
+
+			return []os.FileInfo{&webdavFileInfo{name: "a"}, &webdavFileInfo{name: "b"}}, nil
+		},
+	}
+
+	if _, err := h.Stat(); err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("Stat() triggered the listing (%d calls); it must stay lazy until Readdir", calls)
+	}
+
+	first, err := h.Readdir(1)
+	if err != nil || len(first) != 1 || first[0].Name() != "a" {
+		t.Fatalf("Readdir(1) = (%v, %v), want [a]", first, err)
+	}
+	rest, err := h.Readdir(0)
+	if err != nil || len(rest) != 1 || rest[0].Name() != "b" {
+		t.Fatalf("Readdir(0) = (%v, %v), want [b]", rest, err)
+	}
+	if _, err := h.Readdir(1); err != io.EOF {
+		t.Errorf("Readdir(1) at end = %v, want io.EOF", err)
+	}
+	if calls != 1 {
+		t.Errorf("listing fetched %d times, want exactly 1", calls)
+	}
+}
+
+func TestDirHandle_LoadError(t *testing.T) {
+	want := errors.New("listing failed")
+	h := &dirHandle{
+		info: &webdavFileInfo{name: "d", isDir: true},
+		load: func() ([]os.FileInfo, error) { return nil, want },
+	}
+	if _, err := h.Stat(); err != nil {
+		t.Fatalf("Stat() error = %v, want nil (no listing needed)", err)
+	}
+	if _, err := h.Readdir(0); !errors.Is(err, want) {
+		t.Errorf("Readdir() error = %v, want %v", err, want)
+	}
+}
+
+// Static handles (root, dataroom index) are built with entries and no loader.
+func TestDirHandle_StaticEntries(t *testing.T) {
+	h := &dirHandle{
+		info:    &webdavFileInfo{name: "/", isDir: true},
+		entries: []os.FileInfo{&webdavFileInfo{name: "dataroom", isDir: true}},
+	}
+	got, err := h.Readdir(0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Readdir(0) = (%v, %v), want 1 entry", got, err)
+	}
+}
+
+// — ETag / Last-Modified ——————————————————————————————————————————————————————
+
+// The ETag is the client's freshness signal. The x/net/webdav default derives it
+// from ModTime+Size, which collapses two versions of equal size into one ETag; the
+// version ID is a true content identifier, so it must be used for files.
+func TestWebdavFileInfo_ETag(t *testing.T) {
+	ctx := context.Background()
+
+	file := &webdavFileInfo{name: "f.txt", size: 5, versionID: "v-123"}
+	etag, err := file.ETag(ctx)
+	if err != nil {
+		t.Fatalf("ETag() error = %v", err)
+	}
+	if etag != `"v-123"` {
+		t.Errorf("ETag() = %s, want %s", etag, `"v-123"`)
+	}
+
+	dir := &webdavFileInfo{name: "d", isDir: true}
+	if _, err := dir.ETag(ctx); !errors.Is(err, webdav.ErrNotImplemented) {
+		t.Errorf("dir ETag() error = %v, want webdav.ErrNotImplemented (fall back to default)", err)
+	}
+	versionless := &webdavFileInfo{name: "empty"}
+	if _, err := versionless.ETag(ctx); !errors.Is(err, webdav.ErrNotImplemented) {
+		t.Errorf("versionless ETag() error = %v, want webdav.ErrNotImplemented", err)
+	}
+}
+
+// Stat and directory listings must carry the version time through so that
+// PROPFIND getlastmodified and GET Last-Modified are meaningful.
+func TestWebdavFS_StatCarriesModTime(t *testing.T) {
+	created := time.Date(2026, 9, 4, 10, 30, 0, 0, time.UTC)
+	fileNode := service.DataroomNodeInfo{ID: "n1", Name: "f.txt", Type: "file", VersionID: "v1"}.WithModTime(created)
+	fs := &webdavFS{
+		cache: newDataroomCache(func(_ context.Context) ([]dataroomCacheItem, error) {
+			return []dataroomCacheItem{{id: "dr1", title: "DR"}}, nil
+		}),
+		nodeCache: map[string]*nodeCacheEntry{
+			"retyc://dr1/": {
+				nodes:     []service.DataroomNodeInfo{fileNode},
+				fetchedAt: time.Now(),
+			},
+		},
+	}
+
+	info, err := fs.Stat(context.Background(), "/dataroom/DR/f.txt")
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if !info.ModTime().Equal(created) {
+		t.Errorf("Stat().ModTime() = %v, want %v", info.ModTime(), created)
+	}
+	entries := nodesToFileInfos([]service.DataroomNodeInfo{fileNode})
+	if len(entries) != 1 || !entries[0].ModTime().Equal(created) {
+		t.Errorf("nodesToFileInfos ModTime = %v, want %v", entries[0].ModTime(), created)
+	}
+}
+
+// — Mutations reuse the cached session ————————————————————————————————————————
+
+// Every mutation used to re-resolve the dataroom session (2 API calls + AGE
+// crypto) although the server already caches it. With the session cache warm,
+// MKCOL / DELETE / MOVE must hit only the node endpoints.
+func TestWebdavFS_MutationsUseCachedSession(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	pub := identity.Recipient().String()
+	xNameEnc, err := crypto.EncryptStringForKeys("x", []string{pub})
+	if err != nil {
+		t.Fatalf("EncryptStringForKeys: %v", err)
+	}
+
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch {
+		case r.URL.Path == "/dataroom/dr1" || r.URL.Path == "/user/me/key/active":
+			t.Errorf("session re-resolved through %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected", http.StatusInternalServerError)
+		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/dr1/node":
+			fmt.Fprint(w, `{"id":"n-new","name_enc":"x"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/nodes":
+			fmt.Fprintf(w, `{"items":[{"node":{"id":"n-x","name_enc":%q,"type_enc":null,"parent_id":null},`+
+				`"node_version":null}],"total":1,"pages":1,"page":1}`, xNameEnc)
+		case r.Method == http.MethodDelete && r.URL.Path == "/dataroom/node/n-x":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPut && r.URL.Path == "/dataroom/node/n-x":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	fs := newWebdavTestFS(srv)
+	fs.cache = newDataroomCache(func(_ context.Context) ([]dataroomCacheItem, error) {
+		return []dataroomCacheItem{{id: "dr1", title: "DR"}}, nil
+	})
+	fs.sessionCache["dr1"] = &sessionCacheEntry{
+		sess:      &service.DataroomSession{Identity: identity, PublicKey: pub},
+		fetchedAt: time.Now(),
+	}
+	ctx := context.Background()
+
+	if err := fs.Mkdir(ctx, "/dataroom/DR/newdir", 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	if nodeCacheHas(fs, "retyc://dr1/") {
+		t.Error("Mkdir did not invalidate the parent listing")
+	}
+	if err := fs.Rename(ctx, "/dataroom/DR/x", "/dataroom/DR/y"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if err := fs.RemoveAll(ctx, "/dataroom/DR/x"); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	for _, c := range calls {
+		if strings.HasPrefix(c, "GET /dataroom/dr1/nodes") || strings.HasPrefix(c, "POST /dataroom/dr1/node") ||
+			strings.HasPrefix(c, "DELETE /dataroom/node/") || strings.HasPrefix(c, "PUT /dataroom/node/") {
+			continue
+		}
+		t.Errorf("unexpected API call %s", c)
+	}
+}
+
+// — listNodes: single-flight + generation check ———————————————————————————————
+
+// gatedListFn returns a listFn that blocks on gate and counts its calls.
+// started is signalled once per call, before blocking.
+func gatedListFn(t *testing.T, gate <-chan struct{}, started chan<- struct{}) (
+	func(context.Context, string, string) ([]service.DataroomNodeInfo, error), *int32,
+) {
+	t.Helper()
+	var calls int32
+
+	return func(_ context.Context, _, _ string) ([]service.DataroomNodeInfo, error) {
+		atomic.AddInt32(&calls, 1)
+		started <- struct{}{}
+		<-gate
+
+		return []service.DataroomNodeInfo{{ID: "n1", Name: "a", Type: "file"}}, nil
+	}, &calls
+}
+
+func TestListNodes_CacheHit(t *testing.T) {
+	gate := make(chan struct{})
+	close(gate)
+	started := make(chan struct{}, 8)
+	listFn, calls := gatedListFn(t, gate, started)
+	fs := &webdavFS{listFn: listFn}
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
+			t.Fatalf("listNodes: %v", err)
+		}
+	}
+	if n := atomic.LoadInt32(calls); n != 1 {
+		t.Errorf("listing fetched %d times for 3 sequential calls, want 1", n)
+	}
+}
+
+// Concurrent misses on the same URI must share one fetch.
+func TestListNodes_SingleFlight(t *testing.T) {
+	gate := make(chan struct{})
+	started := make(chan struct{}, 8)
+	listFn, calls := gatedListFn(t, gate, started)
+	fs := &webdavFS{listFn: listFn}
+	ctx := context.Background()
+
+	const n = 5
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			nodes, err := fs.listNodes(ctx, "dr1", "/")
+			if err == nil && len(nodes) != 1 {
+				err = fmt.Errorf("got %d nodes, want 1", len(nodes))
+			}
+			errs <- err
+		}()
+	}
+	<-started // the leader is inside the fetch; everyone else either joins it or hits the cache after
+	close(gate)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	if got := atomic.LoadInt32(calls); got != 1 {
+		t.Errorf("listing fetched %d times for %d concurrent callers, want 1", got, n)
+	}
+}
+
+// A listing answered before a mutation landed must not be stored after that
+// mutation invalidated the URI — otherwise a read racing a write from another
+// client pins a pre-mutation listing for a whole TTL.
+func TestListNodes_InvalidatedDuringFetchIsNotCached(t *testing.T) {
+	gate := make(chan struct{})
+	started := make(chan struct{}, 8)
+	listFn, calls := gatedListFn(t, gate, started)
+	fs := &webdavFS{listFn: listFn}
+	ctx := context.Background()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := fs.listNodes(ctx, "dr1", "/")
+		done <- err
+	}()
+	<-started
+	fs.invalidateNodeCache("retyc://dr1/") // mutation lands while the listing is in flight
+	close(gate)
+	if err := <-done; err != nil {
+		t.Fatalf("listNodes: %v", err)
+	}
+	if nodeCacheHas(fs, "retyc://dr1/") {
+		t.Fatal("listing that raced an invalidation was stored in the cache")
+	}
+	// The next call must fetch again.
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
+		t.Fatalf("listNodes (refetch): %v", err)
+	}
+	if got := atomic.LoadInt32(calls); got != 2 {
+		t.Errorf("listing fetched %d times, want 2 (first result discarded, second stored)", got)
+	}
+	if !nodeCacheHas(fs, "retyc://dr1/") {
+		t.Error("clean refetch was not stored")
+	}
+}
+
+// A waiter whose own context is cancelled must not block on the leader.
+func TestListNodes_WaiterHonoursContext(t *testing.T) {
+	gate := make(chan struct{})
+	started := make(chan struct{}, 8)
+	listFn, _ := gatedListFn(t, gate, started)
+	fs := &webdavFS{listFn: listFn}
+
+	go func() { _, _ = fs.listNodes(context.Background(), "dr1", "/") }()
+	<-started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := fs.listNodes(ctx, "dr1", "/"); !errors.Is(err, context.Canceled) {
+		t.Errorf("waiter error = %v, want context.Canceled", err)
+	}
+	close(gate)
 }

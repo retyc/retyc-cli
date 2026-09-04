@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/retyc/retyc-cli/internal/api"
+	"github.com/retyc/retyc-cli/internal/crypto"
 )
 
 // — ParseRetycURI —————————————————————————————————————————————————————————————
@@ -191,5 +193,45 @@ func TestIsConflict(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("isConflict(%v) = %v, want %v", tt.err, got, tt.want)
 		}
+	}
+}
+
+// — nodesFromItems ————————————————————————————————————————————————————————————
+
+// TestNodesFromItems_ModTime: the version's creation time is the only
+// modification signal the API exposes; it must reach callers (WebDAV
+// Last-Modified) through the accessor without changing the marshalled shape.
+func TestNodesFromItems_ModTime(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	pub := identity.Recipient().String()
+	nameEnc, err := crypto.EncryptStringForKeys("f.txt", []string{pub})
+	if err != nil {
+		t.Fatalf("EncryptStringForKeys: %v", err)
+	}
+	typeEnc, err := crypto.EncryptStringForKeys("text/plain", []string{pub})
+	if err != nil {
+		t.Fatalf("EncryptStringForKeys: %v", err)
+	}
+	created := time.Date(2026, 9, 4, 10, 30, 0, 0, time.UTC)
+
+	nodes := nodesFromItems([]api.DataroomNodeItem{
+		{
+			Node:    api.DataroomNode{ID: "n1", NameEnc: nameEnc, TypeEnc: &typeEnc},
+			Version: &api.DataroomNodeVersion{ID: "v1", OriginalSize: 5, ChunkCount: 1, CreatedAt: created},
+		},
+		{Node: api.DataroomNode{ID: "n2", NameEnc: nameEnc}},
+	}, identity)
+
+	if len(nodes) != 2 {
+		t.Fatalf("got %d nodes, want 2", len(nodes))
+	}
+	if !nodes[0].ModTime().Equal(created) {
+		t.Errorf("file ModTime() = %v, want %v", nodes[0].ModTime(), created)
+	}
+	if !nodes[1].ModTime().IsZero() {
+		t.Errorf("dir ModTime() = %v, want zero (API exposes no timestamp for folders)", nodes[1].ModTime())
 	}
 }
