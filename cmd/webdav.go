@@ -626,6 +626,33 @@ func (fs *webdavFS) invalidateNodeCache(uri string) {
 	fs.nodeMu.Unlock()
 }
 
+// invalidateNodeSubtree invalidates uri and every cached listing below it.
+// Deleting or renaming a directory must not leave its own listing and its
+// sub-listings cached: a folder re-created under the same name within the TTL
+// would otherwise serve the ghost children of the deleted tree. Harmless for
+// a file (nothing is cached below it).
+func (fs *webdavFS) invalidateNodeSubtree(uri string) {
+	prefix := strings.TrimSuffix(uri, "/") + "/"
+	fs.nodeMu.Lock()
+	if fs.nodeGen == nil {
+		fs.nodeGen = make(map[string]uint64)
+	}
+	delete(fs.nodeCache, uri)
+	fs.nodeGen[uri]++
+	for cached := range fs.nodeCache {
+		if strings.HasPrefix(cached, prefix) {
+			delete(fs.nodeCache, cached)
+			fs.nodeGen[cached]++
+		}
+	}
+	for inflight := range fs.nodeInflight {
+		if strings.HasPrefix(inflight, prefix) {
+			fs.nodeGen[inflight]++
+		}
+	}
+	fs.nodeMu.Unlock()
+}
+
 // getSession returns the session for drID, resolved on first access and cached
 // for the life of the process. Caching avoids two API calls (GetDataroom +
 // GetActiveKey) and an scrypt per listing or download.
@@ -1020,6 +1047,7 @@ func (fs *webdavFS) RemoveAll(ctx context.Context, name string) error {
 	if err == nil {
 		parentPath, _ := splitWebdavPath(subPath)
 		fs.invalidateNodeCache(dataroomURI(drID, parentPath))
+		fs.invalidateNodeSubtree(dataroomURI(drID, subPath))
 	}
 
 	return err
@@ -1054,8 +1082,10 @@ func (fs *webdavFS) Rename(ctx context.Context, oldName, newName string) error {
 	if err == nil {
 		oldParent, _ := splitWebdavPath(oldSub)
 		fs.invalidateNodeCache(dataroomURI(oldID, oldParent))
+		fs.invalidateNodeSubtree(dataroomURI(oldID, oldSub))
 		newParent, _ := splitWebdavPath(newSub)
 		fs.invalidateNodeCache(dataroomURI(newID, newParent))
+		fs.invalidateNodeSubtree(dataroomURI(newID, newSub))
 	}
 
 	return err

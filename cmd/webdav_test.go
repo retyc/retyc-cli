@@ -1017,3 +1017,86 @@ func TestListNodes_LeaderCancellationDoesNotFailWaiters(t *testing.T) {
 		t.Fatalf("waiter error = %v, want the listing", err)
 	}
 }
+
+// — Directory invalidation ————————————————————————————————————————————————————
+
+// Deleting or renaming a DIRECTORY must drop its own listing and every
+// sub-listing, not only the parent's: within the TTL a re-created folder of
+// the same name would otherwise serve the ghost children of the deleted tree.
+func TestWebdavFS_RemoveAllInvalidatesDirectorySubtree(t *testing.T) {
+	fs := newSubtreeTestFS(t)
+	ctx := context.Background()
+
+	if err := fs.RemoveAll(ctx, "/dataroom/DR/x"); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	for _, uri := range []string{"retyc://dr1/", "retyc://dr1/x", "retyc://dr1/x/sub"} {
+		if nodeCacheHas(fs, uri) {
+			t.Errorf("%s still cached after RemoveAll of the directory", uri)
+		}
+	}
+	if !nodeCacheHas(fs, "retyc://dr1/xy") {
+		t.Error("sibling retyc://dr1/xy was invalidated although it is not under /x")
+	}
+}
+
+func TestWebdavFS_RenameInvalidatesDirectorySubtrees(t *testing.T) {
+	fs := newSubtreeTestFS(t)
+	ctx := context.Background()
+
+	if err := fs.Rename(ctx, "/dataroom/DR/x", "/dataroom/DR/y"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	gone := []string{"retyc://dr1/", "retyc://dr1/x", "retyc://dr1/x/sub", "retyc://dr1/y", "retyc://dr1/y/old"}
+	for _, uri := range gone {
+		if nodeCacheHas(fs, uri) {
+			t.Errorf("%s still cached after Rename of the directory", uri)
+		}
+	}
+	if !nodeCacheHas(fs, "retyc://dr1/xy") {
+		t.Error("sibling retyc://dr1/xy was invalidated although it is not under /x or /y")
+	}
+}
+
+// newSubtreeTestFS serves one root folder "x" (node n-x) and pre-fills the
+// listing cache with entries under /x, under /y and for the sibling /xy.
+func newSubtreeTestFS(t *testing.T) *webdavFS {
+	t.Helper()
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := identity.Recipient().String()
+	xNameEnc, err := crypto.EncryptStringForKeys("x", []string{pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/nodes":
+			fmt.Fprintf(w, `{"items":[{"node":{"id":"n-x","name_enc":%q,"type_enc":null,"parent_id":null},`+
+				`"node_version":null}],"total":1,"pages":1,"page":1}`, xNameEnc)
+		case r.Method == http.MethodDelete && r.URL.Path == "/dataroom/node/n-x",
+			r.Method == http.MethodPut && r.URL.Path == "/dataroom/node/n-x":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	fs := newWebdavTestFS(srv)
+	fs.cache = newDataroomCache(func(_ context.Context) ([]dataroomCacheItem, error) {
+		return []dataroomCacheItem{{id: "dr1", title: "DR"}}, nil
+	})
+	fs.sessions.Store("dr1", &service.DataroomSession{Identity: identity, PublicKey: pub})
+	fs.nodeMu.Lock()
+	fs.nodeCache = map[string]*nodeCacheEntry{}
+	for _, uri := range []string{"retyc://dr1/", "retyc://dr1/x", "retyc://dr1/x/sub", "retyc://dr1/xy",
+		"retyc://dr1/y", "retyc://dr1/y/old"} {
+		fs.nodeCache[uri] = &nodeCacheEntry{fetchedAt: time.Now()}
+	}
+	fs.nodeMu.Unlock()
+
+	return fs
+}
