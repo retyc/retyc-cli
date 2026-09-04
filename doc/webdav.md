@@ -92,8 +92,11 @@ Notes and limitations:
   duplicate.
 - **File names containing `/`** cannot be represented as a single path component and are
   skipped from listings (a warning is printed to stderr).
-- Listings and dataroom sessions are cached briefly (30 s / 30 min respectively);
-  mutations made through the server invalidate the relevant cache immediately, but
+- Listings are cached briefly (30 s); dataroom sessions (the decrypted session
+  keypair) are resolved once per dataroom and kept for the life of the process, since
+  a dataroom's keypair never changes and each resolution unlocks the user key with an
+  scrypt costing ~256 MiB of working memory when no keyring caches it.
+  Mutations made through the server invalidate the relevant cache immediately, but
   changes made elsewhere (web app, another client) may take up to a minute to appear.
   A read that fails because the cached listing pointed at a deleted node drops that
   listing straight away, so the following request sees the current state (`404`)

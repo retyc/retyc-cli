@@ -34,6 +34,8 @@ internal/
     user.go                     # UserKey type + GetActiveKey
     admin*.go                   # Admin* types + Admin* API methods (org/member/blacklist/dataroom/transfer)
   service/
+    session_cache.go             # SessionCache (process-lifetime dataroom sessions, single-flight, one scrypt at a
+                                 #   time) + EnableSessionCache() used by mcp serve; webdav serve holds its own instance
     admin*.go                    # AdminListNodes, AdminDownloadNodes, AdminRekeyDataroom/Transfer, LoadAdminIdentity
   config/
     config.go                   # Structs, SetDefaults(), Load(), token persistence

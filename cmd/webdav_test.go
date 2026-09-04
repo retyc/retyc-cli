@@ -415,7 +415,7 @@ func newWebdavTestFS(srv *httptest.Server) *webdavFS {
 		Expiry:      time.Now().Add(time.Hour),
 	}), false, false)
 
-	return &webdavFS{
+	fs := &webdavFS{
 		client: client,
 		nodeCache: map[string]*nodeCacheEntry{
 			"retyc://dr1/": {
@@ -423,10 +423,10 @@ func newWebdavTestFS(srv *httptest.Server) *webdavFS {
 				fetchedAt: time.Now(),
 			},
 		},
-		sessionCache: map[string]*sessionCacheEntry{
-			"dr1": {sess: &service.DataroomSession{}, fetchedAt: time.Now()},
-		},
 	}
+	fs.sessions.Store("dr1", &service.DataroomSession{})
+
+	return fs
 }
 
 // newStaleReadHandle returns a handle built from the stale listing: its versionID
@@ -678,10 +678,7 @@ func TestWebdavFS_MutationsUseCachedSession(t *testing.T) {
 	fs.cache = newDataroomCache(func(_ context.Context) ([]dataroomCacheItem, error) {
 		return []dataroomCacheItem{{id: "dr1", title: "DR"}}, nil
 	})
-	fs.sessionCache["dr1"] = &sessionCacheEntry{
-		sess:      &service.DataroomSession{Identity: identity, PublicKey: pub},
-		fetchedAt: time.Now(),
-	}
+	fs.sessions.Store("dr1", &service.DataroomSession{Identity: identity, PublicKey: pub})
 	ctx := context.Background()
 
 	if err := fs.Mkdir(ctx, "/dataroom/DR/newdir", 0o755); err != nil {
@@ -830,4 +827,33 @@ func TestListNodes_WaiterHonoursContext(t *testing.T) {
 		t.Errorf("waiter error = %v, want context.Canceled", err)
 	}
 	close(gate)
+}
+
+// — Session cache wiring ——————————————————————————————————————————————————————
+
+// getSession must go through the process-lifetime session cache: the second
+// call for the same dataroom must not resolve again (see service.SessionCache).
+func TestWebdavFS_GetSession_ResolvedOnce(t *testing.T) {
+	var calls atomic.Int32
+	fs := &webdavFS{sessionFn: func(_ context.Context, drID string) (*service.DataroomSession, error) {
+		calls.Add(1)
+
+		return &service.DataroomSession{PublicKey: "pub-" + drID}, nil
+	}}
+	ctx := context.Background()
+
+	first, err := fs.getSession(ctx, "dr1")
+	if err != nil {
+		t.Fatalf("getSession: %v", err)
+	}
+	second, err := fs.getSession(ctx, "dr1")
+	if err != nil {
+		t.Fatalf("getSession (cached): %v", err)
+	}
+	if first != second {
+		t.Error("second getSession returned a different session: cache miss")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("sessionFn ran %d times, want 1", got)
+	}
 }

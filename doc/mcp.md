@@ -55,6 +55,12 @@ Add the following to your client's MCP config file:
 | `RETYC_TOKEN`          | No       | Offline refresh token. If set, bypasses local token storage (useful in isolated environments). |
 | `RETYC_CONFIG_DIR`     | No       | Override config directory (default: `.retyc/` in dev mode, `~/.config/retyc/` in prod).        |
 
+Unlocking the private key with the passphrase runs an scrypt that needs ~256 MiB of
+working memory. The server resolves each dataroom session once and keeps it in memory for
+its whole lifetime, so that cost is paid on the first dataroom operation only (the memory
+is handed back to the OS right after). Transfer tools still unlock the key on every call
+unless the Linux keyring caches it.
+
 ## Authentication in MCP mode
 
 The MCP server operates in two modes:

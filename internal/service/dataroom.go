@@ -96,9 +96,24 @@ type dataroomSession struct {
 	NameSalt   string
 }
 
-// resolveDataroomSession fetches the dataroom and the user's active key concurrently,
-// then decrypts the session key and per-dataroom name salt.
+// resolveDataroomSession returns the session for dataroomID, through the
+// process-wide SessionCache when EnableSessionCache was called, and by
+// resolving it directly otherwise.
 func resolveDataroomSession(
+	ctx context.Context, cfg *config.Config, client *api.Client, dataroomID string, reader PassphraseReader,
+) (*dataroomSession, error) {
+	if c := processSessions.Load(); c != nil {
+		return c.Get(ctx, dataroomID, func(ctx context.Context, drID string) (*DataroomSession, error) {
+			return resolveDataroomSessionUncached(ctx, cfg, client, drID, reader)
+		})
+	}
+
+	return resolveDataroomSessionUncached(ctx, cfg, client, dataroomID, reader)
+}
+
+// resolveDataroomSessionUncached fetches the dataroom and the user's active key
+// concurrently, then decrypts the session key and per-dataroom name salt.
+func resolveDataroomSessionUncached(
 	ctx context.Context, cfg *config.Config, client *api.Client, dataroomID string, reader PassphraseReader,
 ) (*dataroomSession, error) {
 	type drResult struct {
@@ -161,7 +176,8 @@ func resolveDataroomSession(
 }
 
 // DataroomSession is the exported alias for the per-dataroom crypto session.
-// Callers should cache it: resolving it requires two API calls and AGE crypto.
+// Callers should cache it (see SessionCache): resolving it requires two API
+// calls and AGE crypto.
 type DataroomSession = dataroomSession
 
 // GetDataroomSession resolves and returns the cryptographic session for a dataroom.
