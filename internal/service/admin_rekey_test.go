@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
 	"reflect"
 	"testing"
+
+	"github.com/retyc/retyc-cli/internal/crypto"
 )
 
 func TestRekeyRecipientKeys(t *testing.T) {
@@ -55,5 +58,64 @@ func TestRekeyRecipientKeys(t *testing.T) {
 				t.Errorf("skipped = %v, want %v", skipped, tt.wantSkipped)
 			}
 		})
+	}
+}
+
+func TestPushRekey_AlwaysIncludesOrganizationKey(t *testing.T) {
+	orgKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The service account is listed without any key (e.g. after a rotation):
+	// the pushed blob must still be decryptable by the organization key.
+	holders := []rekeyKeyHolder{
+		{Label: "member@x.co", PublicKey: ptr(member.Recipient().String())},
+		{Label: "service-account@x.co"},
+	}
+
+	var pushed string
+	res, err := pushRekey(context.Background(), "SESSION-PRIVATE-KEY", orgKey, holders, func(blob string) error {
+		pushed = blob
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("pushRekey() error = %v", err)
+	}
+	if res.Reencrypted != 2 {
+		t.Errorf("Reencrypted = %d, want 2 (member + organization key)", res.Reencrypted)
+	}
+
+	got, err := crypto.DecryptToString(pushed, orgKey)
+	if err != nil {
+		t.Fatalf("organization key cannot open the rekeyed blob: %v", err)
+	}
+	if got != "SESSION-PRIVATE-KEY" {
+		t.Errorf("decrypted = %q, want session private key", got)
+	}
+	if _, err := crypto.DecryptToString(pushed, member); err != nil {
+		t.Fatalf("member cannot open the rekeyed blob: %v", err)
+	}
+}
+
+func TestPushRekey_OrganizationKeyNotDuplicated(t *testing.T) {
+	orgKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	holders := []rekeyKeyHolder{
+		{Label: "service-account@x.co", PublicKey: ptr(orgKey.Recipient().String())},
+	}
+	res, err := pushRekey(context.Background(), "k", orgKey, holders, func(string) error { return nil })
+	if err != nil {
+		t.Fatalf("pushRekey() error = %v", err)
+	}
+	if res.Reencrypted != 1 {
+		t.Errorf("Reencrypted = %d, want 1", res.Reencrypted)
 	}
 }

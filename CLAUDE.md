@@ -325,9 +325,10 @@ keyring). `service.ResolveAdminDataroomSession` decrypts
 `session_private_key_enc` with it (NameSalt empty — admin is read-only on
 nodes, no name_hash). Rekey (dataroom + transfer): decrypt session key with
 the organization identity, re-encrypt with `expected_public_key` (falling back to
-`public_key`) of every current member/recipient — service account included,
-keyless external recipients skipped (their passphrase access is separate) —
-then PUT the blob; the server stores it as-is. `admin dataroom user rm`
+`public_key`) of every current member/recipient — the organization key's own
+recipient is always added even when the service account is listed without a
+key, keyless external recipients skipped (their passphrase access is separate)
+— then PUT the blob; the server stores it as-is. `admin dataroom user rm`
 chains a rekey automatically.
 
 `admin dataroom download <id> [glob]` recreates the dataroom's folder tree

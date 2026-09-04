@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"filippo.io/age"
 	"github.com/retyc/retyc-cli/internal/api"
@@ -78,7 +79,7 @@ func AdminRekeyDataroom(
 		})
 	}
 
-	return pushRekey(ctx, sess.PrivateKey, holders, func(blob string) error {
+	return pushRekey(ctx, sess.PrivateKey, orgKey, holders, func(blob string) error {
 		return client.AdminRekeyDataroom(ctx, dataroomID, blob)
 	})
 }
@@ -115,19 +116,25 @@ func AdminRekeyTransfer(
 		})
 	}
 
-	return pushRekey(ctx, sessionPrivKey, holders, func(blob string) error {
+	return pushRekey(ctx, sessionPrivKey, orgKey, holders, func(blob string) error {
 		return client.AdminRekeyTransfer(ctx, transferID, blob)
 	})
 }
 
-// pushRekey re-encrypts sessionPrivKey for the holders' keys and pushes the
-// blob through pushFn.
+// pushRekey re-encrypts sessionPrivKey for the holders' keys plus the
+// organization key itself, and pushes the blob through pushFn. The
+// organization recipient is always added, whatever the holder list says: the
+// service account may be listed without a key (rotation in progress, stale
+// membership), and a blob the organization key cannot open would make every
+// later admin operation on the dataroom/transfer fail with no way to repair it.
 func pushRekey(
-	_ context.Context, sessionPrivKey string, holders []rekeyKeyHolder, pushFn func(blob string) error,
+	_ context.Context, sessionPrivKey string, orgKey *age.HybridIdentity, holders []rekeyKeyHolder,
+	pushFn func(blob string) error,
 ) (*AdminRekeyResult, error) {
 	keys, skipped := rekeyRecipientKeys(holders)
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("no recipient with a public key: refusing to push an undecryptable blob")
+	orgRecipient := orgKey.Recipient().String()
+	if !slices.Contains(keys, orgRecipient) {
+		keys = append(keys, orgRecipient)
 	}
 
 	blob, err := crypto.EncryptStringForKeys(sessionPrivKey, keys)
