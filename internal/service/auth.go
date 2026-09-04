@@ -66,6 +66,41 @@ func ResolveUserIdentity(cfg *config.Config, userKey *api.UserKey, reader Passph
 	return identity, nil
 }
 
+// UnlockUserIdentity fetches the user's active key and decrypts it with the
+// passphrase returned by reader. Unlike ResolveUserIdentity it deliberately
+// bypasses the keyring cache: long-running servers (webdav) must fail fast at
+// startup on a wrong passphrase, not hours later when the cached identity
+// expires. The returned identity can then be reused for the life of the process
+// (see GetDataroomSessionWithIdentity), so the scrypt runs exactly once.
+func UnlockUserIdentity(ctx context.Context, client *api.Client, reader PassphraseReader) (
+	*age.HybridIdentity, error,
+) {
+	userKey, err := client.GetActiveKey(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fetching user key: %w", err)
+	}
+	if userKey == nil {
+		return nil, fmt.Errorf("no active encryption key - set up your key in the web interface first")
+	}
+	passphrase, err := reader()
+	if err != nil {
+		return nil, err
+	}
+	identityStr, err := crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, passphrase)
+	if err != nil {
+		return nil, fmt.Errorf("wrong key passphrase: %w", err)
+	}
+	// Same reasoning as ResolveUserIdentity: release the ~256 MiB scrypt buffer now.
+	debug.FreeOSMemory()
+
+	identity, err := crypto.ParseIdentity(identityStr)
+	if err != nil {
+		return nil, fmt.Errorf("parsing AGE identity: %w", err)
+	}
+
+	return identity, nil
+}
+
 // — Auth flow (device flow + logout) ——————————————————————————————————————————
 
 // oidcCache caches FetchOIDCConfig results to avoid 2 round-trips per LoginPoll call.

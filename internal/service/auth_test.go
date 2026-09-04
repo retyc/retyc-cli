@@ -3,12 +3,17 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"filippo.io/age"
+	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/internal/crypto"
 	"golang.org/x/oauth2"
 )
 
@@ -277,5 +282,80 @@ func TestLogout_RevocationWarning(t *testing.T) {
 	// Local token must still be deleted despite the warning.
 	if _, lerr := config.LoadToken(); lerr == nil {
 		t.Error("token should have been deleted even when revocation failed")
+	}
+}
+
+// — UnlockUserIdentity ———————————————————————————————————————————————————————
+
+// keyPassphraseTestServer serves /user/me/key/active with a private key
+// encrypted under the given passphrase, and returns the matching keypair.
+func keyPassphraseTestServer(t *testing.T, passphrase string) (*httptest.Server, *age.HybridIdentity) {
+	t.Helper()
+	userKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	userPrivEnc, err := crypto.EncryptWithPassphrase([]byte(userKey.String()), passphrase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user/me/key/active" {
+			http.NotFound(w, r)
+
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.UserKey{
+			ID: "k1", PublicKey: userKey.Recipient().String(), PrivateKeyEnc: userPrivEnc,
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv, userKey
+}
+
+func newKeyTestClient(srv *httptest.Server) *api.Client {
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test", TokenType: "Bearer"})
+
+	return api.New(srv.URL, "retyc-test/1.0", ts, false, false)
+}
+
+func TestUnlockUserIdentity_Correct(t *testing.T) {
+	srv, userKey := keyPassphraseTestServer(t, "good-pw")
+
+	identity, err := UnlockUserIdentity(context.Background(), newKeyTestClient(srv), func() (string, error) {
+		return "good-pw", nil
+	})
+	if err != nil {
+		t.Fatalf("UnlockUserIdentity() error = %v, want nil", err)
+	}
+	if got, want := identity.Recipient().String(), userKey.Recipient().String(); got != want {
+		t.Errorf("identity recipient = %q, want %q", got, want)
+	}
+}
+
+func TestUnlockUserIdentity_Wrong(t *testing.T) {
+	srv, _ := keyPassphraseTestServer(t, "good-pw")
+
+	_, err := UnlockUserIdentity(context.Background(), newKeyTestClient(srv), func() (string, error) {
+		return "bad-pw", nil
+	})
+	if err == nil {
+		t.Fatal("UnlockUserIdentity() error = nil, want wrong passphrase error")
+	}
+	if !strings.Contains(err.Error(), "wrong key passphrase") {
+		t.Errorf("error = %q, want it to mention 'wrong key passphrase'", err)
+	}
+}
+
+func TestUnlockUserIdentity_ReaderError(t *testing.T) {
+	srv, _ := keyPassphraseTestServer(t, "good-pw")
+
+	want := errors.New("no passphrase")
+	_, err := UnlockUserIdentity(context.Background(), newKeyTestClient(srv), func() (string, error) {
+		return "", want
+	})
+	if !errors.Is(err, want) {
+		t.Errorf("error = %v, want %v", err, want)
 	}
 }

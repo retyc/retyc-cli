@@ -857,3 +857,113 @@ func TestWebdavFS_GetSession_ResolvedOnce(t *testing.T) {
 		t.Errorf("sessionFn ran %d times, want 1", got)
 	}
 }
+
+// — Startup checks ————————————————————————————————————————————————————————————
+
+// newStartupTestServer serves the two endpoints hit at webdav serve startup:
+// the dataroom listing (connectivity check) and the user's active key, whose
+// private half is encrypted under keyPassphrase.
+func newStartupTestServer(t *testing.T, keyPassphrase string) *httptest.Server {
+	t.Helper()
+	userKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	userPrivEnc, err := crypto.EncryptWithPassphrase([]byte(userKey.String()), keyPassphrase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dataroom/":
+			_, _ = io.WriteString(w, `{"items":[],"total":0}`)
+		case "/user/me/key/active":
+			_, _ = fmt.Fprintf(w, `{"id":"k1","public_key":%q,"private_key_enc":%q}`,
+				userKey.Recipient().String(), userPrivEnc)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+func newStartupTestClient(srv *httptest.Server) *api.Client {
+	return api.New(srv.URL, "retyc-test/1.0",
+		oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test", TokenType: "Bearer"}), false, false)
+}
+
+func TestWebdavStartupCheck_OK(t *testing.T) {
+	srv := newStartupTestServer(t, "good-pw")
+
+	identity, err := webdavStartupCheck(context.Background(), newStartupTestClient(srv), func() (string, error) {
+		return "good-pw", nil
+	})
+	if err != nil {
+		t.Fatalf("webdavStartupCheck() error = %v, want nil", err)
+	}
+	if identity == nil {
+		t.Fatal("webdavStartupCheck() returned a nil identity")
+	}
+}
+
+func TestWebdavStartupCheck_WrongPassphrase(t *testing.T) {
+	srv := newStartupTestServer(t, "good-pw")
+
+	_, err := webdavStartupCheck(context.Background(), newStartupTestClient(srv), func() (string, error) {
+		return "bad-pw", nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "wrong key passphrase") {
+		t.Fatalf("webdavStartupCheck() error = %v, want wrong key passphrase", err)
+	}
+}
+
+func TestWebdavStartupCheck_APIUnreachable(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(srv.Close)
+
+	_, err := webdavStartupCheck(context.Background(), newStartupTestClient(srv), func() (string, error) {
+		return "good-pw", nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "API connectivity check failed") {
+		t.Fatalf("webdavStartupCheck() error = %v, want connectivity failure", err)
+	}
+}
+
+// Once the identity has been unlocked at startup, resolving a dataroom session
+// must reuse it: no second fetch of the user key, no second scrypt.
+func TestWebdavFS_ResolveSession_ReusesStartupIdentity(t *testing.T) {
+	userKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessPrivEnc, err := crypto.EncryptStringForKeys(sessKey.String(), []string{userKey.Recipient().String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dataroom/dr1" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"id":"dr1","session_public_key":%q,"session_private_key_enc":%q}`,
+			sessKey.Recipient().String(), sessPrivEnc)
+	}))
+	t.Cleanup(srv.Close)
+
+	fs := &webdavFS{client: newStartupTestClient(srv), identity: userKey}
+	sess, err := fs.getSession(context.Background(), "dr1")
+	if err != nil {
+		t.Fatalf("getSession: %v", err)
+	}
+	if sess.PublicKey != sessKey.Recipient().String() {
+		t.Errorf("PublicKey = %q, want %q", sess.PublicKey, sessKey.Recipient().String())
+	}
+}
