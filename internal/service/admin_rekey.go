@@ -65,6 +65,39 @@ func AdminRekeyDataroom(
 		return nil, err
 	}
 
+	return rekeyDataroomWithSession(ctx, client, orgKey, dataroomID, sess)
+}
+
+// AdminRemoveDataroomUser removes a member from a dataroom and rekeys it so
+// the removal also takes effect cryptographically. The session key is
+// decrypted BEFORE the removal: the DELETE is irreversible from the CLI (there
+// is no admin "add user"), so a dataroom the organization key cannot open must
+// be refused up front rather than left half-done with the old blob in place.
+func AdminRemoveDataroomUser(
+	ctx context.Context, client *api.Client, orgKey *age.HybridIdentity, dataroomID, userID string,
+) (*AdminRekeyResult, error) {
+	sess, err := ResolveAdminDataroomSession(ctx, client, orgKey, dataroomID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := client.AdminRemoveDataroomUser(ctx, dataroomID, userID); err != nil {
+		return nil, fmt.Errorf("removing user: %w", err)
+	}
+
+	result, err := rekeyDataroomWithSession(ctx, client, orgKey, dataroomID, sess)
+	if err != nil {
+		return nil, fmt.Errorf("user removed but rekey FAILED (the user may still decrypt): %w", err)
+	}
+
+	return result, nil
+}
+
+// rekeyDataroomWithSession re-encrypts an already decrypted dataroom session
+// key for the current members and pushes it.
+func rekeyDataroomWithSession(
+	ctx context.Context, client *api.Client, orgKey *age.HybridIdentity, dataroomID string, sess *DataroomSession,
+) (*AdminRekeyResult, error) {
 	users, err := client.AdminListDataroomUsers(ctx, dataroomID)
 	if err != nil {
 		return nil, fmt.Errorf("listing dataroom users: %w", err)

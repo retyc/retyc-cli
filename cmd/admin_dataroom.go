@@ -364,13 +364,12 @@ var adminDataroomUserRmCmd = &cobra.Command{
 
 			return nil
 		}
-		if err := client.AdminRemoveDataroomUser(cmd.Context(), args[0], args[1]); err != nil {
-			return adminErrHint(err)
-		}
-		// The removal only takes effect cryptographically after the rekey.
-		result, err := service.AdminRekeyDataroom(cmd.Context(), client, orgKey, args[0])
+		// The service checks the organization key can open the dataroom before
+		// the (irreversible) removal, then rekeys so the removal takes effect
+		// cryptographically.
+		result, err := service.AdminRemoveDataroomUser(cmd.Context(), client, orgKey, args[0], args[1])
 		if err != nil {
-			return fmt.Errorf("user removed but rekey FAILED (the user may still decrypt): %w", err)
+			return adminErrHint(err)
 		}
 		if jsonOutput {
 			return printJSON(struct {
