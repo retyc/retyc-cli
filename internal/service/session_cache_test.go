@@ -285,3 +285,50 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// The shared resolution must not run under the leader's request context: a
+// leader whose request is aborted (client disconnect, MCP cancellation) would
+// otherwise fail every waiter with context.Canceled for a resolution never
+// attempted on their behalf.
+func TestSessionCache_LeaderCancellationDoesNotFailWaiters(t *testing.T) {
+	release := make(chan struct{})
+	var started atomic.Int32
+	resolve := func(ctx context.Context, drID string) (*DataroomSession, error) {
+		started.Add(1)
+		<-release
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		return &DataroomSession{PublicKey: "pub-" + drID}, nil
+	}
+	var c SessionCache
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan struct{})
+	go func() {
+		defer close(leaderDone)
+		_, _ = c.Get(leaderCtx, "dr1", resolve)
+	}()
+	waitFor(t, func() bool { return started.Load() == 1 })
+
+	waiterErr := make(chan error, 1)
+	go func() {
+		_, err := c.Get(context.Background(), "dr1", resolve)
+		waiterErr <- err
+	}()
+	waitFor(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		return c.inflight["dr1"] != nil
+	})
+
+	cancelLeader()
+	close(release)
+	<-leaderDone
+
+	if err := <-waiterErr; err != nil {
+		t.Fatalf("waiter error = %v, want the resolved session", err)
+	}
+}

@@ -63,8 +63,12 @@ func (c *SessionCache) Get(
 	c.inflight[drID] = f
 	c.mu.Unlock()
 
+	// The resolution is shared by every caller that misses the cache while it
+	// runs, so it must not die with the leader's request: a client aborting
+	// its own request (disconnect, MCP cancellation) would otherwise fail every
+	// waiter with context.Canceled. Values (deadline excluded) are kept.
 	c.resolveMu.Lock()
-	f.sess, f.err = resolve(ctx, drID)
+	f.sess, f.err = resolve(context.WithoutCancel(ctx), drID)
 	c.resolveMu.Unlock()
 
 	c.mu.Lock()

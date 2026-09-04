@@ -681,7 +681,9 @@ func (fs *webdavFS) listNodes(ctx context.Context, drID, nodePath string) ([]ser
 	if fetch == nil {
 		fetch = fs.fetchNodes
 	}
-	f.nodes, f.err = fetch(ctx, drID, nodePath)
+	// Shared by every concurrent caller of this URI: detach it from the
+	// leader's request so one aborted PROPFIND cannot fail the others.
+	f.nodes, f.err = fetch(context.WithoutCancel(ctx), drID, nodePath)
 
 	fs.nodeMu.Lock()
 	delete(fs.nodeInflight, uri)

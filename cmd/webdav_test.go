@@ -967,3 +967,53 @@ func TestWebdavFS_ResolveSession_ReusesStartupIdentity(t *testing.T) {
 		t.Errorf("PublicKey = %q, want %q", sess.PublicKey, sessKey.Recipient().String())
 	}
 }
+
+// The shared listing must not run under the leader's request context: Finder
+// fires PROPFINDs in parallel and aborting one of them must not fail the
+// others with context.Canceled.
+func TestListNodes_LeaderCancellationDoesNotFailWaiters(t *testing.T) {
+	gate := make(chan struct{})
+	started := make(chan struct{}, 8)
+	listFn := func(ctx context.Context, _, _ string) ([]service.DataroomNodeInfo, error) {
+		started <- struct{}{}
+		<-gate
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		return []service.DataroomNodeInfo{{ID: "n1", Name: "a", Type: "file"}}, nil
+	}
+	fs := &webdavFS{listFn: listFn}
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan struct{})
+	go func() {
+		defer close(leaderDone)
+		_, _ = fs.listNodes(leaderCtx, "dr1", "/")
+	}()
+	<-started
+
+	waiterErr := make(chan error, 1)
+	go func() {
+		_, err := fs.listNodes(context.Background(), "dr1", "/")
+		waiterErr <- err
+	}()
+	for {
+		fs.nodeMu.Lock()
+		waiting := fs.nodeInflight[dataroomURI("dr1", "/")] != nil
+		fs.nodeMu.Unlock()
+		if waiting {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(10 * time.Millisecond) // let the waiter block on f.done
+
+	cancelLeader()
+	close(gate)
+	<-leaderDone
+
+	if err := <-waiterErr; err != nil {
+		t.Fatalf("waiter error = %v, want the listing", err)
+	}
+}
