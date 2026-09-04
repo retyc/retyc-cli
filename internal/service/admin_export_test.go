@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -408,5 +411,54 @@ func TestAdminExportAll(t *testing.T) {
 	}
 	if len(m.Errors) != 0 {
 		t.Errorf("manifest errors = %v, want none", m.Errors)
+	}
+}
+
+// TestAdminExportAll_TransientErrorIsAnErrorNotASkip: only a genuine
+// "organization key cannot open it" is a skip. Any other failure while
+// resolving the session (API 502, timeout, ...) must be recorded in
+// manifest.errors so the caller exits non-zero instead of silently shipping an
+// export missing a decryptable dataroom's content.
+func TestAdminExportAll_TransientErrorIsAnErrorNotASkip(t *testing.T) {
+	orgKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, _ := newExportFixtureServer(t, orgKey.Recipient().String(), other.Recipient().String())
+	target, err := url.Parse(fixture.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	// dr-open is decryptable, but its detail fetch fails transiently.
+	flaky := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr-open" {
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(flaky.Close)
+	out := filepath.Join(t.TempDir(), "export")
+
+	result, err := AdminExportAll(context.Background(), newExportTestClient(flaky), orgKey,
+		AdminExportParams{OutputDir: out, CLIVersion: "test"}, nil, nil)
+	if err != nil {
+		t.Fatalf("AdminExportAll() error = %v", err)
+	}
+	m := result.Manifest
+	if len(m.Errors) != 1 || !strings.Contains(m.Errors[0], "dr-open") {
+		t.Errorf("manifest errors = %v, want one error for dr-open", m.Errors)
+	}
+	if len(m.DataroomsSkipped) != 1 || m.DataroomsSkipped[0].ID != "dr-locked" {
+		t.Errorf("manifest skipped = %+v, want only dr-locked", m.DataroomsSkipped)
+	}
+	if m.DataroomsExported != 0 {
+		t.Errorf("DataroomsExported = %d, want 0", m.DataroomsExported)
 	}
 }

@@ -195,6 +195,12 @@ func exportDataroom(
 	}
 
 	sess, sessErr := ResolveAdminDataroomSession(ctx, client, orgKey, dr.ID)
+	// Only "the organization key cannot open it" is a legitimate skip. Any
+	// other failure (API error, timeout) must surface as an error, otherwise a
+	// decryptable dataroom silently disappears from the export with exit 0.
+	if sessErr != nil && !errors.Is(sessErr, ErrOrgKeyNoAccess) {
+		return false, "", fmt.Errorf("resolving session: %w", sessErr)
+	}
 	exportable := sessErr == nil
 	if !exportable {
 		reason = sessErr.Error()
