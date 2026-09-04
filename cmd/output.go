@@ -242,9 +242,10 @@ func newAdminNodesJSON(nodes []service.AdminNodeInfo) []adminNodeJSON {
 }
 
 type adminDownloadJSON struct {
-	OutputDir      string   `json:"output_dir"`
-	Downloaded     []string `json:"downloaded"`
-	SkippedFolders []string `json:"skipped_folders"`
+	OutputDir       string   `json:"output_dir"`
+	Downloaded      []string `json:"downloaded"`
+	SkippedFolders  []string `json:"skipped_folders"`
+	SkippedExisting []string `json:"skipped_existing"`
 }
 
 type rekeyJSON struct {

@@ -462,3 +462,39 @@ func TestAdminExportAll_TransientErrorIsAnErrorNotASkip(t *testing.T) {
 		t.Errorf("DataroomsExported = %d, want 0", m.DataroomsExported)
 	}
 }
+
+// A file already present in the output directory (e.g. a re-run of
+// `admin dataroom download` into the same directory) must be skipped and
+// reported, not abort the download of every other file.
+func TestAdminDownloadNodes_ExistingFileSkippedNotFatal(t *testing.T) {
+	orgKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, fileContent := newExportFixtureServer(t, orgKey.Recipient().String(), other.Recipient().String())
+	out := t.TempDir()
+	if err := os.WriteFile(filepath.Join(out, "readme.md"), []byte("already here"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := AdminDownloadNodes(context.Background(), newExportTestClient(srv), orgKey, "dr-open", "", out, nil)
+	if err != nil {
+		t.Fatalf("AdminDownloadNodes() error = %v", err)
+	}
+	if len(result.Downloaded) != 1 || result.Downloaded[0] != filepath.Join("docs", "report.txt") {
+		t.Errorf("Downloaded = %v, want [docs/report.txt]", result.Downloaded)
+	}
+	if len(result.SkippedExisting) != 1 || result.SkippedExisting[0] != "readme.md" {
+		t.Errorf("SkippedExisting = %v, want [readme.md]", result.SkippedExisting)
+	}
+	if got := readExportFile(t, out, "docs", "report.txt"); string(got) != fileContent {
+		t.Errorf("report.txt = %q, want %q", got, fileContent)
+	}
+	if got := readExportFile(t, out, "readme.md"); string(got) != "already here" {
+		t.Errorf("existing readme.md was overwritten: %q", got)
+	}
+}

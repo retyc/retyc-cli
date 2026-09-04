@@ -297,13 +297,17 @@ var adminDataroomDownloadCmd = &cobra.Command{
 		for _, p := range result.SkippedFolders {
 			fmt.Fprintf(os.Stderr, "Skipping folder %s (admin download does not recurse)\n", p)
 		}
+		for _, p := range result.SkippedExisting {
+			fmt.Fprintf(os.Stderr, "Skipping %s (file already exists)\n", p)
+		}
 		// The dataroom's folder structure is recreated under outputDir, so
 		// result.Downloaded holds paths relative to outputDir, not bare filenames.
 		if jsonOutput {
 			return printJSON(adminDownloadJSON{
-				OutputDir:      outputDir,
-				Downloaded:     nonNil(result.Downloaded),
-				SkippedFolders: nonNil(result.SkippedFolders),
+				OutputDir:       outputDir,
+				Downloaded:      nonNil(result.Downloaded),
+				SkippedFolders:  nonNil(result.SkippedFolders),
+				SkippedExisting: nonNil(result.SkippedExisting),
 			})
 		}
 		fmt.Printf("Downloaded %d file(s) to %s\n", len(result.Downloaded), outputDir)

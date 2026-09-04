@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"context"
 	"fmt"
 	"io"
@@ -252,6 +253,10 @@ func StreamDownloadChunks(
 // during the download; on success the file is atomically renamed to its final name. On
 // any error the .part file is removed, so retries always start from a clean state.
 // progress is called (if non-nil) after each chunk is written to disk.
+// ErrFileExists is returned by DownloadChunks when the destination file is
+// already present: nothing is overwritten.
+var ErrFileExists = errors.New("file already exists")
+
 func DownloadChunks(
 	ctx context.Context,
 	outputDir string,
@@ -266,7 +271,7 @@ func DownloadChunks(
 	partDest := dest + ".part"
 
 	if _, err := os.Stat(dest); err == nil {
-		return fmt.Errorf("file already exists: %s", dest)
+		return fmt.Errorf("%w: %s", ErrFileExists, dest)
 	}
 
 	//nolint:gosec // G304: dest is validated outputDir + sanitised base filename

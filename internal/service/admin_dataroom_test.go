@@ -257,3 +257,48 @@ func TestMatchAdminNodes(t *testing.T) {
 		}
 	})
 }
+
+// Sanitizing is many-to-one ("q1/report.pdf" and "q1_report.pdf" both become
+// "q1_report.pdf"): siblings that collide once sanitized must get distinct
+// on-disk names instead of tripping the "file already exists" guard and
+// aborting the whole download.
+func TestBuildAdminNodeTree_SiblingCollisionsSuffixed(t *testing.T) {
+	sess, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := sess.Recipient().String()
+	nodes := []api.AdminDataroomNode{
+		{ID: "a", NameEnc: encName(t, "q1/report.pdf", pub)},
+		{ID: "b", NameEnc: encName(t, "q1_report.pdf", pub)},
+		{ID: "c", NameEnc: encName(t, "q1\\report.pdf", pub)},
+		{ID: "dir", IsFolder: true, NameEnc: encName(t, "docs", pub)},
+		// Same sanitized name under another parent: no collision, no suffix.
+		{ID: "d", ParentID: ptr("dir"), NameEnc: encName(t, "q1_report.pdf", pub)},
+		// Orphan (parent missing from the listing): rooted at "/" by nodePath,
+		// so it collides with the root-level siblings and must be suffixed too.
+		{ID: "e", ParentID: ptr("gone"), NameEnc: encName(t, "q1_report.pdf", pub)},
+	}
+
+	infos, err := buildAdminNodeTree(nodes, sess)
+	if err != nil {
+		t.Fatalf("buildAdminNodeTree() error = %v", err)
+	}
+	got := map[string]string{}
+	for _, i := range infos {
+		got[i.ID] = i.Path
+	}
+	want := map[string]string{
+		"a":   "/q1_report.pdf",
+		"b":   "/q1_report (2).pdf",
+		"c":   "/q1_report (3).pdf",
+		"dir": "/docs",
+		"d":   "/docs/q1_report.pdf",
+		"e":   "/q1_report (4).pdf",
+	}
+	for id, p := range want {
+		if got[id] != p {
+			t.Errorf("node %s path = %q, want %q", id, got[id], p)
+		}
+	}
+}
