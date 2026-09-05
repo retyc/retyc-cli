@@ -82,18 +82,55 @@ func sanitizeNodeName(name string) string {
 	return sanitized
 }
 
+// uniqueSiblingName returns name, or "stem (n).ext" for the smallest n >= 2
+// that is not already taken under parentKey, and marks the result as taken.
+func uniqueSiblingName(taken map[string]bool, parentKey, name string) string {
+	key := parentKey + "/" + name
+	if !taken[key] {
+		taken[key] = true
+
+		return name
+	}
+	ext := path.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	for n := 2; ; n++ {
+		candidate := fmt.Sprintf("%s (%d)%s", stem, n, ext)
+		if key := parentKey + "/" + candidate; !taken[key] {
+			taken[key] = true
+
+			return candidate
+		}
+	}
+}
+
 // buildAdminNodeTree decrypts node names and computes each node's full path
 // from the flat parent_id listing. A node whose parent is missing from the
 // listing is rooted at "/": the admin view must never silently drop content.
 func buildAdminNodeTree(nodes []api.AdminDataroomNode, sessionID age.Identity) ([]AdminNodeInfo, error) {
 	names := make(map[string]string, len(nodes))
 	parents := make(map[string]*string, len(nodes))
+	// Sanitizing is many-to-one ("q1/report.pdf" and "q1_report.pdf" both
+	// sanitize to "q1_report.pdf"), so siblings may collide once sanitized.
+	// Give later siblings a " (n)" suffix, in listing order, so every node
+	// keeps a distinct on-disk path instead of tripping the file-exists guard.
+	// A node whose parent is missing from the listing is rooted at "/" by
+	// nodePath below, so it competes with the root-level names: key it as a
+	// root node, not by its (dangling) parent ID.
+	known := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		known[n.ID] = true
+	}
+	taken := make(map[string]bool, len(nodes))
 	for _, n := range nodes {
 		name, err := crypto.DecryptToString(n.NameEnc, sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("decrypting name of node %s: %w", n.ID, err)
 		}
-		names[n.ID] = sanitizeNodeName(name)
+		parentKey := ""
+		if n.ParentID != nil && known[*n.ParentID] {
+			parentKey = *n.ParentID
+		}
+		names[n.ID] = uniqueSiblingName(taken, parentKey, sanitizeNodeName(name))
 		parents[n.ID] = n.ParentID
 	}
 
@@ -204,6 +241,9 @@ func matchAdminNodes(
 type AdminDownloadResult struct {
 	Downloaded     []string
 	SkippedFolders []string
+	// SkippedExisting lists files (relative paths) left untouched because a
+	// file already existed at their destination.
+	SkippedExisting []string
 }
 
 // AdminDownloadNodes downloads and decrypts the file nodes of a dataroom
@@ -278,6 +318,12 @@ func AdminDownloadNodes(
 			func(ctx context.Context, chunkID int) ([]byte, error) {
 				return client.AdminDownloadNodeChunk(ctx, nodeID, chunkID)
 			})
+		if errors.Is(err, ErrFileExists) {
+			// A re-run into a populated directory: keep going, report it.
+			result.SkippedExisting = append(result.SkippedExisting, relPath)
+
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("downloading %s: %w", f.Path, err)
 		}

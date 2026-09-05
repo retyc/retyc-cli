@@ -86,7 +86,7 @@ func Load() (*Config, error) {
 // it is derived from the member API base URL by appending the /v1 prefix.
 func (c *Config) AdminBaseURL() string {
 	if c.Admin.BaseURL != "" {
-		return c.Admin.BaseURL
+		return strings.TrimRight(c.Admin.BaseURL, "/")
 	}
 
 	return strings.TrimRight(c.API.BaseURL, "/") + "/v1"

@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/schollz/progressbar/v3"
@@ -41,29 +42,37 @@ Transfers are not exported: the admin API exposes no transfer file download.`,
 			return adminErrHint(err)
 		}
 
-		m := result.Manifest
-		if jsonOutput {
-			// The manifest is the same document written to export.json.
-			if err := printJSON(m); err != nil {
-				return err
-			}
-		} else {
-			fmt.Printf("Export complete: %d member(s), %d blacklisted domain(s), %d/%d dataroom(s) to %s\n",
-				m.Members, m.BlacklistDomains, m.DataroomsExported, m.Datarooms, args[0])
-		}
-		for _, s := range m.DataroomsSkipped {
-			fmt.Fprintf(os.Stderr, "Skipped dataroom %s (%s): %s\n", s.ID, s.Title, s.Reason)
-		}
-		if len(m.Errors) > 0 {
+		return reportExportResult(result.Manifest, args[0])
+	},
+}
+
+// reportExportResult prints the export summary and turns manifest errors into
+// a non-zero exit. Under --json the contract is "result on stdout, or
+// {"error":...} on stderr with an empty stdout": when the manifest records
+// errors, nothing goes to stdout and the plain-text error lines are dropped
+// (the full list is in export.json, which the error points at).
+func reportExportResult(m service.AdminExportManifest, outputDir string) error {
+	for _, s := range m.DataroomsSkipped {
+		fmt.Fprintf(os.Stderr, "Skipped dataroom %s (%s): %s\n", s.ID, s.Title, s.Reason)
+	}
+	if len(m.Errors) > 0 {
+		if !jsonOutput {
 			for _, e := range m.Errors {
 				fmt.Fprintln(os.Stderr, "ERROR:", e)
 			}
-
-			return fmt.Errorf("export finished with %d error(s), see export.json", len(m.Errors))
 		}
 
-		return nil
-	},
+		return fmt.Errorf("export finished with %d error(s), see %s",
+			len(m.Errors), filepath.Join(outputDir, "export.json"))
+	}
+	if jsonOutput {
+		// The manifest is the same document written to export.json.
+		return printJSON(m)
+	}
+	fmt.Printf("Export complete: %d member(s), %d blacklisted domain(s), %d/%d dataroom(s) to %s\n",
+		m.Members, m.BlacklistDomains, m.DataroomsExported, m.Datarooms, outputDir)
+
+	return nil
 }
 
 func init() {

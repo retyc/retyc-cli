@@ -297,13 +297,17 @@ var adminDataroomDownloadCmd = &cobra.Command{
 		for _, p := range result.SkippedFolders {
 			fmt.Fprintf(os.Stderr, "Skipping folder %s (admin download does not recurse)\n", p)
 		}
+		for _, p := range result.SkippedExisting {
+			fmt.Fprintf(os.Stderr, "Skipping %s (file already exists)\n", p)
+		}
 		// The dataroom's folder structure is recreated under outputDir, so
 		// result.Downloaded holds paths relative to outputDir, not bare filenames.
 		if jsonOutput {
 			return printJSON(adminDownloadJSON{
-				OutputDir:      outputDir,
-				Downloaded:     nonNil(result.Downloaded),
-				SkippedFolders: nonNil(result.SkippedFolders),
+				OutputDir:       outputDir,
+				Downloaded:      nonNil(result.Downloaded),
+				SkippedFolders:  nonNil(result.SkippedFolders),
+				SkippedExisting: nonNil(result.SkippedExisting),
 			})
 		}
 		fmt.Printf("Downloaded %d file(s) to %s\n", len(result.Downloaded), outputDir)
@@ -364,13 +368,12 @@ var adminDataroomUserRmCmd = &cobra.Command{
 
 			return nil
 		}
-		if err := client.AdminRemoveDataroomUser(cmd.Context(), args[0], args[1]); err != nil {
-			return adminErrHint(err)
-		}
-		// The removal only takes effect cryptographically after the rekey.
-		result, err := service.AdminRekeyDataroom(cmd.Context(), client, orgKey, args[0])
+		// The service checks the organization key can open the dataroom before
+		// the (irreversible) removal, then rekeys so the removal takes effect
+		// cryptographically.
+		result, err := service.AdminRemoveDataroomUser(cmd.Context(), client, orgKey, args[0], args[1])
 		if err != nil {
-			return fmt.Errorf("user removed but rekey FAILED (the user may still decrypt): %w", err)
+			return adminErrHint(err)
 		}
 		if jsonOutput {
 			return printJSON(struct {

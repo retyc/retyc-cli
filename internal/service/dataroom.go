@@ -216,6 +216,14 @@ func fetchNodeItems(
 		return resolveGlob(ctx, client, dataroomID, nodePath, identity)
 	}
 
+	return fetchChildItems(ctx, client, dataroomID, nodePath, identity)
+}
+
+// fetchChildItems lists the raw API node items under the folder at nodePath,
+// resolved literally (no glob interpretation).
+func fetchChildItems(
+	ctx context.Context, client *api.Client, dataroomID, nodePath string, identity *age.HybridIdentity,
+) ([]api.DataroomNodeItem, error) {
 	parentID, err := resolvePath(ctx, client, dataroomID, nodePath, identity)
 	if err != nil {
 		return nil, err
@@ -281,6 +289,21 @@ func ListNodesWithSession(
 	ctx context.Context, client *api.Client, dataroomID, nodePath string, sess *DataroomSession,
 ) ([]DataroomNodeInfo, error) {
 	items, err := fetchNodeItems(ctx, client, dataroomID, nodePath, sess.Identity)
+	if err != nil {
+		return nil, err
+	}
+
+	return nodesFromItems(items, sess.Identity), nil
+}
+
+// ListNodesLiteralWithSession lists the children of the folder at nodePath,
+// resolving every path component by its exact name. Callers that relay
+// client-supplied paths (WebDAV) use it: a folder legitimately named "v[1]"
+// or "q?" must list its children, not be matched as a pattern against itself.
+func ListNodesLiteralWithSession(
+	ctx context.Context, client *api.Client, dataroomID, nodePath string, sess *DataroomSession,
+) ([]DataroomNodeInfo, error) {
+	items, err := fetchChildItems(ctx, client, dataroomID, nodePath, sess.Identity)
 	if err != nil {
 		return nil, err
 	}
@@ -1070,6 +1093,16 @@ func DeleteDataroomNodeWithSession(
 		return len(matches), nil
 	}
 
+	return DeleteDataroomNodeLiteralWithSession(ctx, client, dataroomID, nodePath, sess)
+}
+
+// DeleteDataroomNodeLiteralWithSession deletes the single node at nodePath,
+// resolving every path component by its exact name (no glob interpretation).
+// WebDAV relays client-supplied paths through it: a file named
+// "notes[draft].txt" must delete itself, never a sibling matching the class.
+func DeleteDataroomNodeLiteralWithSession(
+	ctx context.Context, client *api.Client, dataroomID, nodePath string, sess *DataroomSession,
+) (int, error) {
 	nodeID, err := resolvePath(ctx, client, dataroomID, nodePath, sess.Identity)
 	if err != nil {
 		return 0, err

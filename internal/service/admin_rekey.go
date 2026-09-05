@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"filippo.io/age"
 	"github.com/retyc/retyc-cli/internal/api"
@@ -64,6 +65,39 @@ func AdminRekeyDataroom(
 		return nil, err
 	}
 
+	return rekeyDataroomWithSession(ctx, client, orgKey, dataroomID, sess)
+}
+
+// AdminRemoveDataroomUser removes a member from a dataroom and rekeys it so
+// the removal also takes effect cryptographically. The session key is
+// decrypted BEFORE the removal: the DELETE is irreversible from the CLI (there
+// is no admin "add user"), so a dataroom the organization key cannot open must
+// be refused up front rather than left half-done with the old blob in place.
+func AdminRemoveDataroomUser(
+	ctx context.Context, client *api.Client, orgKey *age.HybridIdentity, dataroomID, userID string,
+) (*AdminRekeyResult, error) {
+	sess, err := ResolveAdminDataroomSession(ctx, client, orgKey, dataroomID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := client.AdminRemoveDataroomUser(ctx, dataroomID, userID); err != nil {
+		return nil, fmt.Errorf("removing user: %w", err)
+	}
+
+	result, err := rekeyDataroomWithSession(ctx, client, orgKey, dataroomID, sess)
+	if err != nil {
+		return nil, fmt.Errorf("user removed but rekey FAILED (the user may still decrypt): %w", err)
+	}
+
+	return result, nil
+}
+
+// rekeyDataroomWithSession re-encrypts an already decrypted dataroom session
+// key for the current members and pushes it.
+func rekeyDataroomWithSession(
+	ctx context.Context, client *api.Client, orgKey *age.HybridIdentity, dataroomID string, sess *DataroomSession,
+) (*AdminRekeyResult, error) {
 	users, err := client.AdminListDataroomUsers(ctx, dataroomID)
 	if err != nil {
 		return nil, fmt.Errorf("listing dataroom users: %w", err)
@@ -78,7 +112,7 @@ func AdminRekeyDataroom(
 		})
 	}
 
-	return pushRekey(ctx, sess.PrivateKey, holders, func(blob string) error {
+	return pushRekey(ctx, sess.PrivateKey, orgKey, holders, func(blob string) error {
 		return client.AdminRekeyDataroom(ctx, dataroomID, blob)
 	})
 }
@@ -115,19 +149,25 @@ func AdminRekeyTransfer(
 		})
 	}
 
-	return pushRekey(ctx, sessionPrivKey, holders, func(blob string) error {
+	return pushRekey(ctx, sessionPrivKey, orgKey, holders, func(blob string) error {
 		return client.AdminRekeyTransfer(ctx, transferID, blob)
 	})
 }
 
-// pushRekey re-encrypts sessionPrivKey for the holders' keys and pushes the
-// blob through pushFn.
+// pushRekey re-encrypts sessionPrivKey for the holders' keys plus the
+// organization key itself, and pushes the blob through pushFn. The
+// organization recipient is always added, whatever the holder list says: the
+// service account may be listed without a key (rotation in progress, stale
+// membership), and a blob the organization key cannot open would make every
+// later admin operation on the dataroom/transfer fail with no way to repair it.
 func pushRekey(
-	_ context.Context, sessionPrivKey string, holders []rekeyKeyHolder, pushFn func(blob string) error,
+	_ context.Context, sessionPrivKey string, orgKey *age.HybridIdentity, holders []rekeyKeyHolder,
+	pushFn func(blob string) error,
 ) (*AdminRekeyResult, error) {
 	keys, skipped := rekeyRecipientKeys(holders)
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("no recipient with a public key: refusing to push an undecryptable blob")
+	orgRecipient := orgKey.Recipient().String()
+	if !slices.Contains(keys, orgRecipient) {
+		keys = append(keys, orgRecipient)
 	}
 
 	blob, err := crypto.EncryptStringForKeys(sessionPrivKey, keys)
