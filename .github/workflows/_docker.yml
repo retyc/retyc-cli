@@ -38,6 +38,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # OCI `created` is the image build date; computed here rather than taken
+      # from the event payload, which lacks head_commit for some pushes (e.g.
+      # annotated tags) and would leave the label empty.
+      - name: Image build date
+        id: meta
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
@@ -48,3 +55,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ inputs.tags }}
           build-args: VERSION=${{ inputs.version }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
