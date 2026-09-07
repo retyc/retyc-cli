@@ -75,8 +75,10 @@ func init() {
 		defaultCfgHint = dir + "/config.yaml"
 	}
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: "+defaultCfgHint+")")
-	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "print raw API responses to stderr")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "",
+		"config file (default: "+defaultCfgHint+"); does not move token.json")
+	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false,
+		"print every HTTP request and raw response to stderr")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false,
 		"print results as JSON on stdout (errors as JSON on stderr)")
 }

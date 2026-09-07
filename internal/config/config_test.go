@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -294,5 +295,48 @@ func TestSetDefaults_InsecureDefaultsToFalse(t *testing.T) {
 
 	if viper.GetBool("insecure") {
 		t.Error("insecure must default to false")
+	}
+}
+
+// TestEnvVarsDocumented fails when a configuration key has no documented
+// environment variable. doc/configuration.md is the public contract for the
+// environment: it must not drift from SetDefaults().
+func TestEnvVarsDocumented(t *testing.T) {
+	resetViper(t)
+	SetDefaults()
+
+	doc, err := os.ReadFile(filepath.Join("..", "..", "doc", "configuration.md"))
+	if err != nil {
+		t.Fatalf("reading doc/configuration.md: %v", err)
+	}
+	text := string(doc)
+
+	var missing []string
+
+	// The name is looked up backquoted, as it appears in a doc table cell.
+	// A bare substring search would accept a passing mention in prose, and
+	// would let RETYC_TOKEN be satisfied by a longer name containing it.
+	documented := func(name string) bool {
+		return strings.Contains(text, "`"+name+"`")
+	}
+
+	for _, key := range viper.AllKeys() {
+		name := envPrefix + "_" + strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
+		if !documented(name) {
+			missing = append(missing, name)
+		}
+	}
+
+	// The env-only settings, which have no viper key by design (see env.go).
+	for _, name := range []string{
+		EnvTokenName, EnvKeyPassphraseName, EnvWebdavPasswordName, EnvConfigDirName,
+	} {
+		if !documented(name) {
+			missing = append(missing, name)
+		}
+	}
+
+	if len(missing) > 0 {
+		t.Errorf("undocumented in doc/configuration.md: %v", missing)
 	}
 }
