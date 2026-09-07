@@ -15,15 +15,48 @@ export RETYC_CONFIG_DIR=/path/to/config
 
 ## Environment variables
 
-| Variable               | Description                                                                 |
-|------------------------|-----------------------------------------------------------------------------|
-| `RETYC_CONFIG_DIR`         | Override the config directory                                               |
-| `RETYC_TOKEN`              | Offline refresh token (bypasses disk credentials — see [CI / CD](ci-cd.md)) |
-| `RETYC_KEY_PASSPHRASE`     | AGE key passphrase (bypasses interactive prompt — see [CI / CD](ci-cd.md))  |
-| `RETYC_ADMIN_API_KEY`      | Organization API key for `retyc admin` commands (see below)                |
-| `RETYC_ADMIN_PRIVATE_KEY_FILE` | Path to the organization private key file (see below)          |
-| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Proxy settings (see [Proxy and custom CAs](#proxy-and-custom-cas))    |
-| `SSL_CERT_FILE` / `SSL_CERT_DIR`          | Additional trusted root CAs (see [Proxy and custom CAs](#proxy-and-custom-cas)) |
+Every configuration key is settable from the environment: the key `a.b` is read
+from `RETYC_A_B`. The `RETYC_` prefix is mandatory — an unprefixed variable is
+ignored.
+
+Precedence is **flag > environment > config file > built-in default**. An empty
+variable counts as unset, not as an empty value.
+
+| Variable | Config key | Description |
+|---|---|---|
+| `RETYC_API_BASE_URL` | `api.base_url` | REST API base URL |
+| `RETYC_INSECURE` | `insecure` | Skip TLS verification *(dev builds only)* |
+| `RETYC_KEYRING_ENABLED` | `keyring.enabled` | Cache the decrypted AGE identity in the kernel keyring |
+| `RETYC_KEYRING_TTL` | `keyring.ttl` | Keyring cache lifetime, in seconds |
+| `RETYC_ADMIN_API_KEY` | `admin.api_key` | Organization API key for `retyc admin` (see below) |
+| `RETYC_ADMIN_PRIVATE_KEY_FILE` | `admin.private_key_file` | Path to the organization private key file (see below) |
+| `RETYC_ADMIN_BASE_URL` | `admin.base_url` | Admin API base URL |
+
+These four have **no config key on purpose** — they carry secrets, or are read
+before the config file is located, and must never be written to disk in clear
+text:
+
+| Variable | Description |
+|---|---|
+| `RETYC_CONFIG_DIR` | Override the config directory |
+| `RETYC_TOKEN` | Offline refresh token (bypasses disk credentials — see [CI / CD](ci-cd.md)) |
+| `RETYC_KEY_PASSPHRASE` | AGE key passphrase (bypasses the interactive prompt — see [CI / CD](ci-cd.md)) |
+| `RETYC_WEBDAV_PASSWORD` | Basic-auth password for `retyc webdav serve --auth` (see [WebDAV](webdav.md)) |
+
+The following follow the usual OpenSSL and curl conventions and are therefore
+not prefixed:
+
+| Variable | Description |
+|---|---|
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Proxy settings (see [Proxy and custom CAs](#proxy-and-custom-cas)) |
+| `SSL_CERT_FILE` / `SSL_CERT_DIR` | Additional trusted root CAs (see [Proxy and custom CAs](#proxy-and-custom-cas)) |
+
+Inspect what the CLI actually resolved with:
+
+```sh
+retyc config show      # effective value of every key, secrets masked
+retyc config path      # config directory, config file and token file in use
+```
 
 ## Proxy and custom CAs
 
@@ -87,8 +120,16 @@ Create `config.yaml` in the config directory to override defaults:
 api:
   base_url: https://api.retyc.com
 
-insecure: true  # dev builds only — skip TLS verification persistently
+keyring:
+  enabled: true   # cache the decrypted AGE identity in the Linux kernel keyring
+  ttl: 60         # cache lifetime, in seconds
+
+insecure: true    # dev builds only — skip TLS verification persistently
 ```
+
+`--config <file>` selects the config **file** only. The credentials directory is
+unchanged, so `token.json` is still read from and written to the default config
+directory — use `RETYC_CONFIG_DIR` to move both.
 
 ## Admin (organization API)
 
@@ -121,7 +162,7 @@ the API and is not cached in the keyring.
 
 | Flag              | Short | Description                                                                                                           |
 |-------------------|-------|-----------------------------------------------------------------------------------------------------------------------|
-| `--config <file>` |       | Use a specific config file                                                                                            |
+| `--config <file>` |       | Use a specific config file (does **not** move `token.json` — see above)                                               |
 | `--insecure`      | `-k`  | Skip TLS certificate verification *(dev builds only — can be set persistently via `insecure: true` in `config.yaml`)* |
-| `--debug`         |       | Enable debug mode                                                                                                     |
+| `--debug`         | `-d`  | Print every HTTP request and its raw response to stderr, along with the proxy and root CAs in use                     |
 | `--json`          |       | Print results as JSON on stdout, errors as `{"error": "..."}` on stderr (see [JSON output](commands.md#json-output))  |

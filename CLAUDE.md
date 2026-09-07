@@ -9,7 +9,8 @@ Go CLI for the RETYC platform. Module: `github.com/retyc/retyc-cli`
 ```
 main.go                        # Entry point — calls cmd.Execute()
 cmd/
-  root.go                      # cobra root, --config / --insecure / --debug flags, viper init
+  root.go                      # cobra root, --config / --debug / --json flags, viper init
+  insecure_dev.go              # --insecure / -k, dev builds only (insecure_prod.go: const false)
   auth.go                      # auth login / logout / status + newHTTPClient + debugTransport
   common.go                    # Shared helpers: constants, newAPIClient, resolveUserIdentity,
                                #   newTransferBar, uploadChunks, downloadChunks
@@ -20,6 +21,7 @@ cmd/
   mcp.go                       # mcp serve (stdio MCP server) + tool registry
   mcp_manifest.go              # mcp manifest — full MCPB manifest.json (version + tools injected)
   mcpb_manifest_base.json      # static MCPB manifest metadata (go:embed into mcp_manifest.go)
+  config.go                    # config path / config show — effective values, secrets masked
   version.go                   # version command (shows version + build mode)
 internal/
   auth/oidc.go                  # DeviceFlow, Refresh, GetValidToken
@@ -40,6 +42,7 @@ internal/
     admin*.go                    # AdminListNodes, AdminDownloadNodes, AdminRekeyDataroom/Transfer, LoadAdminIdentity
   config/
     config.go                   # Structs, SetDefaults(), Load(), token persistence
+    env.go                      # Env-only settings kept out of viper (secrets + RETYC_CONFIG_DIR)
     paths_dev.go                # configDir() + defaultAPIBaseURL for dev
     paths_prod.go               # configDir() + defaultAPIBaseURL for prod
   crypto/age.go                 # AGE encrypt/decrypt helpers (PQ-only, see below)
@@ -48,7 +51,7 @@ mcpb/icon.png                   # MCPB bundle icon (512×512)
 scripts/build-mcpb.sh           # Builds dist/retyc-<version>.mcpb from goreleaser dist/ (jq+zip, no Node)
 Dockerfile                      # Multi-stage scratch image (golang:1.26 builder → scratch)
 .dockerignore
-.github/workflows/ci.yml        # CI + release workflow
+.github/workflows/            # main.yml + _ci.yml + _docker.yml + release.yml
 ```
 
 ## Build modes
@@ -91,18 +94,51 @@ docker run -it --rm -v retyc-config:/home/retyc/.config/retyc retyc-cli:v1.2.3 a
 Registered via `viper.SetDefault` in `SetDefaults()` in `internal/config/config.go`.
 All overridable from `~/.config/retyc/config.yaml` (prod) or `.retyc/config.yaml` (dev).
 
-- Device auth URL: `.../protocol/openid-connect/auth/device`
+- OIDC (issuer, client_id, device_auth_url, token_url, ...): **not** local defaults —
+  fetched at runtime by `api.FetchOIDCConfig` (`GET /login/config/public`), which fills
+  `config.OIDCConfig`. Nothing in `SetDefaults()` covers them.
 - API base URL: per build mode (see above)
-- Keyring: enabled by default, TTL 3600s (configurable via `keyring.enabled` / `keyring.ttl`)
+- Keyring: enabled by default, TTL 60s (configurable via `keyring.enabled` / `keyring.ttl`)
 
 ## Persistent flags (root)
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--insecure` | `-k` | false | Skip TLS verification (self-signed certs) |
+| `--insecure` | `-k` | false | Skip TLS verification (self-signed certs). **Dev builds only** — `cmd/insecure_prod.go` defines it as a `const false` |
 | `--debug` | `-d` | false | Print all HTTP requests + raw responses to stderr |
 | `--config` | | auto | Override config file path |
 | `--json` | | false | Results as JSON on stdout, errors as `{"error":...}` on stderr |
+
+## Config, env and flags — the single rule
+
+`internal/config.SetDefaults()` owns the whole binding:
+
+- every viper key `a.b` is settable from `RETYC_A_B`
+  (`SetEnvPrefix("RETYC")` + `SetEnvKeyReplacer(".", "_")` + `AutomaticEnv()`).
+  The prefix is a security requirement: without it, viper resolved `insecure`
+  from a bare `INSECURE` variable, so an unrelated environment variable could
+  disable TLS verification. Precedence is flag > env > config file > default.
+- `internal/config/env.go` holds the settings that are **deliberately not**
+  viper keys — `RETYC_TOKEN`, `RETYC_KEY_PASSPHRASE`, `RETYC_WEBDAV_PASSWORD`
+  (secrets: a viper key would also make them settable from `config.yaml`) and
+  `RETYC_CONFIG_DIR` (read before viper is initialised). Never call
+  `os.Getenv("RETYC_...")` outside this file; use the accessors
+  `config.Token()`, `config.KeyPassphrase()`, `config.RequireKeyPassphrase()`,
+  `config.WebdavPassword()`.
+- `TestEnvVarsDocumented` (`internal/config/config_test.go`) fails when a key is
+  added without documenting its variable in `doc/configuration.md`.
+- `retyc config show` / `retyc config path` print the effective values and the
+  file locations. viper does not report which source won, so `show` is labelled
+  "effective value", not "origin".
+
+Adding a config key: `viper.SetDefault` in `SetDefaults()`, a field in the
+`Config` struct, a row in `doc/configuration.md`. Nothing else.
+
+The `SetDefault` is **mandatory, even for a zero value**: `viper.AllKeys()` only
+reports keys that carry a default, so a key without one is invisible to
+`retyc config show` and to `TestEnvVarsDocumented` — it would silently escape
+the documentation check. This is why `insecure` has a `SetDefault(false)` even
+though it is a dev-only flag.
 
 ## JSON output (`--json`)
 
@@ -417,8 +453,8 @@ The CLI exposes everything as `transfer`. Do not rename backend routes.
 
 ## CI
 
-- **`ci` job**: runs on push/PR to main/master and on tag pushes → vet, test (race), build dev + prod
-- **`release` job**: runs only on `v*` tags, needs `ci` → prod build with ldflags → `gh release create`
+- **`main.yml`**: orchestrator on push/PR → calls `_ci.yml` (vet, test with race, build dev + prod) then `_docker.yml`
+- **`release.yml`**: on `v*` tags only → prod build with ldflags, goreleaser, MCPB bundle, `gh release create`
 
 ## Conventions
 

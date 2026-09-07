@@ -21,15 +21,15 @@ import (
 // minPassphraseLen is the minimum number of characters for a transfer passphrase.
 const minPassphraseLen = 8
 
-// readKeyPassphrase returns the key passphrase from RETYC_KEY_PASSPHRASE, or
-// prompts the user interactively. Returns an error when stdin is not a terminal
-// and the env var is unset.
+// readKeyPassphrase returns the key passphrase from the environment, or
+// prompts the user interactively. Returns ErrNoKeyPassphrase (wrapped) when
+// stdin is not a terminal and the variable is unset.
 func readKeyPassphrase() (string, error) {
-	if v := os.Getenv("RETYC_KEY_PASSPHRASE"); v != "" {
+	if v := config.KeyPassphrase(); v != "" {
 		return v, nil
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) { //nolint:gosec // G115: Fd() fits in int on all supported platforms
-		return "", fmt.Errorf("no TTY detected and RETYC_KEY_PASSPHRASE is not set")
+		return "", fmt.Errorf("no TTY detected: %w", config.ErrNoKeyPassphrase)
 	}
 	fmt.Fprint(os.Stderr, "Key passphrase: ")
 	pb, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115: Fd() fits in int on all supported platforms
@@ -54,7 +54,7 @@ func spinnerReader(s *ui.Spinner) func() (string, error) {
 // mustGetToken retrieves a refreshing OAuth2 token source, returning a
 // user-friendly error if authentication is missing or expired.
 func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, error) {
-	persist := auth.EnvToken() == ""
+	persist := config.Token() == ""
 
 	// When using stored tokens, check the token file before making any HTTP
 	// calls. This avoids two unnecessary round-trips (FetchOIDCConfig) just to
