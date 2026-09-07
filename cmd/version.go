@@ -11,8 +11,9 @@ import (
 var Version = "dev"
 
 var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print the version number",
+	Annotations: map[string]string{annotationOffline: "true"},
+	Use:         "version",
+	Short:       "Print the version number",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if jsonOutput {
 			return printJSON(versionJSON{Version: Version, BuildMode: config.BuildMode})

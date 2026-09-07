@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -16,6 +17,11 @@ var (
 	debug   bool
 )
 
+// annotationOffline marks commands that make no network call. They skip the
+// root CA loading, so an invalid SSL_CERT_FILE inherited from another tool
+// cannot break them — the release CI runs `retyc mcp manifest`.
+const annotationOffline = "retyc:offline"
+
 // rootCmd is the base command when called without any subcommands.
 var rootCmd = &cobra.Command{
 	Use:           "retyc",
@@ -23,6 +29,32 @@ var rootCmd = &cobra.Command{
 	Long:          `RETYC command-line interface for interacting with the RETYC platform.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	// Load the custom root CAs before any command runs, so an unreadable or
+	// invalid SSL_CERT_FILE / SSL_CERT_DIR fails immediately with a clear
+	// message instead of surfacing as a TLS error mid-transfer.
+	//
+	// Commands annotated with annotationOffline open no connection, so a CA
+	// bundle they never use must not stop them.
+	//
+	// cobra only runs the closest PersistentPreRunE unless
+	// cobra.EnableTraverseRunHooks is set: defining one on a subcommand would
+	// silently skip this.
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		if cmd.Annotations[annotationOffline] == "true" {
+			return nil
+		}
+
+		source, err := api.InitTLSRoots()
+		if err != nil {
+			return fmt.Errorf("loading root CAs: %w", err)
+		}
+
+		if debug {
+			fmt.Fprintln(os.Stderr, "TLS roots:", source)
+		}
+
+		return nil
+	},
 }
 
 // Execute runs the root command and exits on error.

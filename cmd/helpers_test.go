@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/service"
 )
 
@@ -153,5 +157,69 @@ func TestIsOfflineToken_InvalidBase64(t *testing.T) {
 	// Three parts but invalid base64 in the payload segment.
 	if isOfflineToken("header.!!!invalid!!!.signature") {
 		t.Error("isOfflineToken() = true, want false for invalid base64 payload")
+	}
+}
+
+func TestNewHTTPClient_UsesEnvironmentProxy(t *testing.T) {
+	client := newHTTPClient(false, false)
+
+	ua, ok := client.Transport.(*api.UserAgentTransport)
+	if !ok {
+		t.Fatalf("transport = %T, want *api.UserAgentTransport", client.Transport)
+	}
+
+	inner, ok := ua.Base.(*http.Transport)
+	if !ok {
+		t.Fatalf("UserAgentTransport.Base = %T, want *http.Transport", ua.Base)
+	}
+
+	if inner.Proxy == nil {
+		t.Error("Proxy = nil — the auth client would ignore HTTP_PROXY/HTTPS_PROXY/NO_PROXY")
+	}
+}
+
+// testCAPEM is a self-signed CA used only to check that a custom bundle
+// reaches the transport; it never validates a real connection.
+const testCAPEM = `-----BEGIN CERTIFICATE-----
+MIIBjjCCATWgAwIBAgIUKKEEmOjoXxzDTiOGz7lA63l93e8wCgYIKoZIzj0EAwIw
+HDEaMBgGA1UEAwwRcmV0eWMtY2xpIHRlc3QgQ0EwIBcNMjYwOTA3MDc0OTQ4WhgP
+MjEyNjA4MTQwNzQ5NDhaMBwxGjAYBgNVBAMMEXJldHljLWNsaSB0ZXN0IENBMFkw
+EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmjUA9f9d1jIj9oGm0zOJP35IxhxrkadI
+feFXknCJzdjT/5qqZlZkl2GZkE6Q/RGmm0dD8LlhM/RYjBXGX5kCN6NTMFEwHQYD
+VR0OBBYEFHAqOtICMvL0oshcA1mqlW8r4xl8MB8GA1UdIwQYMBaAFHAqOtICMvL0
+oshcA1mqlW8r4xl8MA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDRwAwRAIg
+POkYyvcZYqG0F+lqTxf+AQHms0Hw1YaaB/qtDS2uQAECIEWvQU6UtEG9zPgwdNnz
+5/hHTP/iFZbVtcTXBbyBJVNg
+-----END CERTIFICATE-----
+`
+
+func TestNewHTTPClient_UsesCustomRootCAs(t *testing.T) {
+	// Registered before t.Setenv so it runs after the environment is restored.
+	t.Cleanup(func() { _, _ = api.InitTLSRoots() })
+
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(path, []byte(testCAPEM), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("SSL_CERT_FILE", path)
+	t.Setenv("SSL_CERT_DIR", "")
+
+	if _, err := api.InitTLSRoots(); err != nil {
+		t.Fatalf("InitTLSRoots() error = %v", err)
+	}
+
+	ua, ok := newHTTPClient(false, false).Transport.(*api.UserAgentTransport)
+	if !ok {
+		t.Fatal("unexpected transport type")
+	}
+
+	inner, ok := ua.Base.(*http.Transport)
+	if !ok {
+		t.Fatalf("UserAgentTransport.Base = %T, want *http.Transport", ua.Base)
+	}
+
+	if inner.TLSClientConfig.RootCAs == nil {
+		t.Error("RootCAs = nil — newHTTPClient dropped the CAs loaded from SSL_CERT_FILE")
 	}
 }

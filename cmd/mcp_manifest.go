@@ -57,8 +57,9 @@ func buildMCPBManifest(version string) (map[string]any, error) {
 }
 
 var mcpManifestCmd = &cobra.Command{
-	Use:   "manifest",
-	Short: "Print the complete MCPB manifest.json",
+	Annotations: map[string]string{annotationOffline: "true"},
+	Use:         "manifest",
+	Short:       "Print the complete MCPB manifest.json",
 	Long: `Print the complete manifest.json for the MCPB (MCP Bundle) package.
 
 The static metadata is embedded in the binary; the "version" field (from the

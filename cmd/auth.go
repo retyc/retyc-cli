@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -201,17 +200,13 @@ var authStatusCmd = &cobra.Command{
 }
 
 // newHTTPClient returns an HTTP client configured according to the insecure and debug flags.
+// Proxy settings and custom root CAs come from the environment through
+// api.BaseTransport.
 // When insecure is true, TLS certificate verification is disabled to allow
 // connections to servers using self-signed certificates.
 // When debug is true, all requests and responses are printed to stderr.
 func newHTTPClient(insecure, debug bool) *http.Client {
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: insecure, // #nosec G402 — intentional, controlled by --insecure flag
-	}
-	var transport http.RoundTripper = &http.Transport{
-		TLSClientConfig:   tlsCfg,
-		ForceAttemptHTTP2: true,
-	}
+	var transport http.RoundTripper = api.BaseTransport(insecure)
 	if debug {
 		transport = &debugTransport{wrapped: transport}
 	}
@@ -229,7 +224,7 @@ type debugTransport struct {
 }
 
 func (t *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	fmt.Fprintf(os.Stderr, "> %s %s\n", req.Method, req.URL)
+	fmt.Fprintf(os.Stderr, "> %s %s%s\n", req.Method, req.URL, api.ProxyLabel(req))
 
 	resp, err := t.wrapped.RoundTrip(req)
 	if err != nil {
