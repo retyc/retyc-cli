@@ -1154,15 +1154,10 @@ func (fs *webdavFS) contentTypeForPath(ctx context.Context, urlPath string) stri
 	return "application/octet-stream"
 }
 
-// webdavPassphraseReader reads the key passphrase from RETYC_KEY_PASSPHRASE.
+// webdavPassphraseReader returns the key passphrase from the environment.
 // No interactive prompt — identical to mcpPassphraseReader.
 func webdavPassphraseReader() (string, error) {
-	v := os.Getenv("RETYC_KEY_PASSPHRASE")
-	if v == "" {
-		return "", fmt.Errorf("RETYC_KEY_PASSPHRASE environment variable is required in WebDAV mode")
-	}
-
-	return v, nil
+	return config.RequireKeyPassphrase()
 }
 
 // webdavAuthUser is the fixed Basic auth username when --auth is enabled.
@@ -1278,8 +1273,8 @@ Example:
   # Datarooms appear under /dataroom`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Fail-fast: passphrase must be set before any crypto operation.
-		if os.Getenv("RETYC_KEY_PASSPHRASE") == "" {
-			return fmt.Errorf("RETYC_KEY_PASSPHRASE environment variable is required")
+		if config.KeyPassphrase() == "" {
+			return config.ErrNoKeyPassphrase
 		}
 
 		cfg, err := config.Load()
@@ -1364,7 +1359,7 @@ Example:
 		authEnabled, _ := cmd.Flags().GetBool("auth")
 		var rootHandler http.Handler = mux
 		if authEnabled {
-			password := os.Getenv("RETYC_WEBDAV_PASSWORD")
+			password := config.WebdavPassword()
 			if password == "" {
 				password, err = generateWebdavPassword()
 				if err != nil {

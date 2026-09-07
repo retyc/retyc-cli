@@ -17,7 +17,7 @@ const defaultAPIBaseURL = "https://api.triplesfer.traefik.me"
 
 // configDir returns the config directory for development builds.
 func configDir() (string, error) {
-	if dir := os.Getenv("RETYC_CONFIG_DIR"); dir != "" {
+	if dir := os.Getenv(EnvConfigDirName); dir != "" {
 		return dir, nil
 	}
 
