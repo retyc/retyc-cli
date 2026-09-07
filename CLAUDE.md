@@ -45,7 +45,7 @@ internal/
   keyring/keyring.go            # Linux kernel session keyring cache (TTL-based)
 mcpb/icon.png                   # MCPB bundle icon (512×512)
 scripts/build-mcpb.sh           # Builds dist/retyc-<version>.mcpb from goreleaser dist/ (jq+zip, no Node)
-Dockerfile                      # Multi-stage scratch image (golang:1.24 builder → scratch)
+Dockerfile                      # Multi-stage scratch image (golang:1.26 builder → scratch)
 .dockerignore
 .github/workflows/ci.yml        # CI + release workflow
 ```
@@ -75,7 +75,7 @@ Default value is `"dev"`. CI injects `github.ref_name` on tag pushes.
 
 ## Docker
 
-Multi-stage scratch image — builder `golang:1.24`, final `scratch`:
+Multi-stage scratch image — builder `golang:1.26`, final `scratch`:
 - `CGO_ENABLED=0` static binary, `-tags prod`, ldflags version injection via `ARG VERSION`
 - Copies only: binary, CA certs, `/etc/passwd`, `/home/retyc` (with `.config/retyc/` pre-created)
 - Non-root user `retyc` (uid 1000), `VOLUME ["/home/retyc/.config/retyc"]`
