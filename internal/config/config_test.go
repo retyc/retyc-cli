@@ -218,3 +218,81 @@ func TestAdminEnvBinding(t *testing.T) {
 		t.Errorf("Admin.PrivateKeyFile = %q, want /tmp/key.txt", cfg.Admin.PrivateKeyFile)
 	}
 }
+
+func TestSetDefaults_PrefixedEnv(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_API_BASE_URL", "https://api.env.example")
+	t.Setenv("RETYC_KEYRING_TTL", "900")
+	t.Setenv("RETYC_KEYRING_ENABLED", "false")
+	t.Setenv("RETYC_ADMIN_BASE_URL", "https://admin.env.example/v9")
+	SetDefaults()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.API.BaseURL != "https://api.env.example" {
+		t.Errorf("API.BaseURL = %q, want the RETYC_API_BASE_URL value", cfg.API.BaseURL)
+	}
+
+	if cfg.Keyring.TTL != 900 {
+		t.Errorf("Keyring.TTL = %d, want 900", cfg.Keyring.TTL)
+	}
+
+	if cfg.Keyring.Enabled {
+		t.Error("Keyring.Enabled = true, want false from RETYC_KEYRING_ENABLED")
+	}
+
+	if cfg.Admin.BaseURL != "https://admin.env.example/v9" {
+		t.Errorf("Admin.BaseURL = %q, want the RETYC_ADMIN_BASE_URL value", cfg.Admin.BaseURL)
+	}
+}
+
+// TestSetDefaults_IgnoresUnprefixedEnv is the regression test for the reason
+// this whole change exists: without SetEnvPrefix, viper resolved "insecure"
+// from a bare INSECURE variable, so an unrelated environment variable could
+// disable TLS verification.
+func TestSetDefaults_IgnoresUnprefixedEnv(t *testing.T) {
+	resetViper(t)
+	t.Setenv("INSECURE", "true")
+	t.Setenv("API.BASE_URL", "https://hijacked.example")
+	t.Setenv("KEYRING.TTL", "999")
+	SetDefaults()
+
+	if viper.GetBool("insecure") {
+		t.Error("a bare INSECURE variable must not disable TLS verification")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.API.BaseURL != defaultAPIBaseURL {
+		t.Errorf("API.BaseURL = %q, want the default %q", cfg.API.BaseURL, defaultAPIBaseURL)
+	}
+
+	if cfg.Keyring.TTL != 60 {
+		t.Errorf("Keyring.TTL = %d, want the default 60", cfg.Keyring.TTL)
+	}
+}
+
+func TestSetDefaults_InsecureFromPrefixedEnv(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_INSECURE", "true")
+	SetDefaults()
+
+	if !viper.GetBool("insecure") {
+		t.Error("insecure = false, want true from RETYC_INSECURE")
+	}
+}
+
+func TestSetDefaults_InsecureDefaultsToFalse(t *testing.T) {
+	resetViper(t)
+	SetDefaults()
+
+	if viper.GetBool("insecure") {
+		t.Error("insecure must default to false")
+	}
+}

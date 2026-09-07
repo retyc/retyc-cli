@@ -57,18 +57,35 @@ type Config struct {
 	Admin   AdminConfig   `yaml:"admin" mapstructure:"admin"`
 }
 
-// SetDefaults registers the default configuration values in viper.
-// Must be called before viper.ReadInConfig so that defaults are applied
-// when a key is absent from the config file.
+// envPrefix is the prefix of every environment variable that maps to a
+// configuration key: the key "a.b" is read from RETYC_A_B.
+//
+// The prefix is not cosmetic. Without it, viper.AutomaticEnv resolved
+// "insecure" from a bare INSECURE variable, so an unrelated environment
+// variable could disable TLS certificate verification.
+const envPrefix = "RETYC"
+
+// SetDefaults registers the default configuration values in viper and binds
+// the environment. Must be called before viper.ReadInConfig so that defaults
+// are applied when a key is absent from the config file.
+//
+// Every key registered here is settable from the environment as
+// RETYC_<KEY_WITH_UNDERSCORES>. Secrets are deliberately not registered here:
+// see env.go.
 func SetDefaults() {
 	viper.SetDefault("api.base_url", defaultAPIBaseURL)
+	// Dev builds only (see cmd/insecure_dev.go). Registered unconditionally so
+	// that the key appears in viper.AllKeys() and stays documented.
+	viper.SetDefault("insecure", false)
 	viper.SetDefault("keyring.enabled", true)
 	viper.SetDefault("keyring.ttl", 60)
 	viper.SetDefault("admin.base_url", "")
 	viper.SetDefault("admin.api_key", "")
 	viper.SetDefault("admin.private_key_file", "")
-	_ = viper.BindEnv("admin.api_key", "RETYC_ADMIN_API_KEY")
-	_ = viper.BindEnv("admin.private_key_file", "RETYC_ADMIN_PRIVATE_KEY_FILE")
+
+	viper.SetEnvPrefix(envPrefix)
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.AutomaticEnv()
 }
 
 // Load reads the active viper configuration and returns a Config struct.
