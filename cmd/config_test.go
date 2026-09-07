@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,5 +69,46 @@ func TestConfigEntries_Sorted(t *testing.T) {
 		if entries[i-1].Key > entries[i].Key {
 			t.Fatalf("entries are not sorted: %q before %q", entries[i-1].Key, entries[i].Key)
 		}
+	}
+}
+
+// TestConfigFileLoaded_UnreadableFile is the regression test for `config path`
+// reporting a file it never read: viper.ConfigFileUsed() returns the path
+// requested with --config even when reading it failed.
+func TestConfigFileLoaded_UnreadableFile(t *testing.T) {
+	t.Cleanup(func() {
+		viper.Reset()
+		cfgFile = ""
+		configFileLoaded = ""
+	})
+	viper.Reset()
+	configFileLoaded = ""
+	cfgFile = filepath.Join(t.TempDir(), "absent.yaml")
+
+	initConfig()
+
+	if configFileLoaded != "" {
+		t.Errorf("configFileLoaded = %q, want \"\" when the config file could not be read", configFileLoaded)
+	}
+}
+
+func TestConfigFileLoaded_ReadableFile(t *testing.T) {
+	t.Cleanup(func() {
+		viper.Reset()
+		cfgFile = ""
+		configFileLoaded = ""
+	})
+	viper.Reset()
+	configFileLoaded = ""
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("api:\n  base_url: https://api.file.example\n"), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cfgFile = path
+
+	initConfig()
+
+	if configFileLoaded != path {
+		t.Errorf("configFileLoaded = %q, want %q", configFileLoaded, path)
 	}
 }

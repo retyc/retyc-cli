@@ -9,7 +9,8 @@ Go CLI for the RETYC platform. Module: `github.com/retyc/retyc-cli`
 ```
 main.go                        # Entry point — calls cmd.Execute()
 cmd/
-  root.go                      # cobra root, --config / --insecure / --debug flags, viper init
+  root.go                      # cobra root, --config / --debug / --json flags, viper init
+  insecure_dev.go              # --insecure / -k, dev builds only (insecure_prod.go: const false)
   auth.go                      # auth login / logout / status + newHTTPClient + debugTransport
   common.go                    # Shared helpers: constants, newAPIClient, resolveUserIdentity,
                                #   newTransferBar, uploadChunks, downloadChunks

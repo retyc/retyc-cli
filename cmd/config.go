@@ -38,16 +38,17 @@ var configPathCmd = &cobra.Command{
 			return fmt.Errorf("resolving token path: %w", err)
 		}
 
-		// Empty when no config file was found: viper only records a path it
-		// actually read.
-		configFile := viper.ConfigFileUsed()
+		// configFileLoaded, not viper.ConfigFileUsed(): the latter reports the
+		// path requested with --config even when reading it failed, and this
+		// command is precisely what someone runs to find that out.
+		configFile := configFileLoaded
 
 		if jsonOutput {
 			return printJSON(configPathJSON{ConfigDir: dir, ConfigFile: configFile, TokenFile: tokenFile})
 		}
 
 		if configFile == "" {
-			configFile = "(none found)"
+			configFile = "(none loaded)"
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(w, "config dir\t%s\n", dir)
@@ -68,6 +69,13 @@ Values come from the config file, the environment (RETYC_<KEY_WITH_UNDERSCORES>)
 or the built-in defaults; viper does not report which one won, so only the
 effective value is shown. Secrets are masked.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// A value that viper can print but not unmarshal (keyring.ttl: abc)
+		// breaks every other command with an opaque error. Surface it here,
+		// on stderr, without hiding the listing someone came for.
+		if _, err := config.Load(); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: the configuration does not load:", err)
+		}
+
 		entries := configEntries()
 
 		if jsonOutput {

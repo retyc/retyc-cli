@@ -66,7 +66,9 @@ func RequireKeyPassphrase() (string, error) {
 }
 
 // WebdavPassword returns the WebDAV Basic auth password from
-// RETYC_WEBDAV_PASSWORD, or "" when unset.
+// RETYC_WEBDAV_PASSWORD, or "" when unset. It goes through fromEnv like the
+// others for consistency: the MCPB manifest does not inject this variable
+// today, but no deliberate password starts with "${user_config.".
 func WebdavPassword() string {
-	return os.Getenv(EnvWebdavPasswordName)
+	return fromEnv(EnvWebdavPasswordName)
 }

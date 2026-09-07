@@ -15,6 +15,12 @@ import (
 var (
 	cfgFile string
 	debug   bool
+
+	// configFileLoaded is the config file that was actually read, or "" when
+	// none was. It is not viper.ConfigFileUsed(): with --config, viper records
+	// the requested path before reading it and keeps it even when the read
+	// fails, so ConfigFileUsed() would report a file no value ever came from.
+	configFileLoaded string
 )
 
 // annotationOffline marks commands that make no network call. They skip the
@@ -108,8 +114,9 @@ func initConfig() {
 	}
 
 	if err := viper.ReadInConfig(); err == nil {
+		configFileLoaded = viper.ConfigFileUsed()
 		if debug {
-			fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
+			fmt.Fprintln(os.Stderr, "Using config file:", configFileLoaded)
 		}
 	}
 
