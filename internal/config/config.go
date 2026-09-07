@@ -109,8 +109,8 @@ func (c *Config) AdminBaseURL() string {
 	return strings.TrimRight(c.API.BaseURL, "/") + "/v1"
 }
 
-// tokenPath returns the path to the stored token file.
-func tokenPath() (string, error) {
+// TokenPath returns the path to the stored token file.
+func TokenPath() (string, error) {
 	dir, err := configDir()
 	if err != nil {
 		return "", err
@@ -129,7 +129,7 @@ func SaveToken(tok *oauth2.Token) error {
 		return err
 	}
 
-	path, err := tokenPath()
+	path, err := TokenPath()
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,7 @@ func SaveToken(tok *oauth2.Token) error {
 
 // LoadToken reads the persisted OAuth2 token from disk.
 func LoadToken() (*oauth2.Token, error) {
-	path, err := tokenPath()
+	path, err := TokenPath()
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func LoadToken() (*oauth2.Token, error) {
 
 // DeleteToken removes the stored token file.
 func DeleteToken() error {
-	path, err := tokenPath()
+	path, err := TokenPath()
 	if err != nil {
 		return err
 	}

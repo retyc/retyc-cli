@@ -102,6 +102,24 @@ func newItemsJSON[T any](items []T) itemsJSON[T] {
 	return itemsJSON[T]{Items: nonNil(items)}
 }
 
+// configPathJSON is the JSON shape of `retyc config path`.
+type configPathJSON struct {
+	ConfigDir  string `json:"config_dir"`
+	ConfigFile string `json:"config_file"`
+	TokenFile  string `json:"token_file"`
+}
+
+// configEntryJSON is one effective configuration key in `retyc config show`.
+// Secret values are masked: Value carries a fixed placeholder when the key is
+// set, and "" when it is not. Note flags a value that the running binary does
+// not act on, such as `insecure` in a prod build.
+type configEntryJSON struct {
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+	Secret bool   `json:"secret"`
+	Note   string `json:"note,omitempty"`
+}
+
 // nonNil returns s, or an empty slice when s is nil (→ [] not null).
 func nonNil[T any](s []T) []T {
 	if s == nil {
