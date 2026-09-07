@@ -17,6 +17,21 @@ docker run -it --rm \
 
 > **Note:** kernel keyring caching is not available in Docker (blocked by the default seccomp profile). The passphrase will be prompted on each invocation.
 
+## Behind a proxy
+
+Proxy and CA settings are read from the environment (see
+[Configuration](configuration.md#proxy-and-custom-cas)). The image is built
+`FROM scratch`, so a custom CA bundle has to be mounted into the container:
+
+```sh
+docker run -it --rm \
+  -e HTTPS_PROXY -e NO_PROXY \
+  -e SSL_CERT_FILE=/etc/ssl/corp-ca.pem \
+  -v /etc/ssl/corp/proxy-ca.pem:/etc/ssl/corp-ca.pem:ro \
+  -v retyc-config:/home/retyc/.config/retyc \
+  retyc/retyc-cli:latest auth login
+```
+
 ## Images
 
 ```sh

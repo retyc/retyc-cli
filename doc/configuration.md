@@ -22,6 +22,62 @@ export RETYC_CONFIG_DIR=/path/to/config
 | `RETYC_KEY_PASSPHRASE`     | AGE key passphrase (bypasses interactive prompt — see [CI / CD](ci-cd.md))  |
 | `RETYC_ADMIN_API_KEY`      | Organization API key for `retyc admin` commands (see below)                |
 | `RETYC_ADMIN_PRIVATE_KEY_FILE` | Path to the organization private key file (see below)          |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Proxy settings (see [Proxy and custom CAs](#proxy-and-custom-cas))    |
+| `SSL_CERT_FILE` / `SSL_CERT_DIR`          | Additional trusted root CAs (see [Proxy and custom CAs](#proxy-and-custom-cas)) |
+
+## Proxy and custom CAs
+
+The CLI follows the usual OpenSSL and curl conventions — no RETYC-specific
+variable is involved.
+
+### Proxy
+
+| Variable      | Description                                                                     |
+|---------------|-----------------------------------------------------------------------------------|
+| `HTTPS_PROXY` | Proxy used for `https://` requests, which is what every RETYC endpoint uses      |
+| `HTTP_PROXY`  | Proxy used for plain `http://` requests                                          |
+| `NO_PROXY`    | Comma-separated hosts, domains (`.corp.example`) or CIDRs that bypass the proxy  |
+
+Lower-case variants (`https_proxy`, ...) work too. Supported schemes are
+`http://`, `https://` and `socks5://`, and credentials can be embedded in the
+URL:
+
+```sh
+export HTTPS_PROXY=http://user:password@proxy.corp.example:3128
+export NO_PROXY=localhost,127.0.0.1,.internal.example
+```
+
+`ALL_PROXY` is **not** supported — the Go standard library ignores it.
+
+### Custom root CAs
+
+A TLS-inspecting proxy presents certificates signed by a private CA. Point
+`SSL_CERT_FILE` at that CA bundle, or `SSL_CERT_DIR` at a directory of PEM
+files (several directories can be listed, separated by `:` on Unix and `;` on
+Windows):
+
+```sh
+export SSL_CERT_FILE=/etc/ssl/corp/proxy-ca.pem
+```
+
+These CAs are **added** to the system trust store, not substituted for it, so
+publicly signed certificates keep validating. Files in `SSL_CERT_DIR` that
+hold no certificate are ignored, as OpenSSL does.
+
+The bundle is loaded and validated when the command starts, so a missing file
+or one holding no certificate fails immediately with a clear message rather
+than as a TLS error in the middle of a transfer. Commands that open no
+connection (`retyc version`, `retyc mcp manifest`) are exempt.
+
+Use `--debug` to see which proxy each request goes through (credentials are
+redacted) and where the root CAs came from:
+
+```
+TLS roots: system + SSL_CERT_FILE=/etc/ssl/corp/proxy-ca.pem
+> GET https://api.retyc.com/login/config/public (via proxy http://user:xxxxx@proxy.corp.example:3128)
+```
+
+As a last resort, `--insecure` / `-k` skips certificate verification entirely.
 
 ## config.yaml
 

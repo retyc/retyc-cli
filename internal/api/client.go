@@ -4,7 +4,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,27 +48,25 @@ type Client struct {
 // connecting to servers using self-signed certificates.
 // When debug is true, raw API responses are printed to stderr.
 func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debug bool) *Client {
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: insecure, // #nosec G402 — intentional, controlled by --insecure flag
-	}
+	// BaseTransport carries the proxy settings from the environment and the
+	// root CAs loaded by InitTLSRoots; only the timeouts are specific here.
+	base := BaseTransport(insecure)
+	base.TLSHandshakeTimeout = 15 * time.Second
+	// ResponseHeaderTimeout guards against a server that accepts the
+	// connection but never sends headers back. It does NOT limit how
+	// long the request body (i.e. a large upload) may take to send,
+	// so large chunks are not artificially timed out.
+	base.ResponseHeaderTimeout = 60 * time.Second
+	// IdleConnTimeout closes connections that are idle for too long,
+	// protecting against a server that stops sending the response body
+	// mid-transfer (e.g. stalled downloads).
+	base.IdleConnTimeout = 90 * time.Second
+
 	transport := &UserAgentTransport{
 		UserAgent: userAgent,
 		Base: &oauth2.Transport{
 			Source: tokSource,
-			Base: &http.Transport{
-				TLSClientConfig:     tlsCfg,
-				ForceAttemptHTTP2:   true,
-				TLSHandshakeTimeout: 15 * time.Second,
-				// ResponseHeaderTimeout guards against a server that accepts the
-				// connection but never sends headers back. It does NOT limit how
-				// long the request body (i.e. a large upload) may take to send,
-				// so large chunks are not artificially timed out.
-				ResponseHeaderTimeout: 60 * time.Second,
-				// IdleConnTimeout closes connections that are idle for too long,
-				// protecting against a server that stops sending the response body
-				// mid-transfer (e.g. stalled downloads).
-				IdleConnTimeout: 90 * time.Second,
-			},
+			Base:   base,
 		},
 	}
 
@@ -178,7 +175,7 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 	}
 
 	if c.debug {
-		fmt.Fprintf(os.Stderr, "> GET %s\n", req.URL)
+		fmt.Fprintf(os.Stderr, "> GET %s%s\n", req.URL, ProxyLabel(req))
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -211,7 +208,7 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 // It returns an error for non-2xx status codes.
 func (c *Client) do(req *http.Request, dst any) error {
 	if c.debug {
-		fmt.Fprintf(os.Stderr, "> %s %s\n", req.Method, req.URL)
+		fmt.Fprintf(os.Stderr, "> %s %s%s\n", req.Method, req.URL, ProxyLabel(req))
 	}
 
 	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: intentional outbound HTTP request from API client

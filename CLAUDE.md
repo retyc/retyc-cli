@@ -26,6 +26,7 @@ internal/
   api/
     client.go                   # Authenticated REST client (oauth2 transport)
                                 #   Get, Post, Put, Patch, Delete, PostMultipartChunk, GetBytes
+    transport.go                # BaseTransport (env proxy + custom root CAs) + InitTLSRoots
     login.go                    # FetchOIDCConfig (unauthenticated, GET /login/config/public)
     transfer.go                 # Transfer types + ListTransfers, GetTransferDetails,
                                 #   ListFiles, CreateShare, CreateFile, UploadChunk,
@@ -124,7 +125,41 @@ Rules when adding a command:
 
 Format: `> METHOD URL` then `< STATUS` + pretty-printed JSON body (or `(N bytes, binary)` for binary).
 
-## TLS self-signed certificates
+## TLS, proxy and custom CAs
+
+`api.BaseTransport(insecure)` in `internal/api/transport.go` is the **single**
+place where an `http.Transport` is built. Both `cmd/auth.go:newHTTPClient` (OIDC
+device flow, refresh, `FetchOIDCConfig`) and `api.New` (all REST traffic) go
+through it — never construct an `http.Transport` elsewhere, it would silently
+lose the proxy and CA settings.
+
+- **Proxy**: `Proxy: http.ProxyFromEnvironment` → `HTTP_PROXY`, `HTTPS_PROXY`,
+  `NO_PROXY` (upper and lower case). `ALL_PROXY` is not supported by Go.
+- **Root CAs**: `SSL_CERT_FILE` / `SSL_CERT_DIR` are read explicitly, because Go
+  honours them natively on Linux only (`crypto/x509/root_unix.go` excludes
+  darwin and windows). The certificates are **added** to `x509.SystemCertPool()`,
+  never substituted for it, so a corporate MITM CA does not cost the public
+  roots. `SSL_CERT_DIR` accepts several directories, separated by `:` on Unix
+  and `;` on Windows (`filepath.SplitList`).
+- `platformRoots()` clears both variables around the `x509.SystemCertPool()`
+  call. Without it, on Linux, setting **both** variables makes Go replace the
+  default file *and* directory lists, so the "system" pool would hold nothing
+  but the custom CAs and the union would silently be a replacement. It relies
+  on being the first caller of `SystemCertPool()`, which caches on first use.
+- `InitTLSRoots()` is called from `rootCmd.PersistentPreRunE`: the bundle is
+  loaded and validated once at startup so a bad path fails immediately instead
+  of mid-transfer. It returns a description of the roots, printed under `--debug`.
+  Commands annotated `annotationOffline` (`version`, `mcp manifest`) skip it —
+  they open no connection, and the release CI runs `retyc mcp manifest`.
+  Beware: cobra runs only the closest `PersistentPreRun(E)` unless
+  `cobra.EnableTraverseRunHooks` is set, so adding one to a subcommand would
+  silently skip the CA loading.
+- `--debug` prints the proxy used per request through `api.ProxyLabel()`, on
+  both the OIDC client (`debugTransport`) and the REST client
+  (`Client.do` / `GetBytes`). It calls `url.Redacted()`, so proxy credentials
+  never reach the logs.
+- `BaseTransport` also pins `MinVersion: tls.VersionTLS12` — a no-op against
+  the Go client default, kept explicit for gosec.
 
 Use `--insecure` / `-k` (persistent flag on root) to skip TLS verification.
 Applies to both the OIDC device flow HTTP client and the API REST client.
