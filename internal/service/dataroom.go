@@ -18,6 +18,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/trace"
 )
 
 // — URI and path helpers —————————————————————————————————————————————————————
@@ -246,6 +247,9 @@ func fetchChildItems(
 
 // nodesFromItems decrypts API node items into DataroomNodeInfo using identity.
 func nodesFromItems(items []api.DataroomNodeItem, identity *age.HybridIdentity) []DataroomNodeInfo {
+	if trace.Enabled() {
+		defer trace.Span("crypto decrypt names (%d nodes)", len(items))()
+	}
 	result := make([]DataroomNodeInfo, 0, len(items))
 	for _, item := range items {
 		name, decErr := crypto.DecryptToString(item.Node.NameEnc, identity)
@@ -349,6 +353,9 @@ func fetchNodesWithNames(
 func resolvePath(
 	ctx context.Context, client *api.Client, dataroomID, nodePath string, identity *age.HybridIdentity,
 ) (*string, error) {
+	if trace.Enabled() {
+		defer trace.Span("service resolvePath %q", nodePath)()
+	}
 	nodePath = strings.TrimSpace(nodePath)
 	if nodePath == "" || nodePath == "/" {
 		return nil, nil
