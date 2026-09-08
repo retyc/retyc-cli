@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -673,6 +674,87 @@ func (fs *webdavFS) resolveSession(ctx context.Context, drID string) (*service.D
 	return service.GetDataroomSession(ctx, fs.cfg, fs.client, drID, fs.passphraseReader)
 }
 
+// parentNodeID resolves nodePath to its node ID using the cached listings.
+//
+// service.resolvePath walks the tree with one uncached API listing per level on
+// every upload; going through listNodes reuses the listing a PROPFIND has almost
+// always already fetched. On a cache miss the cost falls back to the same single
+// listing, so this is never slower.
+//
+// Returns (nil, nil) for the dataroom root, which has no node ID.
+func (fs *webdavFS) parentNodeID(ctx context.Context, drID, nodePath string) (*string, error) {
+	if strings.Trim(nodePath, "/") == "" {
+		return nil, nil
+	}
+	grandParent, name := splitWebdavPath(nodePath)
+	nodes, err := fs.listNodes(ctx, drID, grandParent)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range nodes {
+		if n.Name != name {
+			continue
+		}
+		if n.Type != "dir" {
+			return nil, os.ErrInvalid
+		}
+		id := n.ID
+
+		return &id, nil
+	}
+
+	return nil, os.ErrNotExist
+}
+
+// upsertNodeCache refreshes a single node inside the cached listing of uri.
+//
+// After an upload we know everything a listing would report for that node, so
+// replacing the entry in place avoids the full re-listing — and its API
+// round-trips — that a plain invalidation forces on the next PROPFIND. WebDAV
+// clients revalidate aggressively (davfs2 defaults to dir_refresh 5 /
+// file_refresh 1), so that re-listing lands on nearly every written file.
+//
+// fetchedAt is deliberately carried over rather than reset: the rest of the
+// listing is no fresher than it was, and the TTL must keep running from the
+// real fetch. The slice is copied because listNodes hands its backing array to
+// callers without copying, so mutating in place would be a data race.
+//
+// Like invalidateNodeCache, it bumps the URI's generation: a listing already in
+// flight was answered by the API before this upload landed, so storing it on
+// completion would hide the file the server just accepted — and, for a new
+// version of an existing file, would keep serving the previous VersionID and
+// ChunkCount for a whole TTL after the PUT returned 201. Nothing is cached for
+// a URI whose fetch is still running (the fetch was triggered by a miss), so
+// dropping the generation bump into the no-entry path is exactly what that race
+// needs.
+func (fs *webdavFS) upsertNodeCache(uri string, node service.DataroomNodeInfo) {
+	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	if fs.nodeGen == nil {
+		fs.nodeGen = make(map[string]uint64)
+	}
+	fs.nodeGen[uri]++
+	entry, ok := fs.nodeCache[uri]
+	if !ok {
+		return
+	}
+	nodes := make([]service.DataroomNodeInfo, len(entry.nodes), len(entry.nodes)+1)
+	copy(nodes, entry.nodes)
+	replaced := false
+	for i := range nodes {
+		if nodes[i].Name == node.Name {
+			nodes[i] = node
+			replaced = true
+
+			break
+		}
+	}
+	if !replaced {
+		nodes = append(nodes, node)
+	}
+	fs.nodeCache[uri] = &nodeCacheEntry{nodes: nodes, fetchedAt: entry.fetchedAt}
+}
+
 // listNodes returns the decrypted children of drID at nodePath, using a TTL cache.
 //
 // Cache misses are single-flighted: concurrent callers for the same URI (a file
@@ -909,7 +991,10 @@ type streamWriteHandle struct {
 	done      chan error
 	parentURI string
 	info      *webdavFileInfo
-	written   int64 // bytes accepted from the client, for short-upload detection
+	written   int64        // bytes accepted from the client, for short-upload detection
+	chunks    atomic.Int64 // chunks actually uploaded, for the cached listing entry
+	mimeType  string       // MIME type stored with the node, for the cached listing entry
+	createdAt time.Time    // version creation time, as a later listing will report it
 }
 
 func (h *streamWriteHandle) Write(p []byte) (int, error) {
@@ -935,7 +1020,18 @@ func (h *streamWriteHandle) Close() error {
 
 		return err
 	}
-	h.wfs.invalidateNodeCache(h.parentURI)
+	// The listing is refreshed in place rather than dropped: every field a
+	// listing would return for this node is known here, so the next PROPFIND
+	// is served from cache instead of paying a fresh round-trip to the API.
+	h.wfs.upsertNodeCache(h.parentURI, service.DataroomNodeInfo{
+		ID:         h.nodeID,
+		Name:       h.info.name,
+		Type:       "file",
+		MIMEType:   h.mimeType,
+		Size:       h.info.size,
+		VersionID:  h.info.versionID,
+		ChunkCount: int(h.chunks.Load()),
+	}.WithModTime(h.createdAt))
 
 	return nil
 }
@@ -969,9 +1065,12 @@ func (fs *webdavFS) openForWriteStream(
 		return nil, fmt.Errorf("dataroom session: %w", err)
 	}
 
-	nodeID, versionID, newNode, err := service.InitStreamUpload(
-		ctx, fs.client, drID, parentPath, fileName, size, sess,
-	)
+	parentID, err := fs.parentNodeID(ctx, drID, parentPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving parent path: %w", err)
+	}
+
+	init, err := service.InitStreamUploadInto(ctx, fs.client, drID, parentID, fileName, size, sess)
 	if err != nil {
 		return nil, err
 	}
@@ -979,11 +1078,35 @@ func (fs *webdavFS) openForWriteStream(
 	pipeR, pipeW := io.Pipe()
 	done := make(chan error, 1)
 
+	h := &streamWriteHandle{
+		wfs:       fs,
+		nodeID:    init.NodeID,
+		newNode:   init.NewNode,
+		pipeW:     pipeW,
+		done:      done,
+		mimeType:  init.MIMEType,
+		createdAt: init.CreatedAt,
+		parentURI: dataroomURI(drID, parentPath),
+		// versionID lets the PUT response carry the new version's ETag.
+		info: &webdavFileInfo{
+			name: fileName, size: size, nodeID: init.NodeID, versionID: init.VersionID,
+		},
+	}
+
+	// Started after h exists so the counter always has a home: the cached
+	// listing entry needs the exact chunk count, since downloads read that
+	// many chunks, and deriving it from the size would duplicate the chunking
+	// rule held by UploadChunks.
 	go func() {
 		uploadErr := service.UploadChunks(
 			ctx, pipeR, size, fileName, sess.PublicKey, nil,
 			func(gctx context.Context, chunkID int, data []byte) error {
-				return fs.client.UploadDataroomChunk(gctx, versionID, chunkID, data)
+				if err := fs.client.UploadDataroomChunk(gctx, init.VersionID, chunkID, data); err != nil {
+					return err
+				}
+				h.chunks.Add(1)
+
+				return nil
 			},
 		)
 		if uploadErr != nil {
@@ -992,16 +1115,7 @@ func (fs *webdavFS) openForWriteStream(
 		done <- uploadErr
 	}()
 
-	return &streamWriteHandle{
-		wfs:       fs,
-		nodeID:    nodeID,
-		newNode:   newNode,
-		pipeW:     pipeW,
-		done:      done,
-		parentURI: dataroomURI(drID, parentPath),
-		// versionID lets the PUT response carry the new version's ETag.
-		info: &webdavFileInfo{name: fileName, size: size, nodeID: nodeID, versionID: versionID},
-	}, nil
+	return h, nil
 }
 
 func (fs *webdavFS) openForWrite(ctx context.Context, drID, subPath string) (webdav.File, error) {
