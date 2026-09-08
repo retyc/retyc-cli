@@ -755,6 +755,60 @@ func (fs *webdavFS) upsertNodeCache(uri string, node service.DataroomNodeInfo) {
 	fs.nodeCache[uri] = &nodeCacheEntry{nodes: nodes, fetchedAt: entry.fetchedAt}
 }
 
+// cachedFileNodeID looks up a file by name in the cached listing of a folder,
+// without ever triggering a fetch. A miss simply means the caller takes its
+// normal path, so this can only save round-trips, never add one.
+//
+// Directories are not reported: a folder sharing the name is a genuine conflict,
+// and the full upload path produces the right error for it.
+func (fs *webdavFS) cachedFileNodeID(drID, parentPath, fileName string) (string, bool) {
+	uri := dataroomURI(drID, parentPath)
+	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	entry, ok := fs.nodeCache[uri]
+	if !ok || time.Since(entry.fetchedAt) >= nodeCacheTTL {
+		return "", false
+	}
+	for _, n := range entry.nodes {
+		if n.Name == fileName {
+			return n.ID, n.Type == "file"
+		}
+	}
+
+	return "", false
+}
+
+// initUpload creates the node version the PUT will stream into.
+//
+// When the parent's cached listing already shows a file under that name, the
+// upload is an overwrite and the node ID is known: its version can be created
+// directly. That skips the CreateDataroomNode call which would answer 409, and
+// the uncached folder listing InitStreamUploadInto then runs to locate the node
+// again — two round-trips out of four on every overwrite.
+//
+// The listing may be up to nodeCacheTTL stale, so the node can have been deleted
+// elsewhere in the meantime. The API answers 404 for exactly that case: drop the
+// stale listing and redo the upload through the full path, which recreates the
+// node. Any other error is the caller's to handle, and retrying it through a
+// second path would only double the failure cost.
+func (fs *webdavFS) initUpload(
+	ctx context.Context, drID, parentPath, fileName string,
+	parentID *string, size int64, sess *service.DataroomSession,
+) (service.StreamUploadInit, error) {
+	if nodeID, ok := fs.cachedFileNodeID(drID, parentPath, fileName); ok {
+		init, err := service.AddVersionToNode(ctx, fs.client, nodeID, fileName, size, sess)
+		if err == nil {
+			return init, nil
+		}
+		if !errors.Is(err, api.ErrNotFound) {
+			return service.StreamUploadInit{}, err
+		}
+		fs.invalidateNodeCache(dataroomURI(drID, parentPath))
+	}
+
+	return service.InitStreamUploadInto(ctx, fs.client, drID, parentID, fileName, size, sess)
+}
+
 // listNodes returns the decrypted children of drID at nodePath, using a TTL cache.
 //
 // Cache misses are single-flighted: concurrent callers for the same URI (a file
@@ -1070,7 +1124,7 @@ func (fs *webdavFS) openForWriteStream(
 		return nil, fmt.Errorf("resolving parent path: %w", err)
 	}
 
-	init, err := service.InitStreamUploadInto(ctx, fs.client, drID, parentID, fileName, size, sess)
+	init, err := fs.initUpload(ctx, drID, parentPath, fileName, parentID, size, sess)
 	if err != nil {
 		return nil, err
 	}

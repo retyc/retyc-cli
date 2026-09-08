@@ -1372,3 +1372,129 @@ func TestStreamWriteHandle_FailedUploadLeavesCacheUntouched(t *testing.T) {
 		t.Errorf("cache = %+v, want the pre-upload entry untouched", nodes)
 	}
 }
+
+// — Overwrite shortcut ————————————————————————————————————————————————————————
+
+func TestCachedFileNodeID(t *testing.T) {
+	fresh := []service.DataroomNodeInfo{
+		{ID: "f-1", Name: "doc.txt", Type: "file"},
+		{ID: "d-1", Name: "sub", Type: "dir"},
+	}
+	fs := &webdavFS{nodeCache: map[string]*nodeCacheEntry{
+		"retyc://dr1/":        {nodes: fresh, fetchedAt: time.Now()},
+		"retyc://dr1/expired": {nodes: fresh, fetchedAt: time.Now().Add(-2 * nodeCacheTTL)},
+	}}
+
+	if id, ok := fs.cachedFileNodeID("dr1", "/", "doc.txt"); !ok || id != "f-1" {
+		t.Errorf("cached file: got (%q, %v), want (f-1, true)", id, ok)
+	}
+	// A folder of that name is a real conflict; the full path must handle it.
+	if _, ok := fs.cachedFileNodeID("dr1", "/", "sub"); ok {
+		t.Error("a directory was reported as an overwritable file")
+	}
+	if _, ok := fs.cachedFileNodeID("dr1", "/", "absent.txt"); ok {
+		t.Error("an absent name was reported as cached")
+	}
+	// An expired listing must not be trusted for a node ID.
+	if _, ok := fs.cachedFileNodeID("dr1", "/expired", "doc.txt"); ok {
+		t.Error("an expired listing was used")
+	}
+	if _, ok := fs.cachedFileNodeID("dr1", "/never-listed", "doc.txt"); ok {
+		t.Error("an unlisted folder returned a node ID")
+	}
+}
+
+// Overwriting a file whose node is in the cached listing must create the new
+// version directly: no CreateDataroomNode answering 409, and no uncached
+// listing to find the node again.
+func TestInitUpload_OverwriteSkipsConflictAndRelisting(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	pub := identity.Recipient().String()
+
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/f-1/version" {
+			fmt.Fprint(w, `{"id":"v-2","created_at":"2026-09-08T10:00:00Z"}`)
+
+			return
+		}
+		http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	fs := newWebdavTestFS(srv)
+	fs.nodeCache = map[string]*nodeCacheEntry{
+		"retyc://dr1/": {
+			nodes:     []service.DataroomNodeInfo{{ID: "f-1", Name: "doc.txt", Type: "file", VersionID: "v-1"}},
+			fetchedAt: time.Now(),
+		},
+	}
+	sess := &service.DataroomSession{Identity: identity, PublicKey: pub}
+
+	init, err := fs.initUpload(context.Background(), "dr1", "/", "doc.txt", nil, 10, sess)
+	if err != nil {
+		t.Fatalf("initUpload: %v", err)
+	}
+	if init.NodeID != "f-1" || init.VersionID != "v-2" {
+		t.Errorf("init = %+v, want node f-1 / version v-2", init)
+	}
+	// A pre-existing node must never be deleted if the upload then fails.
+	if init.NewNode {
+		t.Error("NewNode is true for an overwrite; a failed upload would delete the node")
+	}
+	if len(calls) != 1 {
+		t.Errorf("issued %d API calls (%v), want 1 (version creation only)", len(calls), calls)
+	}
+}
+
+// The cached listing can be up to nodeCacheTTL stale: if the node was deleted
+// elsewhere, the shortcut gets a 404 and the upload must still succeed through
+// the full path, which recreates the node.
+func TestInitUpload_FallsBackWhenCachedNodeIsGone(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	pub := identity.Recipient().String()
+
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch {
+		case r.URL.Path == "/dataroom/node/f-1/version": // the stale node is gone
+			http.Error(w, "no such node", http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/dr1/node":
+			fmt.Fprint(w, `{"id":"f-2","name_enc":"x"}`)
+		case r.URL.Path == "/dataroom/node/f-2/version":
+			fmt.Fprint(w, `{"id":"v-1","created_at":"2026-09-08T10:00:00Z"}`)
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	fs := newWebdavTestFS(srv)
+	fs.nodeCache = map[string]*nodeCacheEntry{
+		"retyc://dr1/": {
+			nodes:     []service.DataroomNodeInfo{{ID: "f-1", Name: "doc.txt", Type: "file"}},
+			fetchedAt: time.Now(),
+		},
+	}
+	sess := &service.DataroomSession{Identity: identity, PublicKey: pub}
+
+	init, err := fs.initUpload(context.Background(), "dr1", "/", "doc.txt", nil, 10, sess)
+	if err != nil {
+		t.Fatalf("initUpload fell back but still failed: %v", err)
+	}
+	if init.NodeID != "f-2" || !init.NewNode {
+		t.Errorf("init = %+v, want the recreated node f-2 with NewNode true", init)
+	}
+	// The listing that named a dead node must not be served to anyone else.
+	if nodeCacheHas(fs, "retyc://dr1/") {
+		t.Error("the stale listing was kept after its node turned out to be gone")
+	}
+}

@@ -11,10 +11,10 @@ import (
 
 // Dataroom represents a dataroom returned by the API.
 type Dataroom struct {
-	ID                   string    `json:"id"`
-	Title                string    `json:"title"`
-	SessionPublicKey     string    `json:"session_public_key"`
-	SessionPrivateKeyEnc string    `json:"session_private_key_enc"`
+	ID                   string `json:"id"`
+	Title                string `json:"title"`
+	SessionPublicKey     string `json:"session_public_key"`
+	SessionPrivateKeyEnc string `json:"session_private_key_enc"`
 	// NodeNameSaltEnc is an armored AGE ciphertext (session key) containing
 	// the per-dataroom salt used as prefix for node name hashing. Nil when not set.
 	NodeNameSaltEnc *string   `json:"node_name_salt_enc"`
