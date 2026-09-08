@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -61,6 +62,14 @@ func TestClient_Get_Non2xx(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "API error 404") {
 		t.Errorf("error %q should contain 'API error 404'", err.Error())
+	}
+	// Callers distinguish a missing resource from other failures with errors.Is;
+	// the sentinel is wrapped at the end so the message keeps its usual prefix.
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("error %q should match ErrNotFound", err.Error())
+	}
+	if !strings.HasPrefix(err.Error(), "API error 404: ") {
+		t.Errorf("error %q should still start with the plain API error text", err.Error())
 	}
 }
 

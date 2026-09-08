@@ -1100,3 +1100,401 @@ func newSubtreeTestFS(t *testing.T) *webdavFS {
 
 	return fs
 }
+
+// — Cached parent resolution and cache upsert ————————————————————————————————
+
+// countingListFn returns a listFn serving a fixed tree and counting its calls.
+func countingListFn(nodes map[string][]service.DataroomNodeInfo) (
+	func(context.Context, string, string) ([]service.DataroomNodeInfo, error), *int32,
+) {
+	var calls int32
+
+	return func(_ context.Context, _, nodePath string) ([]service.DataroomNodeInfo, error) {
+		atomic.AddInt32(&calls, 1)
+
+		return nodes[nodePath], nil
+	}, &calls
+}
+
+// The dataroom root has no node ID and must cost no listing at all.
+func TestParentNodeID_RootCostsNoListing(t *testing.T) {
+	listFn, calls := countingListFn(nil)
+	fs := &webdavFS{listFn: listFn}
+
+	id, err := fs.parentNodeID(context.Background(), "dr1", "/")
+	if err != nil {
+		t.Fatalf("parentNodeID: %v", err)
+	}
+	if id != nil {
+		t.Errorf("id = %v, want nil for the dataroom root", *id)
+	}
+	if n := atomic.LoadInt32(calls); n != 0 {
+		t.Errorf("root resolution issued %d listings, want 0", n)
+	}
+}
+
+// The point of the change: repeated uploads into the same folder must reuse the
+// cached listing instead of re-walking the tree through the API every time.
+func TestParentNodeID_ReusesCachedListing(t *testing.T) {
+	listFn, calls := countingListFn(map[string][]service.DataroomNodeInfo{
+		"/": {{ID: "dir-1", Name: "sub", Type: "dir"}},
+	})
+	fs := &webdavFS{listFn: listFn}
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		id, err := fs.parentNodeID(ctx, "dr1", "/sub")
+		if err != nil {
+			t.Fatalf("parentNodeID: %v", err)
+		}
+		if id == nil || *id != "dir-1" {
+			t.Fatalf("id = %v, want dir-1", id)
+		}
+	}
+	if n := atomic.LoadInt32(calls); n != 1 {
+		t.Errorf("5 uploads issued %d listings, want 1", n)
+	}
+}
+
+func TestParentNodeID_Errors(t *testing.T) {
+	listFn, _ := countingListFn(map[string][]service.DataroomNodeInfo{
+		"/": {{ID: "f-1", Name: "afile", Type: "file"}},
+	})
+	fs := &webdavFS{listFn: listFn}
+	ctx := context.Background()
+
+	if _, err := fs.parentNodeID(ctx, "dr1", "/missing"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("missing parent: err = %v, want os.ErrNotExist", err)
+	}
+	// A file cannot be a parent directory; uploading "into" one must not silently
+	// target the dataroom root.
+	if _, err := fs.parentNodeID(ctx, "dr1", "/afile"); !errors.Is(err, os.ErrInvalid) {
+		t.Errorf("file as parent: err = %v, want os.ErrInvalid", err)
+	}
+}
+
+func TestUpsertNodeCache_ReplacesAndAppends(t *testing.T) {
+	fs := &webdavFS{
+		nodeCache: map[string]*nodeCacheEntry{
+			"retyc://dr1/": {
+				nodes: []service.DataroomNodeInfo{
+					{ID: "n1", Name: "old.bin", Type: "file", Size: 10, ChunkCount: 1},
+				},
+				fetchedAt: time.Now().Add(-20 * time.Second),
+			},
+		},
+	}
+
+	// Same name → the entry is replaced, not duplicated.
+	fs.upsertNodeCache("retyc://dr1/", service.DataroomNodeInfo{
+		ID: "n1", Name: "old.bin", Type: "file", Size: 99, VersionID: "v2", ChunkCount: 3,
+	})
+	// New name → appended.
+	fs.upsertNodeCache("retyc://dr1/", service.DataroomNodeInfo{
+		ID: "n2", Name: "new.bin", Type: "file", Size: 5, ChunkCount: 1,
+	})
+
+	got := fs.nodeCache["retyc://dr1/"].nodes
+	if len(got) != 2 {
+		t.Fatalf("cached %d nodes, want 2 (one replaced, one appended)", len(got))
+	}
+	if got[0].Size != 99 || got[0].VersionID != "v2" || got[0].ChunkCount != 3 {
+		t.Errorf("replaced entry = %+v, want the post-upload values", got[0])
+	}
+	if got[1].Name != "new.bin" {
+		t.Errorf("appended entry = %+v, want new.bin", got[1])
+	}
+}
+
+// The TTL must keep running from the real fetch: the rest of the listing is no
+// fresher than it was, so an upload must not extend its lifetime.
+func TestUpsertNodeCache_DoesNotExtendTTL(t *testing.T) {
+	fetchedAt := time.Now().Add(-20 * time.Second)
+	fs := &webdavFS{
+		nodeCache: map[string]*nodeCacheEntry{
+			"retyc://dr1/": {nodes: nil, fetchedAt: fetchedAt},
+		},
+	}
+
+	fs.upsertNodeCache("retyc://dr1/", service.DataroomNodeInfo{ID: "n1", Name: "f", Type: "file"})
+
+	if got := fs.nodeCache["retyc://dr1/"].fetchedAt; !got.Equal(fetchedAt) {
+		t.Errorf("fetchedAt = %v, want it carried over unchanged (%v)", got, fetchedAt)
+	}
+}
+
+// listNodes hands its backing array to callers without copying, so an upsert
+// must not write through it — a reader holding an earlier listing would
+// otherwise observe the mutation.
+func TestUpsertNodeCache_DoesNotMutateSharedSlice(t *testing.T) {
+	fs := &webdavFS{
+		nodeCache: map[string]*nodeCacheEntry{
+			"retyc://dr1/": {
+				nodes:     []service.DataroomNodeInfo{{ID: "n1", Name: "f.bin", Type: "file", Size: 10}},
+				fetchedAt: time.Now(),
+			},
+		},
+	}
+	held := fs.nodeCache["retyc://dr1/"].nodes
+
+	fs.upsertNodeCache("retyc://dr1/", service.DataroomNodeInfo{
+		ID: "n1", Name: "f.bin", Type: "file", Size: 4242,
+	})
+
+	if held[0].Size != 10 {
+		t.Errorf("previously returned slice was mutated: size = %d, want 10", held[0].Size)
+	}
+}
+
+// Nothing cached for that directory means there is nothing to refresh; the
+// upsert must not fabricate a listing that was never fetched.
+func TestUpsertNodeCache_NoEntryIsNoop(t *testing.T) {
+	fs := &webdavFS{nodeCache: map[string]*nodeCacheEntry{}}
+
+	fs.upsertNodeCache("retyc://dr1/", service.DataroomNodeInfo{ID: "n1", Name: "f", Type: "file"})
+
+	if _, ok := fs.nodeCache["retyc://dr1/"]; ok {
+		t.Error("upsert created a listing for a directory that was never fetched")
+	}
+}
+
+// An upload that lands while a listing is in flight must win, exactly like an
+// invalidation does: the in-flight listing was answered by the API before the
+// upload, so storing it would hide a file the server already accepted — and,
+// for a new version of an existing file, would serve the previous version's
+// VersionID and ChunkCount for a whole TTL after a PUT returned 201.
+func TestUpsertNodeCache_DuringFetchDiscardsStaleListing(t *testing.T) {
+	gate := make(chan struct{})
+	started := make(chan struct{}, 8)
+	listFn, calls := gatedListFn(t, gate, started)
+	fs := &webdavFS{listFn: listFn}
+	ctx := context.Background()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := fs.listNodes(ctx, "dr1", "/")
+		done <- err
+	}()
+	<-started
+	// The PUT completes while the listing is still in flight. Nothing is cached
+	// yet for that URI — the fetch was triggered by a miss — so the upsert has
+	// no entry to refresh and must at least invalidate the pending result.
+	fs.upsertNodeCache("retyc://dr1/", service.DataroomNodeInfo{
+		ID: "n1", Name: "a", Type: "file", VersionID: "v2", ChunkCount: 2,
+	})
+	close(gate)
+	if err := <-done; err != nil {
+		t.Fatalf("listNodes: %v", err)
+	}
+	if nodeCacheHas(fs, "retyc://dr1/") {
+		t.Fatal("pre-upload listing was stored, hiding the file that was just written")
+	}
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
+		t.Fatalf("listNodes (refetch): %v", err)
+	}
+	if got := atomic.LoadInt32(calls); got != 2 {
+		t.Errorf("listing fetched %d times, want 2 (first result discarded, second stored)", got)
+	}
+}
+
+// The cached mtime must be the version's creation time, as a later listing will
+// report it — not the local clock at close time. A large upload closing minutes
+// after the version was created would otherwise cache a timestamp that jumps
+// backwards once the TTL expires and the API is asked again.
+func TestStreamWriteHandle_CachesVersionCreationTime(t *testing.T) {
+	createdAt := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	fetchedAt := time.Now()
+	fs := &webdavFS{
+		nodeCache: map[string]*nodeCacheEntry{
+			"retyc://dr1/": {nodes: nil, fetchedAt: fetchedAt},
+		},
+	}
+	done := make(chan error, 1)
+	done <- nil
+	_, pipeW := io.Pipe()
+
+	h := &streamWriteHandle{
+		wfs:       fs,
+		nodeID:    "n1",
+		pipeW:     pipeW,
+		done:      done,
+		mimeType:  "text/plain",
+		createdAt: createdAt,
+		parentURI: "retyc://dr1/",
+		info:      &webdavFileInfo{name: "f.txt", size: 0, nodeID: "n1", versionID: "v1"},
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	nodes := fs.nodeCache["retyc://dr1/"].nodes
+	if len(nodes) != 1 {
+		t.Fatalf("cached %d nodes, want 1", len(nodes))
+	}
+	if got := nodes[0].ModTime(); !got.Equal(createdAt) {
+		t.Errorf("cached ModTime = %v, want the version creation time %v", got, createdAt)
+	}
+	if nodes[0].MIMEType != "text/plain" || nodes[0].VersionID != "v1" {
+		t.Errorf("cached entry = %+v, want the stored MIME type and version", nodes[0])
+	}
+}
+
+// A failed upload must leave the cache exactly as it was: the node either never
+// existed or still holds its previous version, and inventing an entry for it
+// would serve a file the server never accepted.
+func TestStreamWriteHandle_FailedUploadLeavesCacheUntouched(t *testing.T) {
+	previous := []service.DataroomNodeInfo{{ID: "n1", Name: "f.bin", Type: "file", Size: 10, VersionID: "v1"}}
+	fs := &webdavFS{
+		nodeCache: map[string]*nodeCacheEntry{
+			"retyc://dr1/": {nodes: previous, fetchedAt: time.Now()},
+		},
+	}
+	done := make(chan error, 1)
+	done <- errors.New("chunk upload failed")
+	_, pipeW := io.Pipe()
+
+	h := &streamWriteHandle{
+		wfs:       fs,
+		nodeID:    "n1",
+		newNode:   false, // existing node: cleanup only warns, no client call
+		pipeW:     pipeW,
+		done:      done,
+		parentURI: "retyc://dr1/",
+		info:      &webdavFileInfo{name: "f.bin", size: 100, versionID: "v2"},
+		written:   100,
+	}
+	if err := h.Close(); err == nil {
+		t.Fatal("expected the upload error to surface, got nil")
+	}
+
+	nodes := fs.nodeCache["retyc://dr1/"].nodes
+	if len(nodes) != 1 || nodes[0].VersionID != "v1" || nodes[0].Size != 10 {
+		t.Errorf("cache = %+v, want the pre-upload entry untouched", nodes)
+	}
+}
+
+// — Overwrite shortcut ————————————————————————————————————————————————————————
+
+func TestCachedFileNodeID(t *testing.T) {
+	fresh := []service.DataroomNodeInfo{
+		{ID: "f-1", Name: "doc.txt", Type: "file"},
+		{ID: "d-1", Name: "sub", Type: "dir"},
+	}
+	fs := &webdavFS{nodeCache: map[string]*nodeCacheEntry{
+		"retyc://dr1/":        {nodes: fresh, fetchedAt: time.Now()},
+		"retyc://dr1/expired": {nodes: fresh, fetchedAt: time.Now().Add(-2 * nodeCacheTTL)},
+	}}
+
+	if id, ok := fs.cachedFileNodeID("dr1", "/", "doc.txt"); !ok || id != "f-1" {
+		t.Errorf("cached file: got (%q, %v), want (f-1, true)", id, ok)
+	}
+	// A folder of that name is a real conflict; the full path must handle it.
+	if _, ok := fs.cachedFileNodeID("dr1", "/", "sub"); ok {
+		t.Error("a directory was reported as an overwritable file")
+	}
+	if _, ok := fs.cachedFileNodeID("dr1", "/", "absent.txt"); ok {
+		t.Error("an absent name was reported as cached")
+	}
+	// An expired listing must not be trusted for a node ID.
+	if _, ok := fs.cachedFileNodeID("dr1", "/expired", "doc.txt"); ok {
+		t.Error("an expired listing was used")
+	}
+	if _, ok := fs.cachedFileNodeID("dr1", "/never-listed", "doc.txt"); ok {
+		t.Error("an unlisted folder returned a node ID")
+	}
+}
+
+// Overwriting a file whose node is in the cached listing must create the new
+// version directly: no CreateDataroomNode answering 409, and no uncached
+// listing to find the node again.
+func TestInitUpload_OverwriteSkipsConflictAndRelisting(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	pub := identity.Recipient().String()
+
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/f-1/version" {
+			fmt.Fprint(w, `{"id":"v-2","created_at":"2026-09-08T10:00:00Z"}`)
+
+			return
+		}
+		http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	fs := newWebdavTestFS(srv)
+	fs.nodeCache = map[string]*nodeCacheEntry{
+		"retyc://dr1/": {
+			nodes:     []service.DataroomNodeInfo{{ID: "f-1", Name: "doc.txt", Type: "file", VersionID: "v-1"}},
+			fetchedAt: time.Now(),
+		},
+	}
+	sess := &service.DataroomSession{Identity: identity, PublicKey: pub}
+
+	init, err := fs.initUpload(context.Background(), "dr1", "/", "doc.txt", nil, 10, sess)
+	if err != nil {
+		t.Fatalf("initUpload: %v", err)
+	}
+	if init.NodeID != "f-1" || init.VersionID != "v-2" {
+		t.Errorf("init = %+v, want node f-1 / version v-2", init)
+	}
+	// A pre-existing node must never be deleted if the upload then fails.
+	if init.NewNode {
+		t.Error("NewNode is true for an overwrite; a failed upload would delete the node")
+	}
+	if len(calls) != 1 {
+		t.Errorf("issued %d API calls (%v), want 1 (version creation only)", len(calls), calls)
+	}
+}
+
+// The cached listing can be up to nodeCacheTTL stale: if the node was deleted
+// elsewhere, the shortcut gets a 404 and the upload must still succeed through
+// the full path, which recreates the node.
+func TestInitUpload_FallsBackWhenCachedNodeIsGone(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	pub := identity.Recipient().String()
+
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch {
+		case r.URL.Path == "/dataroom/node/f-1/version": // the stale node is gone
+			http.Error(w, "no such node", http.StatusNotFound)
+		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/dr1/node":
+			fmt.Fprint(w, `{"id":"f-2","name_enc":"x"}`)
+		case r.URL.Path == "/dataroom/node/f-2/version":
+			fmt.Fprint(w, `{"id":"v-1","created_at":"2026-09-08T10:00:00Z"}`)
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	fs := newWebdavTestFS(srv)
+	fs.nodeCache = map[string]*nodeCacheEntry{
+		"retyc://dr1/": {
+			nodes:     []service.DataroomNodeInfo{{ID: "f-1", Name: "doc.txt", Type: "file"}},
+			fetchedAt: time.Now(),
+		},
+	}
+	sess := &service.DataroomSession{Identity: identity, PublicKey: pub}
+
+	init, err := fs.initUpload(context.Background(), "dr1", "/", "doc.txt", nil, 10, sess)
+	if err != nil {
+		t.Fatalf("initUpload fell back but still failed: %v", err)
+	}
+	if init.NodeID != "f-2" || !init.NewNode {
+		t.Errorf("init = %+v, want the recreated node f-2 with NewNode true", init)
+	}
+	// The listing that named a dead node must not be served to anyone else.
+	if nodeCacheHas(fs, "retyc://dr1/") {
+		t.Error("the stale listing was kept after its node turned out to be gone")
+	}
+}

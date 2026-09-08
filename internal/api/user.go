@@ -33,13 +33,13 @@ func (c *Client) GetMe(ctx context.Context) (*UserInfo, error) {
 
 // UserQuota holds the authenticated user's quota information as returned by GET /user/quota.
 type UserQuota struct {
-	CountShare       int    `json:"count_share"`
-	MaxCountShare    *int   `json:"max_count_share"`
-	CountDataroom    int    `json:"count_dataroom"`
-	MaxCountDataroom *int   `json:"max_count_dataroom"`
-	UsedStorage      int64  `json:"used_storage"`
-	MaxStorage       int64  `json:"max_storage"`
-	IsUploadReadOnly bool   `json:"is_upload_read_only"`
+	CountShare       int   `json:"count_share"`
+	MaxCountShare    *int  `json:"max_count_share"`
+	CountDataroom    int   `json:"count_dataroom"`
+	MaxCountDataroom *int  `json:"max_count_dataroom"`
+	UsedStorage      int64 `json:"used_storage"`
+	MaxStorage       int64 `json:"max_storage"`
+	IsUploadReadOnly bool  `json:"is_upload_read_only"`
 }
 
 // GetQuota retrieves the authenticated user's quota.

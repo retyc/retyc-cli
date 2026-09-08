@@ -18,6 +18,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/trace"
 )
 
 // — URI and path helpers —————————————————————————————————————————————————————
@@ -246,6 +247,9 @@ func fetchChildItems(
 
 // nodesFromItems decrypts API node items into DataroomNodeInfo using identity.
 func nodesFromItems(items []api.DataroomNodeItem, identity *age.HybridIdentity) []DataroomNodeInfo {
+	if trace.Enabled() {
+		defer trace.Span("crypto decrypt names (%d nodes)", len(items))()
+	}
 	result := make([]DataroomNodeInfo, 0, len(items))
 	for _, item := range items {
 		name, decErr := crypto.DecryptToString(item.Node.NameEnc, identity)
@@ -349,6 +353,9 @@ func fetchNodesWithNames(
 func resolvePath(
 	ctx context.Context, client *api.Client, dataroomID, nodePath string, identity *age.HybridIdentity,
 ) (*string, error) {
+	if trace.Enabled() {
+		defer trace.Span("service resolvePath %q", nodePath)()
+	}
 	nodePath = strings.TrimSpace(nodePath)
 	if nodePath == "" || nodePath == "/" {
 		return nil, nil
@@ -531,6 +538,86 @@ func InitStreamUpload(
 		return "", "", false, fmt.Errorf("resolving parent path: %w", err)
 	}
 
+	init, err := InitStreamUploadInto(ctx, client, dataroomID, parentID, fileName, totalSize, sess)
+
+	return init.NodeID, init.VersionID, init.NewNode, err
+}
+
+// StreamUploadInit describes the node and version created for a streaming
+// upload. It carries every field a later listing would report for that node, so
+// a caller holding a cached listing can refresh its entry without guessing.
+type StreamUploadInit struct {
+	NodeID    string
+	VersionID string
+	MIMEType  string    // MIME type stored with the node
+	CreatedAt time.Time // version creation time, as ListNodes will report it
+	NewNode   bool      // node created here; callers delete it on upload failure
+}
+
+// AddVersionToNode creates a new version on a node that is already known to
+// exist, and returns the same descriptor as InitStreamUploadInto.
+//
+// Overwriting a file otherwise costs two extra round-trips: CreateDataroomNode
+// answers 409, and locating the existing node then runs an uncached listing of
+// the folder. A caller that already knows the node ID — the WebDAV server finds
+// it in the parent's cached listing — skips both.
+//
+// NewNode is false: the node predates this upload, so a failed upload must not
+// delete it, and its earlier versions must be preserved.
+//
+// The caller is responsible for the staleness of its node ID. The API answers
+// 404 (api.ErrNotFound) when the node is gone, which callers should treat as a
+// signal to fall back to the full InitStreamUploadInto path.
+func AddVersionToNode(
+	ctx context.Context,
+	client *api.Client,
+	nodeID, fileName string,
+	totalSize int64,
+	sess *DataroomSession,
+) (StreamUploadInit, error) {
+	mimeType := mime.TypeByExtension(filepath.Ext(fileName))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	typeEnc, err := crypto.EncryptStringForKeys(mimeType, []string{sess.PublicKey})
+	if err != nil {
+		return StreamUploadInit{}, fmt.Errorf("encrypting MIME type: %w", err)
+	}
+
+	version, err := client.CreateDataroomNodeVersion(ctx, nodeID, totalSize, typeEnc)
+	if err != nil {
+		return StreamUploadInit{}, fmt.Errorf("creating node version: %w", err)
+	}
+
+	return StreamUploadInit{
+		NodeID:    nodeID,
+		VersionID: version.ID,
+		MIMEType:  mimeType,
+		CreatedAt: version.CreatedAt,
+		NewNode:   false,
+	}, nil
+}
+
+// InitStreamUploadInto is InitStreamUpload with the parent directory already
+// resolved to its node ID (nil for the dataroom root).
+//
+// resolvePath walks the tree with one uncached API listing per path level, on
+// every single upload. A caller that already knows the parent — the WebDAV
+// server holds it in its node cache — skips those round-trips entirely, which
+// dominates upload latency against a remote API.
+//
+// It also returns the MIME type it derived, so a caller refreshing a cached
+// listing entry does not have to recompute it and risk diverging from what was
+// actually stored.
+func InitStreamUploadInto(
+	ctx context.Context,
+	client *api.Client,
+	dataroomID string,
+	parentID *string,
+	fileName string,
+	totalSize int64,
+	sess *DataroomSession,
+) (StreamUploadInit, error) {
 	mimeType := mime.TypeByExtension(filepath.Ext(fileName))
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
@@ -538,11 +625,11 @@ func InitStreamUpload(
 
 	nameEnc, err := crypto.EncryptStringForKeys(fileName, []string{sess.PublicKey})
 	if err != nil {
-		return "", "", false, fmt.Errorf("encrypting filename: %w", err)
+		return StreamUploadInit{}, fmt.Errorf("encrypting filename: %w", err)
 	}
 	typeEnc, err := crypto.EncryptStringForKeys(mimeType, []string{sess.PublicKey})
 	if err != nil {
-		return "", "", false, fmt.Errorf("encrypting MIME type: %w", err)
+		return StreamUploadInit{}, fmt.Errorf("encrypting MIME type: %w", err)
 	}
 
 	node, createErr := client.CreateDataroomNode(
@@ -553,14 +640,14 @@ func InitStreamUpload(
 
 	if createErr != nil {
 		if !isConflict(createErr) {
-			return "", "", false, fmt.Errorf("creating file node: %w", createErr)
+			return StreamUploadInit{}, fmt.Errorf("creating file node: %w", createErr)
 		}
 		existingID, isFile, findErr := findNodeAndTypeByName(ctx, client, dataroomID, parentID, fileName, sess.Identity)
 		if findErr != nil {
-			return "", "", false, fmt.Errorf("node already exists but could not be located: %w", findErr)
+			return StreamUploadInit{}, fmt.Errorf("node already exists but could not be located: %w", findErr)
 		}
 		if !isFile {
-			return "", "", false, fmt.Errorf("cannot upload file %q: a folder with that name already exists", fileName)
+			return StreamUploadInit{}, fmt.Errorf("cannot upload file %q: a folder with that name already exists", fileName)
 		}
 		targetNodeID = existingID
 	} else {
@@ -575,10 +662,16 @@ func InitStreamUpload(
 			cancel()
 		}
 
-		return "", "", false, fmt.Errorf("creating node version: %w", err)
+		return StreamUploadInit{}, fmt.Errorf("creating node version: %w", err)
 	}
 
-	return targetNodeID, version.ID, isNewNode, nil
+	return StreamUploadInit{
+		NodeID:    targetNodeID,
+		VersionID: version.ID,
+		MIMEType:  mimeType,
+		CreatedAt: version.CreatedAt,
+		NewNode:   isNewNode,
+	}, nil
 }
 
 // uploadDataroomFile creates a file node (or adds a new version on 409) and uploads chunks.
