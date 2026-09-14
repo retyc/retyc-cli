@@ -372,12 +372,14 @@ func TestGenerateWebdavPassword(t *testing.T) {
 
 func TestIsLoopbackAddr(t *testing.T) {
 	cases := map[string]bool{
-		"127.0.0.1":    true,
-		"localhost":    true,
-		"::1":          true,
-		"0.0.0.0":      false,
-		"192.168.1.10": false,
-		"":             false,
+		"127.0.0.1:8888":    true,
+		"localhost:8888":    true,
+		"[::1]:8888":        true,
+		"0.0.0.0:8888":      false,
+		":8888":             false, // empty host = every interface
+		"192.168.1.10:8888": false,
+		"127.0.0.1":         false, // no port: not a valid bind address
+		"":                  false,
 	}
 	for addr, want := range cases {
 		if got := isLoopbackAddr(addr); got != want {

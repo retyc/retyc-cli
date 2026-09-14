@@ -36,8 +36,7 @@ retyc webdav serve [flags]
 
 | Flag           | Short | Default     | Description                                                        |
 |----------------|-------|-------------|--------------------------------------------------------------------|
-| `--port`       | `-p`  | `8888`      | Port to listen on                                                  |
-| `--addr`       |       | `127.0.0.1` | Address to bind (`127.0.0.1` = local only)                         |
+| `--addr`       |       | `127.0.0.1:8888` | `host:port` to bind (`127.0.0.1` = local only; also `webdav.addr` / `RETYC_WEBDAV_ADDR`) |
 | `--auth`       |       | `false`     | Require HTTP Basic authentication                                  |
 | `--metrics-addr` |     | *(empty)*   | Expose Prometheus metrics and health probes on this address (see [below](#metrics-and-probes)) |
 | `--metrics-runtime` |  | `true`      | Include the Go runtime and process metrics on `/metrics` (`--metrics-runtime=false` to drop them) |
@@ -255,7 +254,7 @@ read -rs RETYC_KEY_PASSPHRASE
 export RETYC_KEY_PASSPHRASE
 
 # Local, authenticated server on a custom port
-RETYC_WEBDAV_PASSWORD='s3cret' retyc webdav serve --port 9000 --auth
+RETYC_WEBDAV_PASSWORD='s3cret' retyc webdav serve --addr 127.0.0.1:9000 --auth
 # → WebDAV server listening on http://127.0.0.1:9000
 # → WebDAV auth enabled: user "retyc", password from RETYC_WEBDAV_PASSWORD
 

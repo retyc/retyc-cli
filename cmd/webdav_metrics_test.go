@@ -530,3 +530,31 @@ func TestResolveMetricsLabels_FlagOverridesEnv(t *testing.T) {
 		t.Errorf("with flag: got %v, want [identity=flag pod=x]", got)
 	}
 }
+
+func TestResolveWebdavAddr_FlagOverridesEnv(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("RETYC_WEBDAV_ADDR", "0.0.0.0:9000")
+	config.SetDefaults()
+
+	flags := pflag.NewFlagSet("serve", pflag.ContinueOnError)
+	flags.String("addr", "127.0.0.1:8888", "")
+	if got := resolveWebdavAddr(flags); got != "0.0.0.0:9000" {
+		t.Errorf("without flag: got %q, want env value 0.0.0.0:9000", got)
+	}
+	if err := flags.Set("addr", "127.0.0.1:9999"); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveWebdavAddr(flags); got != "127.0.0.1:9999" {
+		t.Errorf("with flag: got %q, want flag value 127.0.0.1:9999", got)
+	}
+}
+
+func TestResolveWebdavAddr_Default(t *testing.T) {
+	isolateConfig(t)
+	config.SetDefaults()
+	flags := pflag.NewFlagSet("serve", pflag.ContinueOnError)
+	flags.String("addr", "127.0.0.1:8888", "")
+	if got := resolveWebdavAddr(flags); got != "127.0.0.1:8888" {
+		t.Errorf("got %q, want 127.0.0.1:8888", got)
+	}
+}

@@ -121,6 +121,7 @@ The cache does not exist on macOS and Windows, nor inside Docker.
 | Organization API key | `admin.api_key` | `RETYC_ADMIN_API_KEY` | — |
 | Organization private key file | `admin.private_key_file` | `RETYC_ADMIN_PRIVATE_KEY_FILE` | — |
 | Admin API endpoint | `admin.base_url` | `RETYC_ADMIN_BASE_URL` | API endpoint + `/v1` |
+| WebDAV bind address | `webdav.addr` | `RETYC_WEBDAV_ADDR` | `127.0.0.1:8888` |
 | WebDAV metrics and probes listener | `webdav.metrics.addr` | `RETYC_WEBDAV_METRICS_ADDR` | — (disabled), see [WebDAV](webdav.md#metrics-and-probes) |
 | WebDAV runtime metrics (`go_*`, `process_*`) | `webdav.metrics.runtime` | `RETYC_WEBDAV_METRICS_RUNTIME` | `true` |
 | WebDAV constant metric labels | `webdav.metrics.labels` (list of `key=value`) | `RETYC_WEBDAV_METRICS_LABELS` (space-separated) | — |

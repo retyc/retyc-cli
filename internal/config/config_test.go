@@ -426,3 +426,28 @@ func TestWebdavMetricsLabels_EnvBindingSplitsOnSpaces(t *testing.T) {
 		t.Errorf("Webdav.Metrics.Labels = %v, want %v", got, want)
 	}
 }
+
+func TestWebdavAddr_Default(t *testing.T) {
+	resetViper(t)
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Webdav.Addr != "127.0.0.1:8888" {
+		t.Errorf("Webdav.Addr = %q, want 127.0.0.1:8888", cfg.Webdav.Addr)
+	}
+}
+
+func TestWebdavAddr_EnvBinding(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_WEBDAV_ADDR", "0.0.0.0:9000")
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Webdav.Addr != "0.0.0.0:9000" {
+		t.Errorf("Webdav.Addr = %q, want 0.0.0.0:9000", cfg.Webdav.Addr)
+	}
+}

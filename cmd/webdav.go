@@ -26,6 +26,8 @@ import (
 	"filippo.io/age"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	"golang.org/x/net/webdav"
 	"golang.org/x/oauth2"
 
@@ -1393,15 +1395,28 @@ func basicAuthMiddleware(next http.Handler, username, password string) http.Hand
 	})
 }
 
-// isLoopbackAddr reports whether the bind address is loopback-only.
-// An empty address means "all interfaces" and is therefore not loopback.
+// isLoopbackAddr reports whether the host:port bind address is loopback-only.
+// An empty host (":8888") means "all interfaces" and is therefore not loopback.
 func isLoopbackAddr(addr string) bool {
-	if addr == "localhost" {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
 		return true
 	}
-	ip := net.ParseIP(addr)
+	ip := net.ParseIP(host)
 
 	return ip != nil && ip.IsLoopback()
+}
+
+// resolveWebdavAddr returns the host:port to bind, with the usual precedence
+// (flag > env > config file > default); same binding strategy as
+// resolveMetricsAddr.
+func resolveWebdavAddr(flags *pflag.FlagSet) string {
+	_ = viper.BindPFlag("webdav.addr", flags.Lookup("addr"))
+
+	return viper.GetString("webdav.addr")
 }
 
 // tokenKeepalive pings tokenSource every 60s to keep the access token warm.
@@ -1485,7 +1500,7 @@ The password is read from RETYC_WEBDAV_PASSWORD, or generated randomly and
 printed at startup when the variable is unset.
 
 Example:
-  RETYC_KEY_PASSPHRASE=your-passphrase retyc webdav serve --port 8888 --auth
+  RETYC_KEY_PASSPHRASE=your-passphrase retyc webdav serve --addr 127.0.0.1:8888 --auth
   # Then mount http://localhost:8888 in your WebDAV client
   # Datarooms appear under /dataroom`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -1513,8 +1528,7 @@ Example:
 			return err
 		}
 
-		addr, _ := cmd.Flags().GetString("addr")
-		port, _ := cmd.Flags().GetInt("port")
+		addr := resolveWebdavAddr(cmd.Flags())
 
 		fs := &webdavFS{
 			cfg:    cfg,
@@ -1600,7 +1614,7 @@ Example:
 		}
 
 		srv := &http.Server{ //nolint:gosec // G112: local-only server; Slowloris not a concern
-			Addr:              fmt.Sprintf("%s:%d", addr, port),
+			Addr:              addr,
 			Handler:           rootHandler,
 			ReadHeaderTimeout: 30 * time.Second,
 		}
@@ -1718,8 +1732,7 @@ var _ webdav.File = (*writeFileHandle)(nil)
 var _ webdav.File = (*streamWriteHandle)(nil)
 
 func init() {
-	webdavServeCmd.Flags().IntP("port", "p", 8888, "port to listen on")
-	webdavServeCmd.Flags().String("addr", "127.0.0.1", "address to bind")
+	webdavServeCmd.Flags().String("addr", "127.0.0.1:8888", "host:port to bind")
 	webdavServeCmd.Flags().Bool("auth", false,
 		"require HTTP Basic auth (password from RETYC_WEBDAV_PASSWORD or generated)")
 	webdavServeCmd.Flags().String("metrics-addr", "",
