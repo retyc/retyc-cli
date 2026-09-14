@@ -46,6 +46,7 @@ internal/
   keyring/keyring.go            # Linux kernel session keyring cache (TTL-based)
 mcpb/icon.png                   # MCPB bundle icon (512×512)
 scripts/build-mcpb.sh           # Builds dist/retyc-<version>.mcpb from goreleaser dist/ (jq+zip, no Node)
+scripts/webdav-bench.sh         # Benchmark small-file writes through `retyc webdav serve` 
 Dockerfile                      # Multi-stage scratch image (golang:1.26 builder → scratch)
 .dockerignore
 .github/workflows/ci.yml        # CI + release workflow
