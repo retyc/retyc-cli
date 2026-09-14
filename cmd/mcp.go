@@ -131,15 +131,10 @@ Work with paths, names, sizes, and IDs only — the server performs all crypto a
 	)
 }
 
-// mcpPassphraseReader returns a PassphraseReader for MCP mode that reads from
-// RETYC_KEY_PASSPHRASE only (no interactive terminal prompt is possible in MCP mode).
+// mcpPassphraseReader returns a PassphraseReader for MCP mode: the passphrase
+// comes from the environment only, no interactive terminal prompt is possible.
 func mcpPassphraseReader() (string, error) {
-	v := os.Getenv("RETYC_KEY_PASSPHRASE")
-	if v == "" {
-		return "", fmt.Errorf("RETYC_KEY_PASSPHRASE environment variable is required in MCP mode")
-	}
-
-	return v, nil
+	return config.RequireKeyPassphrase()
 }
 
 // mcpProgressFn returns a ProgressFn that sends MCP progress notifications.

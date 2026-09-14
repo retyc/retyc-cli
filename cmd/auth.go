@@ -122,7 +122,7 @@ var authStatusCmd = &cobra.Command{
 			return fmt.Errorf("loading config: %w", err)
 		}
 
-		envToken := auth.EnvToken()
+		envToken := config.Token()
 
 		// notAuthenticated reports a non-authenticated state: JSON on stdout
 		// with --json, otherwise the human message. Exit code stays 0 — this
