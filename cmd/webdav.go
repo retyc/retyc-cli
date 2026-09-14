@@ -35,7 +35,6 @@ import (
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/trace"
 )
 
 // webdavContextKey is a private type for context keys in the WebDAV handler.
@@ -834,24 +833,15 @@ func (fs *webdavFS) initUpload(
 // while the listing ran, so a mutation that lands mid-fetch wins.
 func (fs *webdavFS) listNodes(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error) {
 	uri := dataroomURI(drID, nodePath)
-	if trace.Enabled() {
-		defer trace.Span("fs listNodes %s", nodePath)()
-	}
 
 	fs.nodeMu.Lock()
 	if e, ok := fs.nodeCache[uri]; ok && time.Since(e.fetchedAt) < nodeCacheTTL {
 		fs.nodeMu.Unlock()
 		metrics.WebdavNodeCacheLookups.WithLabelValues("hit").Inc()
-		if trace.Enabled() {
-			trace.Log("fs listNodes %s: CACHE HIT (%d nodes)", nodePath, len(e.nodes))
-		}
 
 		return e.nodes, nil
 	}
 	metrics.WebdavNodeCacheLookups.WithLabelValues("miss").Inc()
-	if trace.Enabled() {
-		trace.Log("fs listNodes %s: cache MISS", nodePath)
-	}
 	if f, ok := fs.nodeInflight[uri]; ok {
 		fs.nodeMu.Unlock()
 		select {
@@ -1564,9 +1554,6 @@ Example:
 
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			if trace.Enabled() {
-				defer trace.Span("WEBDAV %s %s", r.Method, r.URL.Path)()
-			}
 			if r.Method == "COPY" {
 				http.Error(w,
 					"COPY not supported: server-side copy is not available in the dataroom API",
@@ -1618,16 +1605,6 @@ Example:
 			Handler:           rootHandler,
 			ReadHeaderTimeout: 30 * time.Second,
 		}
-		// ConnState brackets the handler: StateActive fires when net/http starts
-		// reading a request, StateIdle once the response is fully written. Time
-		// spent outside the handler span (request parsing, response flush) is
-		// invisible to it and shows up only here.
-		if trace.Enabled() {
-			srv.ConnState = func(c net.Conn, state http.ConnState) {
-				trace.Log("conn %s %s", c.RemoteAddr(), state)
-			}
-		}
-
 		// Optional observability listener (Prometheus metrics + probes), bound
 		// before the WebDAV port so a bad address fails fast. /readyz answers
 		// 503 until the WebDAV listener is actually bound below.

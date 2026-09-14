@@ -45,14 +45,13 @@ internal/
     admin*.go                    # AdminListNodes, AdminDownloadNodes, AdminRekeyDataroom/Transfer, LoadAdminIdentity
   config/
     config.go                   # Structs, SetDefaults(), Load(), token persistence
-    env.go                      # Env-only settings kept out of viper (secrets, RETYC_CONFIG_DIR, RETYC_TRACE)
+    env.go                      # Env-only settings kept out of viper (secrets, RETYC_CONFIG_DIR)
     paths_dev.go                # configDir() + defaultAPIBaseURL for dev
     paths_prod.go               # configDir() + defaultAPIBaseURL for prod
   crypto/age.go                 # AGE encrypt/decrypt helpers (PQ-only, see below)
   metrics/                      # Prometheus metric declarations (retyc_cli_* / retyc_cli_webdav_*),
                                 #   Register(reg), NormalizeRoute, RoundTripper (API client wrapper)
   keyring/keyring.go            # Linux kernel session keyring cache (TTL-based)
-  trace/trace.go                # Opt-in timing instrumentation on stderr (RETYC_TRACE), Enabled() guard
 mcpb/icon.png                   # MCPB bundle icon (512×512)
 scripts/build-mcpb.sh           # Builds dist/retyc-<version>.mcpb from goreleaser dist/ (jq+zip, no Node)
 scripts/webdav-bench.sh         # Benchmark small-file writes through `retyc webdav serve` 
@@ -128,10 +127,10 @@ All overridable from `~/.config/retyc/config.yaml` (prod) or `.retyc/config.yaml
 - `internal/config/env.go` holds the settings that are **deliberately not**
   viper keys — `RETYC_TOKEN`, `RETYC_KEY_PASSPHRASE`, `RETYC_WEBDAV_PASSWORD`
   (secrets: a viper key would also make them settable from `config.yaml`),
-  `RETYC_CONFIG_DIR` and `RETYC_TRACE` (read before viper is initialised). Never
+  `RETYC_CONFIG_DIR` (read before viper is initialised). Never
   call `os.Getenv("RETYC_...")` outside this file; use the accessors
   `config.Token()`, `config.KeyPassphrase()`, `config.RequireKeyPassphrase()`,
-  `config.WebdavPassword()`, `config.TraceEnabled()`.
+  `config.WebdavPassword()`.
 - Both rules are enforced by tests, not just stated here:
   `TestRetycEnvReadOnlyHere` (`internal/config/env_test.go`) walks the syntax
   tree of every `.go` file and fails on `os.Getenv` / `os.LookupEnv` called

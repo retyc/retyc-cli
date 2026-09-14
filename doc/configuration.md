@@ -161,6 +161,3 @@ working on the CLI itself and behave differently:
 - the default API endpoint is the development one;
 - `--insecure` / `-k`, `insecure: true` in `config.yaml` or `RETYC_INSECURE`
   skip TLS certificate verification. Release binaries have no such option;
-- `RETYC_TRACE`, set to any non-empty value, prints timing instrumentation to
-  stderr, one line per traced operation (used by `scripts/webdav-bench.sh`).
-  It works in release binaries too, but is only useful for performance work.

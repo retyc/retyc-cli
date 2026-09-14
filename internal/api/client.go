@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-
-	"github.com/retyc/retyc-cli/internal/trace"
 )
 
 // UserAgentTransport is an http.RoundTripper that injects a User-Agent header into every request.
@@ -198,10 +196,6 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 		return nil, err
 	}
 
-	if trace.Enabled() {
-		defer trace.Span("api GET %s (raw)", req.URL.Path)()
-	}
-
 	if c.debug {
 		fmt.Fprintf(os.Stderr, "> GET %s%s\n", req.URL, ProxyLabel(req))
 	}
@@ -238,9 +232,6 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 // do executes the request and decodes the response body into dst (if non-nil).
 // It returns an error for non-2xx status codes.
 func (c *Client) do(req *http.Request, dst any) error {
-	if trace.Enabled() {
-		defer trace.Span("api %s %s", req.Method, req.URL.Path)()
-	}
 	if c.debug {
 		fmt.Fprintf(os.Stderr, "> %s %s%s\n", req.Method, req.URL, ProxyLabel(req))
 	}

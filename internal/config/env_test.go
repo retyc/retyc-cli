@@ -77,25 +77,6 @@ func TestWebdavPassword(t *testing.T) {
 	}
 }
 
-func TestTraceEnabled(t *testing.T) {
-	cases := []struct {
-		name, value string
-		want        bool
-	}{
-		{"unset", "", false},
-		{"set", "1", true},
-		{"mcpb placeholder", "${user_config.trace}", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(EnvTraceName, tc.value)
-			if got := TraceEnabled(); got != tc.want {
-				t.Errorf("TraceEnabled() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 // retycStringConsts returns, for a parsed file, the string constants whose
 // value starts with RETYC_, keyed by constant name.
 func retycStringConsts(file *ast.File) map[string]string {
@@ -162,7 +143,7 @@ func declaredEnvNames(t *testing.T) []string {
 func TestDeclaredEnvNames(t *testing.T) {
 	got := strings.Join(declaredEnvNames(t), " ")
 	for _, want := range []string{
-		EnvTokenName, EnvKeyPassphraseName, EnvWebdavPasswordName, EnvConfigDirName, EnvTraceName,
+		EnvTokenName, EnvKeyPassphraseName, EnvWebdavPasswordName, EnvConfigDirName,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("declaredEnvNames() = %q, missing %s", got, want)
