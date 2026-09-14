@@ -90,6 +90,14 @@ func (c *SessionCache) put(drID string, sess *DataroomSession) {
 	c.sessions[drID] = sess
 }
 
+// Len returns the number of cached sessions.
+func (c *SessionCache) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return len(c.sessions)
+}
+
 // Store caches sess for drID, replacing any previous entry (pre-warming, tests).
 func (c *SessionCache) Store(drID string, sess *DataroomSession) {
 	c.mu.Lock()

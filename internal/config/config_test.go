@@ -350,3 +350,79 @@ func TestEnvVarsDocumented(t *testing.T) {
 		t.Errorf("undocumented in doc/configuration.md: %v", missing)
 	}
 }
+
+func TestWebdavMetricsAddr_DefaultDisabled(t *testing.T) {
+	resetViper(t)
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Webdav.Metrics.Addr != "" {
+		t.Errorf("Webdav.Metrics.Addr = %q, want empty (disabled)", cfg.Webdav.Metrics.Addr)
+	}
+}
+
+func TestWebdavMetricsAddr_EnvBinding(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_WEBDAV_METRICS_ADDR", "127.0.0.1:9090")
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Webdav.Metrics.Addr != "127.0.0.1:9090" {
+		t.Errorf("Webdav.Metrics.Addr = %q, want 127.0.0.1:9090", cfg.Webdav.Metrics.Addr)
+	}
+}
+
+func TestWebdavMetricsRuntime_DefaultEnabled(t *testing.T) {
+	resetViper(t)
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Webdav.Metrics.Runtime {
+		t.Error("Webdav.Metrics.Runtime should be true by default")
+	}
+}
+
+func TestWebdavMetricsRuntime_EnvBinding(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_WEBDAV_METRICS_RUNTIME", "false")
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Webdav.Metrics.Runtime {
+		t.Error("Webdav.Metrics.Runtime = true, want false from env")
+	}
+}
+
+func TestWebdavMetricsLabels_DefaultEmpty(t *testing.T) {
+	resetViper(t)
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Webdav.Metrics.Labels) != 0 {
+		t.Errorf("Webdav.Metrics.Labels = %v, want empty", cfg.Webdav.Metrics.Labels)
+	}
+}
+
+func TestWebdavMetricsLabels_EnvBindingSplitsOnSpaces(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_WEBDAV_METRICS_LABELS", "identity=abc pod=x")
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"identity=abc", "pod=x"}
+	if got := cfg.Webdav.Metrics.Labels; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Webdav.Metrics.Labels = %v, want %v", got, want)
+	}
+}

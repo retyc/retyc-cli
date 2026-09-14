@@ -49,7 +49,26 @@ type Client struct {
 // When insecure is true, TLS certificate verification is skipped, which allows
 // connecting to servers using self-signed certificates.
 // When debug is true, raw API responses are printed to stderr.
-func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debug bool) *Client {
+// Option customizes a Client at construction.
+type Option func(*clientOptions)
+
+type clientOptions struct {
+	wrapTransport func(http.RoundTripper) http.RoundTripper
+}
+
+// WrapTransport wraps the outermost RoundTripper of the client, so wrap sees
+// every request exactly as sent (token and User-Agent attached). Used to plug
+// metrics without touching the request path.
+func WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) Option {
+	return func(o *clientOptions) { o.wrapTransport = wrap }
+}
+
+func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debug bool, opts ...Option) *Client {
+	var o clientOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	// BaseTransport carries the proxy settings from the environment and the
 	// root CAs loaded by InitTLSRoots; only the timeouts are specific here.
 	base := BaseTransport(insecure)
@@ -64,12 +83,15 @@ func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debu
 	// mid-transfer (e.g. stalled downloads).
 	base.IdleConnTimeout = 90 * time.Second
 
-	transport := &UserAgentTransport{
+	var transport http.RoundTripper = &UserAgentTransport{
 		UserAgent: userAgent,
 		Base: &oauth2.Transport{
 			Source: tokSource,
 			Base:   base,
 		},
+	}
+	if o.wrapTransport != nil {
+		transport = o.wrapTransport(transport)
 	}
 
 	return &Client{

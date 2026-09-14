@@ -11,6 +11,9 @@ import (
 
 	"filippo.io/age"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"time"
+
+	"github.com/retyc/retyc-cli/internal/metrics"
 )
 
 const (
@@ -72,7 +75,9 @@ readLoop:
 
 		n, readErr := io.ReadFull(r, buf)
 		if n > 0 {
+			encStart := time.Now()
 			encrypted, encErr := crypto.EncryptBinaryForKey(buf[:n], sessionPubKey)
+			metrics.CryptoDuration.WithLabelValues("encrypt").Observe(time.Since(encStart).Seconds())
 			if encErr != nil {
 				setErr(fmt.Errorf("encrypting chunk %d: %w", chunkID, encErr))
 
@@ -176,7 +181,9 @@ func StreamDownloadChunks(
 
 					return
 				}
+				decStart := time.Now()
 				plaintext, err := crypto.DecryptBinary(encrypted, identity)
+				metrics.CryptoDuration.WithLabelValues("decrypt").Observe(time.Since(decStart).Seconds())
 				if err != nil {
 					results <- chunkResult{id: id, err: fmt.Errorf("decrypting chunk %d: %w", id, err)}
 
