@@ -14,10 +14,12 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/retyc/retyc-cli/internal/config"
 )
 
 var (
-	enabled = os.Getenv("RETYC_TRACE") != ""
+	enabled = config.TraceEnabled()
 	start   = time.Now()
 	mu      sync.Mutex
 )

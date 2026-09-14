@@ -24,6 +24,25 @@ retyc --json transfer ls | jq -r '.items[] | select(.status == "active") | .id'
 retyc --json user quota | jq .used_storage
 ```
 
+## Config
+
+| Command             | Description                                                              |
+|---------------------|--------------------------------------------------------------------------|
+| `retyc config show` | Effective value of every configuration key, secrets masked                |
+| `retyc config path` | Config directory, config file actually loaded, and token file in use      |
+
+Both accept `--json`. `config show` returns `{"items": [{"key", "value",
+"secret", "note"}]}`; a value the running build ignores carries a `note` (a
+prod binary always verifies TLS, so `insecure` is reported as ignored).
+`config path` returns `{"config_dir", "config_file", "config_file_error",
+"token_file"}`: `config_file` is empty when no config file was loaded, and
+`config_file_error` (omitted otherwise) says why a config file that exists was
+not loaded — an unreadable `--config` path or a YAML syntax error. The CLI
+still runs on defaults and environment in that case; `--debug` prints the same
+reason on every command. Neither command opens a
+network connection. See [Configuration](configuration.md) for the keys
+themselves.
+
 ## Auth
 
 | Command                      | Description                                            |
@@ -71,7 +90,7 @@ Organization administration through the public API. Requires an organization
 API key (`admin.api_key` / `RETYC_ADMIN_API_KEY`); commands that decrypt
 content also require the organization private key file
 (`admin.private_key_file` / `RETYC_ADMIN_PRIVATE_KEY_FILE`). See
-[configuration.md](configuration.md#admin-organization-api).
+[configuration.md](configuration.md#administer-the-organization).
 
 ### Organization
 

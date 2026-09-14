@@ -7,8 +7,6 @@
 
 package config
 
-import "os"
-
 // BuildMode identifies the active build configuration.
 const BuildMode = "dev"
 
@@ -17,7 +15,7 @@ const defaultAPIBaseURL = "https://api.triplesfer.traefik.me"
 
 // configDir returns the config directory for development builds.
 func configDir() (string, error) {
-	if dir := os.Getenv("RETYC_CONFIG_DIR"); dir != "" {
+	if dir := fromEnv(EnvConfigDirName); dir != "" {
 		return dir, nil
 	}
 

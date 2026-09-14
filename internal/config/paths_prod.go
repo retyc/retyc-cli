@@ -20,7 +20,7 @@ const defaultAPIBaseURL = "https://api.retyc.com"
 
 // configDir returns the config directory for production builds.
 func configDir() (string, error) {
-	if dir := os.Getenv("RETYC_CONFIG_DIR"); dir != "" {
+	if dir := fromEnv(EnvConfigDirName); dir != "" {
 		return dir, nil
 	}
 	base, err := os.UserConfigDir()
