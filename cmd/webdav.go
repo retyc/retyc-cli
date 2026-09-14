@@ -24,12 +24,14 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
 	"golang.org/x/net/webdav"
 	"golang.org/x/oauth2"
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/trace"
 )
@@ -227,6 +229,7 @@ func (c *dataroomCache) resolve(ctx context.Context) (*dataroomCacheEntry, error
 		return c.entry, nil
 	}
 
+	metrics.WebdavDataroomCacheRefreshes.Inc()
 	items, err := c.fetchFn(ctx)
 	if err != nil {
 		return nil, err
@@ -468,6 +471,13 @@ func (h *readFileHandle) Close() error {
 	return err
 }
 func (h *readFileHandle) Read(p []byte) (int, error) {
+	n, err := h.read(p)
+	metrics.WebdavBytes.WithLabelValues("download").Add(float64(n))
+
+	return n, err
+}
+
+func (h *readFileHandle) read(p []byte) (int, error) {
 	if h.file != nil {
 		return h.file.Read(p)
 	}
@@ -558,8 +568,13 @@ func (h *writeFileHandle) Close() error {
 
 	return err
 }
-func (h *writeFileHandle) Read(_ []byte) (int, error)           { return 0, os.ErrPermission }
-func (h *writeFileHandle) Write(p []byte) (int, error)          { return h.file.Write(p) }
+func (h *writeFileHandle) Read(_ []byte) (int, error) { return 0, os.ErrPermission }
+func (h *writeFileHandle) Write(p []byte) (int, error) {
+	n, err := h.file.Write(p)
+	metrics.WebdavBytes.WithLabelValues("upload").Add(float64(n))
+
+	return n, err
+}
 func (h *writeFileHandle) Seek(_ int64, _ int) (int64, error)   { return 0, os.ErrPermission }
 func (h *writeFileHandle) Stat() (os.FileInfo, error)           { return h.file.Stat() }
 func (h *writeFileHandle) Readdir(_ int) ([]os.FileInfo, error) { return nil, os.ErrInvalid }
@@ -824,12 +839,14 @@ func (fs *webdavFS) listNodes(ctx context.Context, drID, nodePath string) ([]ser
 	fs.nodeMu.Lock()
 	if e, ok := fs.nodeCache[uri]; ok && time.Since(e.fetchedAt) < nodeCacheTTL {
 		fs.nodeMu.Unlock()
+		metrics.WebdavNodeCacheLookups.WithLabelValues("hit").Inc()
 		if trace.Enabled() {
 			trace.Log("fs listNodes %s: CACHE HIT (%d nodes)", nodePath, len(e.nodes))
 		}
 
 		return e.nodes, nil
 	}
+	metrics.WebdavNodeCacheLookups.WithLabelValues("miss").Inc()
 	if trace.Enabled() {
 		trace.Log("fs listNodes %s: cache MISS", nodePath)
 	}
@@ -1054,6 +1071,7 @@ type streamWriteHandle struct {
 func (h *streamWriteHandle) Write(p []byte) (int, error) {
 	n, err := h.pipeW.Write(p)
 	h.written += int64(n)
+	metrics.WebdavBytes.WithLabelValues("upload").Add(float64(n))
 
 	return n, err
 }
@@ -1398,13 +1416,34 @@ func tokenKeepalive(ctx context.Context, src oauth2.TokenSource, onFail func(err
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if _, err := src.Token(); err != nil {
+			if err := checkToken(src); err != nil {
 				onFail(err)
 
 				return
 			}
 		}
 	}
+}
+
+// checkToken asks src for a valid token (refreshing it when needed) and feeds
+// the retyc_cli_token_* metrics: the result counter and the seconds left on
+// the access token, 0 when unknown.
+func checkToken(src oauth2.TokenSource) error {
+	tok, err := src.Token()
+	if err != nil {
+		metrics.TokenRefreshes.WithLabelValues("error").Inc()
+		metrics.TokenExpiry.Set(0)
+
+		return err
+	}
+	metrics.TokenRefreshes.WithLabelValues("ok").Inc()
+	if tok.Expiry.IsZero() {
+		metrics.TokenExpiry.Set(0)
+	} else {
+		metrics.TokenExpiry.Set(max(time.Until(tok.Expiry).Seconds(), 0))
+	}
+
+	return nil
 }
 
 var webdavCmd = &cobra.Command{
@@ -1463,7 +1502,8 @@ Example:
 		if err != nil {
 			return err
 		}
-		client := api.New(cfg.API.BaseURL, cliUserAgent(), tokSrc, insecure, debug)
+		client := api.New(cfg.API.BaseURL, cliUserAgent(), tokSrc, insecure, debug,
+			api.WrapTransport(metrics.RoundTripper))
 
 		// Fail-fast before binding the port: auth + API reachability, then the
 		// key passphrase itself (a wrong one would otherwise only surface on the
@@ -1538,7 +1578,7 @@ Example:
 		})
 
 		authEnabled, _ := cmd.Flags().GetBool("auth")
-		var rootHandler http.Handler = mux
+		var rootHandler = instrumentWebdav(mux)
 		if authEnabled {
 			password := config.WebdavPassword()
 			if password == "" {
@@ -1552,7 +1592,7 @@ Example:
 				fmt.Fprintf(os.Stderr, "WebDAV auth enabled: user %q, password from RETYC_WEBDAV_PASSWORD\n",
 					webdavAuthUser)
 			}
-			rootHandler = basicAuthMiddleware(mux, webdavAuthUser, password)
+			rootHandler = basicAuthMiddleware(rootHandler, webdavAuthUser, password)
 		} else if !isLoopbackAddr(addr) {
 			fmt.Fprintf(os.Stderr,
 				"WARNING: binding to %s without authentication exposes all dataroom contents "+
@@ -1574,6 +1614,32 @@ Example:
 			}
 		}
 
+		// Optional observability listener (Prometheus metrics + probes), bound
+		// before the WebDAV port so a bad address fails fast. /readyz answers
+		// 503 until the WebDAV listener is actually bound below.
+		health := newWebdavHealth()
+		var metricsSrv *http.Server
+		if metricsAddr := resolveMetricsAddr(cmd.Flags()); metricsAddr != "" {
+			labels, err := parseMetricsLabels(resolveMetricsLabels(cmd.Flags()))
+			if err != nil {
+				return err
+			}
+			handler, err := newObservabilityHandler(health, observabilityOptions{
+				runtime: resolveMetricsRuntime(cmd.Flags()),
+				extra:   []prometheus.Collector{sessionsCachedGauge(fs)},
+				labels:  labels,
+			})
+			if err != nil {
+				return err
+			}
+			metricsSrv, err = startObservabilityServer(metricsAddr, handler)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "Metrics and probes listening on http://%s (/metrics, /healthz, /readyz)\n",
+				metricsSrv.Addr)
+		}
+
 		ctx, cancel := context.WithCancel(cmd.Context())
 		defer cancel()
 
@@ -1582,6 +1648,9 @@ Example:
 		var shutdownOnce sync.Once
 		shutdown := func() {
 			shutdownOnce.Do(func() {
+				// Flip readiness first so an orchestrator stops routing to this
+				// instance while the in-flight requests drain.
+				health.setReady(false)
 				cancel()
 				// Bound the drain: a stuck streaming client must not keep the CLI
 				// process alive forever. After the timeout, Shutdown returns and the
@@ -1589,6 +1658,9 @@ Example:
 				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer shutdownCancel()
 				_ = srv.Shutdown(shutdownCtx)
+				if metricsSrv != nil {
+					_ = metricsSrv.Shutdown(shutdownCtx)
+				}
 			})
 		}
 
@@ -1612,9 +1684,18 @@ Example:
 			}
 		}()
 
-		fmt.Fprintf(os.Stderr, "WebDAV server listening on http://%s\n", srv.Addr)
+		// Bind explicitly rather than ListenAndServe so readiness flips only
+		// once the port really accepts connections.
+		ln, err := net.Listen("tcp", srv.Addr)
+		if err != nil {
+			shutdown()
 
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("WebDAV server: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "WebDAV server listening on http://%s\n", ln.Addr())
+		health.setReady(true)
+
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("WebDAV server: %w", err)
 		}
 
@@ -1641,6 +1722,12 @@ func init() {
 	webdavServeCmd.Flags().String("addr", "127.0.0.1", "address to bind")
 	webdavServeCmd.Flags().Bool("auth", false,
 		"require HTTP Basic auth (password from RETYC_WEBDAV_PASSWORD or generated)")
+	webdavServeCmd.Flags().String("metrics-addr", "",
+		"address for Prometheus metrics and health probes (e.g. 127.0.0.1:9090)")
+	webdavServeCmd.Flags().Bool("metrics-runtime", true,
+		"include Go runtime and process metrics on /metrics")
+	webdavServeCmd.Flags().StringArray("metrics-label", nil,
+		"constant label key=value added to every metric (repeatable)")
 	webdavCmd.AddCommand(webdavServeCmd)
 	rootCmd.AddCommand(webdavCmd)
 }

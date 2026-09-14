@@ -18,6 +18,9 @@ cmd/
   transfer.go                  # transfer ls/info/create/download/enable/disable
   dataroom.go                  # dataroom commands (ls, cp, mv, rm, mkdir, create, info, user)
   admin*.go                    # admin org/member/blacklist/dataroom/transfer (organization API key auth)
+  webdav_metrics.go            # webdav serve observability listener: /metrics (Prometheus,
+                               #   dedicated registry), /healthz, /readyz, webdavHealth state,
+                               #   instrumentWebdav middleware, sessionsCachedGauge
   mcp.go                       # mcp serve (stdio MCP server) + tool registry
   mcp_manifest.go              # mcp manifest — full MCPB manifest.json (version + tools injected)
   mcpb_manifest_base.json      # static MCPB manifest metadata (go:embed into mcp_manifest.go)
@@ -46,6 +49,8 @@ internal/
     paths_dev.go                # configDir() + defaultAPIBaseURL for dev
     paths_prod.go               # configDir() + defaultAPIBaseURL for prod
   crypto/age.go                 # AGE encrypt/decrypt helpers (PQ-only, see below)
+  metrics/                      # Prometheus metric declarations (retyc_cli_* / retyc_cli_webdav_*),
+                                #   Register(reg), NormalizeRoute, RoundTripper (API client wrapper)
   keyring/keyring.go            # Linux kernel session keyring cache (TTL-based)
   trace/trace.go                # Opt-in timing instrumentation on stderr (RETYC_TRACE), Enabled() guard
 mcpb/icon.png                   # MCPB bundle icon (512×512)
@@ -452,6 +457,33 @@ registry). Release CI builds it after goreleaser, asserts manifest version == ta
 (`--expect-version`), validates with `npx @anthropic-ai/mcpb validate`, uploads to the
 release. Reference: `doc/mcpb.md`.
 
+## Metrics (`webdav serve --metrics-addr`)
+
+`internal/metrics` declares every metric as a package-level collector, observed
+where the event happens and registered into the dedicated registry only by
+`cmd/webdav_metrics.go:newObservabilityHandler`. Unregistered collectors still
+accept observations, so the MCP server and one-shot commands pay nothing.
+Prefixes: `retyc_cli_*` for what is not WebDAV-specific (API round trips via
+`api.WrapTransport(metrics.RoundTripper)`, token keepalive, per-chunk
+crypto), `retyc_cli_webdav_*` for the server (requests, bytes, caches).
+
+Adding a metric: declare it in `internal/metrics/metrics.go`, add it to `all`,
+observe it at the event, add a row to `doc/webdav.md`. Labels must stay
+bounded: routes go through `metrics.NormalizeRoute`, WebDAV methods outside
+the RFC set become `OTHER`, never an ID or a raw path. Collectors that need a
+handle on the running server (`retyc_cli_sessions_cached`) are built in `cmd`
+and passed to `newObservabilityHandler` through `observabilityOptions.extra`.
+`observabilityOptions.runtime` (`--metrics-runtime`, `webdav.metrics.runtime`,
+default true) toggles the `go_*` / `process_*` collectors so a parent process
+that aggregates several instances (the CSI driver) can drop them;
+`observabilityOptions.labels` (`--metrics-label key=value`, repeatable,
+`webdav.metrics.labels`, env space-separated) wraps the registerer with
+`prometheus.WrapRegistererWith` so every series carries them, and a colliding
+or invalid name is an error at startup, not a panic. All three flags bind to
+their viper key in `resolveMetrics*`, never in `init()`; `config.Load` copies
+the labels through `GetStringSlice` because `Unmarshal` does not split an
+environment value.
+
 ## API — backend nomenclature
 
 The backend uses `share` internally (`/share`, `ShareModel`, etc.).
@@ -468,6 +500,7 @@ The CLI exposes everything as `transfer`. Do not rename backend routes.
 | `golang.org/x/sys/unix` | Linux kernel keyring syscalls |
 | `golang.org/x/term` | Password prompt without echo |
 | `github.com/schollz/progressbar/v3` | Upload/download progress bars |
+| `github.com/prometheus/client_golang` | `webdav serve --metrics-addr` exposition (`cmd/webdav_metrics.go`) |
 
 ## CI
 

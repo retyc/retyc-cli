@@ -12,6 +12,10 @@ import (
 	"time"
 
 	"github.com/retyc/retyc-cli/internal/crypto"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/retyc/retyc-cli/internal/metrics"
 )
 
 // TestUploadChunks_ProgressConcurrency verifies that the progress callback is invoked
@@ -351,4 +355,53 @@ func writeTempFile(t *testing.T, content []byte) *os.File {
 	}
 
 	return f
+}
+
+func cryptoSamples(t *testing.T, op string) uint64 {
+	t.Helper()
+	var m dto.Metric
+	if err := metrics.CryptoDuration.WithLabelValues(op).(prometheus.Histogram).Write(&m); err != nil {
+		t.Fatal(err)
+	}
+
+	return m.GetHistogram().GetSampleCount()
+}
+
+func TestUploadChunks_ObservesEncryptPerChunk(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cryptoSamples(t, "encrypt")
+	data := make([]byte, UploadChunkSize+1)
+	err = UploadChunks(context.Background(), bytes.NewReader(data), int64(len(data)), "f.bin",
+		identity.Recipient().String(), nil,
+		func(context.Context, int, []byte) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cryptoSamples(t, "encrypt") - before; got != 2 {
+		t.Errorf("encrypt samples delta = %d, want 2 (one per chunk)", got)
+	}
+}
+
+func TestStreamDownloadChunks_ObservesDecryptPerChunk(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := crypto.EncryptBinaryForKey([]byte("abcd"), identity.Recipient().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cryptoSamples(t, "decrypt")
+	var buf bytes.Buffer
+	err = StreamDownloadChunks(context.Background(), &buf, 8, 2, identity, nil,
+		func(context.Context, int) ([]byte, error) { return enc, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cryptoSamples(t, "decrypt") - before; got != 2 {
+		t.Errorf("decrypt samples delta = %d, want 2 (one per chunk)", got)
+	}
 }

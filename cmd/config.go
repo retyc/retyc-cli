@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/retyc/retyc-cli/internal/config"
@@ -135,6 +136,10 @@ func configEntries() []configEntryJSON {
 func effectiveValue(key string) string {
 	if key == "insecure" {
 		return strconv.FormatBool(insecure)
+	}
+	// List keys (webdav.metrics.labels) would render as "" through GetString.
+	if items, ok := viper.Get(key).([]string); ok {
+		return strings.Join(items, " ")
 	}
 
 	return viper.GetString(key)

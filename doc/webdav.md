@@ -39,6 +39,9 @@ retyc webdav serve [flags]
 | `--port`       | `-p`  | `8888`      | Port to listen on                                                  |
 | `--addr`       |       | `127.0.0.1` | Address to bind (`127.0.0.1` = local only)                         |
 | `--auth`       |       | `false`     | Require HTTP Basic authentication                                  |
+| `--metrics-addr` |     | *(empty)*   | Expose Prometheus metrics and health probes on this address (see [below](#metrics-and-probes)) |
+| `--metrics-runtime` |  | `true`      | Include the Go runtime and process metrics on `/metrics` (`--metrics-runtime=false` to drop them) |
+| `--metrics-label` |    | *(none)*    | Constant label `key=value` added to every series; repeatable |
 
 ### Environment variables
 
@@ -159,6 +162,73 @@ Any client (Cyberduck, rclone, `cadaver`, …) can connect to `http://localhost:
 rclone config create retyc webdav url http://localhost:8888 vendor other
 rclone ls retyc:/dataroom
 ```
+
+## Metrics and probes
+
+`--metrics-addr` (or `webdav.metrics.addr` in `config.yaml`, or
+`RETYC_WEBDAV_METRICS_ADDR`) starts a second, unauthenticated HTTP listener meant
+for Prometheus and container orchestrators. It is off by default.
+
+```sh
+retyc webdav serve --auth --metrics-addr 127.0.0.1:9090
+```
+
+| Path       | Purpose   | Response                                                                 |
+|------------|-----------|--------------------------------------------------------------------------|
+| `/metrics` | Prometheus | Go runtime and process metrics (`go_*`, `process_*`) plus the CLI metrics below |
+| `/healthz` | Liveness  | `200` as long as the process answers                                      |
+| `/readyz`  | Readiness | `200` once the WebDAV port accepts connections, `503` before that and as soon as a shutdown starts (signal or expired login) |
+
+The listener is separate from the WebDAV port on purpose: scrapers and probes
+need neither the Basic auth password nor a path inside the WebDAV tree. Bind it
+to a loopback or private address; the metrics carry no dataroom content but do
+describe the process. A probe never calls the Retyc API, so probing at a high
+frequency costs nothing on the backend.
+
+### Metrics
+
+`--metrics-runtime=false` (or `webdav.metrics.runtime: false`,
+`RETYC_WEBDAV_METRICS_RUNTIME=false`) removes the `go_*` and `process_*`
+families. Use it when a parent process aggregates the `/metrics` of several
+instances and already exposes its own runtime metrics, such as the CSI driver:
+the same families with different labels and help strings do not merge. The
+setting only matters together with `--metrics-addr`.
+
+`--metrics-label key=value` (repeatable; `webdav.metrics.labels` as a list, or
+`RETYC_WEBDAV_METRICS_LABELS="identity=abc pod=x"` separated by spaces) adds
+constant labels to every series, runtime metrics included, so the parent can
+tell its instances apart. The first `=` separates key and value. A key that
+collides with a metric label (`method`, `route`, `status`, ...) or an invalid
+label name stops the server at startup.
+
+```sh
+retyc webdav serve --metrics-addr 127.0.0.1:9090 --metrics-runtime=false \
+  --metrics-label identity=pvc-1234
+```
+
+Labels never carry identifiers or raw paths: API routes are normalized
+(`/dataroom/{id}/nodes`, `/file/{id}/{n}`), WebDAV methods outside the RFC set
+are folded into `OTHER`.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `retyc_cli_build_info` | gauge | `version`, `goos`, `goarch` | Constant 1, joins the version onto any series |
+| `retyc_cli_webdav_requests_total` | counter | `method`, `status` | WebDAV requests served |
+| `retyc_cli_webdav_request_duration_seconds` | histogram | `method` | WebDAV request latency |
+| `retyc_cli_webdav_inflight_requests` | gauge | | Requests being served right now |
+| `retyc_cli_webdav_bytes_total` | counter | `direction` (`upload`, `download`) | Plaintext bytes moved through the server |
+| `retyc_cli_webdav_node_cache_lookups_total` | counter | `result` (`hit`, `miss`) | Folder listing cache efficiency |
+| `retyc_cli_webdav_dataroom_cache_refreshes_total` | counter | | Refreshes of the dataroom list (one API call each) |
+| `retyc_cli_api_requests_total` | counter | `method`, `route`, `status` | Calls to the Retyc API (`status="error"` = no response) |
+| `retyc_cli_api_request_duration_seconds` | histogram | `method`, `route` | API round-trip latency, the dominant cost of every WebDAV operation |
+| `retyc_cli_sessions_cached` | gauge | | Dataroom session keys held unlocked in memory |
+| `retyc_cli_token_refreshes_total` | counter | `result` (`ok`, `error`) | Keepalive checks of the login token (every 60 s) |
+| `retyc_cli_token_expiry_seconds` | gauge | | Seconds left on the access token, 0 when unknown |
+| `retyc_cli_crypto_duration_seconds` | histogram | `op` (`encrypt`, `decrypt`) | Per-chunk AGE operation time |
+
+Chunk counts are the `retyc_cli_api_requests_total` series of the chunk routes
+(`/dataroom/node/version/{id}/chunk/{n}` for uploads,
+`/dataroom/node/{id}/download/{n}` for downloads).
 
 ## Lifecycle & auth expiry
 

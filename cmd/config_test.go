@@ -171,3 +171,12 @@ func TestConfigFileLoaded_ReadableFile(t *testing.T) {
 		t.Errorf("configFileErr = %v, want nil", configFileErr)
 	}
 }
+
+func TestEffectiveValue_JoinsLists(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("RETYC_WEBDAV_METRICS_LABELS", "identity=abc pod=x")
+	config.SetDefaults()
+	if got := effectiveValue("webdav.metrics.labels"); got != "identity=abc pod=x" {
+		t.Errorf("effectiveValue = %q, want %q", got, "identity=abc pod=x")
+	}
+}

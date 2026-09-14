@@ -16,6 +16,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
+
 )
 
 // countingResolver returns a resolver that records how many times it ran and the
@@ -332,3 +333,22 @@ func TestSessionCache_LeaderCancellationDoesNotFailWaiters(t *testing.T) {
 		t.Fatalf("waiter error = %v, want the resolved session", err)
 	}
 }
+
+func TestSessionCache_LenCountsResolvedSessions(t *testing.T) {
+	var c SessionCache
+	if c.Len() != 0 {
+		t.Fatalf("Len() on empty cache = %d, want 0", c.Len())
+	}
+	c.Store("dr1", &DataroomSession{})
+	c.Store("dr2", &DataroomSession{})
+	c.Store("dr1", &DataroomSession{})
+	if c.Len() != 2 {
+		t.Errorf("Len() = %d, want 2", c.Len())
+	}
+	c.Reset()
+	if c.Len() != 0 {
+		t.Errorf("Len() after Reset = %d, want 0", c.Len())
+	}
+}
+
+

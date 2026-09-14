@@ -290,3 +290,40 @@ func TestUserAgentTransport_NilBase(t *testing.T) {
 		t.Errorf("User-Agent = %q, want nil-base-test/1.0", gotUA)
 	}
 }
+
+type countingRT struct {
+	base  http.RoundTripper
+	calls int
+}
+
+func (c *countingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.calls++
+
+	return c.base.RoundTrip(req)
+}
+
+func TestNew_WrapTransportSeesEveryRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	var seen *countingRT
+	client := New(srv.URL, "retyc-test/1.0", staticTokenSource(), false, false,
+		WrapTransport(func(base http.RoundTripper) http.RoundTripper {
+			seen = &countingRT{base: base}
+
+			return seen
+		}))
+
+	var dst map[string]any
+	if err := client.Get(context.Background(), "/x", &dst); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetBytes(context.Background(), "/y"); err != nil {
+		t.Fatal(err)
+	}
+	if seen == nil || seen.calls != 2 {
+		t.Fatalf("wrapper saw %v calls, want 2", seen)
+	}
+}

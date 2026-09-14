@@ -50,11 +50,29 @@ type AdminConfig struct {
 	BaseURL        string `yaml:"base_url" mapstructure:"base_url"`
 }
 
+// WebdavMetricsConfig controls the observability listener of `webdav serve`
+// (Prometheus metrics and health probes). An empty address disables it.
+// Runtime toggles the go_* and process_* collectors on /metrics: a parent
+// process that aggregates several instances and already exposes its own
+// runtime metrics turns it off. Labels are constant "key=value" pairs added
+// to every series, so such a parent can tell its instances apart.
+type WebdavMetricsConfig struct {
+	Addr    string   `yaml:"addr" mapstructure:"addr"`
+	Runtime bool     `yaml:"runtime" mapstructure:"runtime"`
+	Labels  []string `yaml:"labels" mapstructure:"labels"`
+}
+
+// WebdavConfig holds the `webdav serve` settings.
+type WebdavConfig struct {
+	Metrics WebdavMetricsConfig `yaml:"metrics" mapstructure:"metrics"`
+}
+
 // Config is the top-level configuration structure.
 type Config struct {
 	API     APIConfig     `yaml:"api" mapstructure:"api"`
 	Keyring KeyringConfig `yaml:"keyring" mapstructure:"keyring"`
 	Admin   AdminConfig   `yaml:"admin" mapstructure:"admin"`
+	Webdav  WebdavConfig  `yaml:"webdav" mapstructure:"webdav"`
 }
 
 // envPrefix is the prefix of every environment variable that maps to a
@@ -82,6 +100,11 @@ func SetDefaults() {
 	viper.SetDefault("admin.base_url", "")
 	viper.SetDefault("admin.api_key", "")
 	viper.SetDefault("admin.private_key_file", "")
+	// Empty means no metrics/probes listener (see cmd/webdav_metrics.go).
+	viper.SetDefault("webdav.metrics.addr", "")
+	viper.SetDefault("webdav.metrics.runtime", true)
+	// "key=value" items; from the environment, separated by spaces.
+	viper.SetDefault("webdav.metrics.labels", []string{})
 
 	viper.SetEnvPrefix(envPrefix)
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -95,6 +118,9 @@ func Load() (*Config, error) {
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshalling config: %w", err)
 	}
+	// Unmarshal keeps an environment value as a single item; GetStringSlice
+	// splits it on spaces, which is the documented environment syntax.
+	cfg.Webdav.Metrics.Labels = viper.GetStringSlice("webdav.metrics.labels")
 
 	return &cfg, nil
 }
