@@ -13,7 +13,7 @@
 # its stderr redirected to a file) and the WebDAV mount is active.
 #
 # - retyc dataroom create --title bench1
-# - RETYC_TRACE=1 retyc webdav serve --addr 127.0.0.1 --port 8888 2> /tmp/trace3.log
+# - RETYC_TRACE=1 retyc webdav serve --addr 127.0.0.1:8888 2> /tmp/trace3.log
 # - sudo mkdir -p /mnt/a && sudo mount -t davfs -o dir_mode=0777,file_mode=0666 http://127.0.0.1:8888/dataroom/bench1 /mnt/a
 #
 #

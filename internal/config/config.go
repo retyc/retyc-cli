@@ -62,8 +62,10 @@ type WebdavMetricsConfig struct {
 	Labels  []string `yaml:"labels" mapstructure:"labels"`
 }
 
-// WebdavConfig holds the `webdav serve` settings.
+// WebdavConfig holds the `webdav serve` settings. Addr is the host:port the
+// server binds; loopback by default since the tree is served in cleartext.
 type WebdavConfig struct {
+	Addr    string              `yaml:"addr" mapstructure:"addr"`
 	Metrics WebdavMetricsConfig `yaml:"metrics" mapstructure:"metrics"`
 }
 
@@ -74,6 +76,10 @@ type Config struct {
 	Admin   AdminConfig   `yaml:"admin" mapstructure:"admin"`
 	Webdav  WebdavConfig  `yaml:"webdav" mapstructure:"webdav"`
 }
+
+// defaultWebdavAddr is the bind address of `webdav serve`: local only, the
+// WebDAV tree is served in cleartext.
+const defaultWebdavAddr = "127.0.0.1:8888"
 
 // envPrefix is the prefix of every environment variable that maps to a
 // configuration key: the key "a.b" is read from RETYC_A_B.
@@ -100,6 +106,7 @@ func SetDefaults() {
 	viper.SetDefault("admin.base_url", "")
 	viper.SetDefault("admin.api_key", "")
 	viper.SetDefault("admin.private_key_file", "")
+	viper.SetDefault("webdav.addr", defaultWebdavAddr)
 	// Empty means no metrics/probes listener (see cmd/webdav_metrics.go).
 	viper.SetDefault("webdav.metrics.addr", "")
 	viper.SetDefault("webdav.metrics.runtime", true)

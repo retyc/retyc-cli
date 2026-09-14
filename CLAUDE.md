@@ -457,6 +457,14 @@ registry). Release CI builds it after goreleaser, asserts manifest version == ta
 (`--expect-version`), validates with `npx @anthropic-ai/mcpb validate`, uploads to the
 release. Reference: `doc/mcpb.md`.
 
+## WebDAV server flags
+
+`webdav serve` binds `--addr host:port` (`webdav.addr`, `RETYC_WEBDAV_ADDR`,
+default `127.0.0.1:8888`); there is no separate port flag. Like the
+`--metrics-*` flags, it is bound to its viper key in `resolveWebdavAddr`,
+called from `RunE`, never in `init()`. `isLoopbackAddr` takes the same
+`host:port` form.
+
 ## Metrics (`webdav serve --metrics-addr`)
 
 `internal/metrics` declares every metric as a package-level collector, observed
