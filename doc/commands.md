@@ -90,7 +90,7 @@ Organization administration through the public API. Requires an organization
 API key (`admin.api_key` / `RETYC_ADMIN_API_KEY`); commands that decrypt
 content also require the organization private key file
 (`admin.private_key_file` / `RETYC_ADMIN_PRIVATE_KEY_FILE`). See
-[configuration.md](configuration.md#admin-organization-api).
+[configuration.md](configuration.md#administer-the-organization).
 
 ### Organization
 

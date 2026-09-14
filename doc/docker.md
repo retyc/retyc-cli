@@ -20,7 +20,7 @@ docker run -it --rm \
 ## Behind a proxy
 
 Proxy and CA settings are read from the environment (see
-[Configuration](configuration.md#proxy-and-custom-cas)). The image is built
+[Configuration](configuration.md#behind-a-corporate-proxy)). The image is built
 `FROM scratch`, so a custom CA bundle has to be mounted into the container:
 
 ```sh
