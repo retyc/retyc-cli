@@ -16,19 +16,47 @@ import (
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/keyring"
+	"github.com/retyc/retyc-cli/internal/telemetry"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// decryptKeyWithPassphrase runs the scrypt that unlocks a private key with a
+// passphrase, as one crypto.unlock_key span under the caller's span. kind is
+// "user" (the account key) or "transfer" (the ephemeral key of a transfer);
+// the passphrase and the key never reach the span.
+func decryptKeyWithPassphrase(ctx context.Context, kind, ciphertext, passphrase string) (string, error) {
+	_, span := telemetry.Tracer().Start(ctx, "crypto.unlock_key", trace.WithAttributes(
+		telemetry.AttrKeyKind.String(kind), telemetry.AttrKeySource.String("passphrase")))
+	defer span.End()
+	plaintext, err := crypto.DecryptToStringWithPassphrase(ciphertext, passphrase)
+	if err != nil {
+		telemetry.RecordError(span, err)
+
+		return "", err
+	}
+
+	return plaintext, nil
+}
 
 // ResolveUserIdentity decrypts the user's AGE private key using the passphrase.
 // It checks the keyring cache first (when enabled), falling back to reader().
-func ResolveUserIdentity(cfg *config.Config, userKey *api.UserKey, reader PassphraseReader) (
-	*age.HybridIdentity, error,
-) {
+// A keyring hit is exported as a crypto.unlock_key span with key.source
+// "keyring", so a trace shows whether the scrypt ran.
+func ResolveUserIdentity(
+	ctx context.Context, cfg *config.Config, userKey *api.UserKey, reader PassphraseReader,
+) (*age.HybridIdentity, error) {
 	var identityStr string
 	fromKeyring := false
 
 	if cfg.Keyring.Enabled {
+		// The keyring lookup is the cheap path; its span shows whether the
+		// scrypt below was avoided.
+		_, span := telemetry.Tracer().Start(ctx, "crypto.unlock_key", trace.WithAttributes(
+			telemetry.AttrKeyKind.String("user"), telemetry.AttrKeySource.String("keyring")))
 		var err error
 		identityStr, err = keyring.Load()
+		span.SetAttributes(telemetry.AttrCacheHit.Bool(err == nil && identityStr != ""))
+		span.End()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: keyring load: %v\n", err)
 		} else if identityStr != "" {
@@ -41,7 +69,7 @@ func ResolveUserIdentity(cfg *config.Config, userKey *api.UserKey, reader Passph
 		if err != nil {
 			return nil, err
 		}
-		identityStr, err = crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, passphrase)
+		identityStr, err = decryptKeyWithPassphrase(ctx, "user", userKey.PrivateKeyEnc, passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("wrong key passphrase: %w", err)
 		}
@@ -86,7 +114,7 @@ func UnlockUserIdentity(ctx context.Context, client *api.Client, reader Passphra
 	if err != nil {
 		return nil, err
 	}
-	identityStr, err := crypto.DecryptToStringWithPassphrase(userKey.PrivateKeyEnc, passphrase)
+	identityStr, err := decryptKeyWithPassphrase(ctx, "user", userKey.PrivateKeyEnc, passphrase)
 	if err != nil {
 		return nil, fmt.Errorf("wrong key passphrase: %w", err)
 	}

@@ -35,6 +35,8 @@ import (
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/internal/telemetry"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // webdavContextKey is a private type for context keys in the WebDAV handler.
@@ -283,6 +285,8 @@ func (c *dataroomCache) idForName(ctx context.Context, name string) (string, err
 	if !ok {
 		return "", os.ErrNotExist
 	}
+	// The title stays local; the ID is what a trace needs to join requests.
+	trace.SpanFromContext(ctx).SetAttributes(telemetry.AttrDataroomID.String(id))
 
 	return id, nil
 }
@@ -524,6 +528,10 @@ func (h *readFileHandle) Readdir(_ int) ([]os.FileInfo, error) { return nil, os.
 // writeFileHandle is a webdav.File for uploading a file. Writes accumulate in a temp file;
 // Close uploads the temp file then deletes the temp directory.
 type writeFileHandle struct {
+	// ctx is the OpenFile (request) context: the upload from Close runs on
+	// it without its cancellation, so the API and crypto spans nest under the
+	// request span instead of becoming orphan traces.
+	ctx          context.Context
 	file         *os.File
 	tempDir      string
 	tempFilePath string
@@ -552,7 +560,7 @@ func (h *writeFileHandle) Close() error {
 			return nil
 		}
 	}
-	ctx := context.Background()
+	ctx := context.WithoutCancel(h.ctx)
 	sess, err := h.wfs.getSession(ctx, h.drID)
 	if err != nil {
 		_ = os.RemoveAll(h.tempDir)
@@ -838,10 +846,14 @@ func (fs *webdavFS) listNodes(ctx context.Context, drID, nodePath string) ([]ser
 	if e, ok := fs.nodeCache[uri]; ok && time.Since(e.fetchedAt) < nodeCacheTTL {
 		fs.nodeMu.Unlock()
 		metrics.WebdavNodeCacheLookups.WithLabelValues("hit").Inc()
+		trace.SpanFromContext(ctx).AddEvent("cache.lookup", trace.WithAttributes(
+			telemetry.AttrCacheName.String("nodes"), telemetry.AttrCacheHit.Bool(true)))
 
 		return e.nodes, nil
 	}
 	metrics.WebdavNodeCacheLookups.WithLabelValues("miss").Inc()
+	trace.SpanFromContext(ctx).AddEvent("cache.lookup", trace.WithAttributes(
+		telemetry.AttrCacheName.String("nodes"), telemetry.AttrCacheHit.Bool(false)))
 	if f, ok := fs.nodeInflight[uri]; ok {
 		fs.nodeMu.Unlock()
 		select {
@@ -1016,7 +1028,9 @@ func (fs *webdavFS) openForRead(
 	}, nil
 }
 
-func (fs *webdavFS) openForWriteTempFile(drID, parentPath, fileName string, isPut bool) (webdav.File, error) {
+func (fs *webdavFS) openForWriteTempFile(
+	ctx context.Context, drID, parentPath, fileName string, isPut bool,
+) (webdav.File, error) {
 	tempDir, err := os.MkdirTemp("", "retyc-webdav-*")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
@@ -1032,6 +1046,7 @@ func (fs *webdavFS) openForWriteTempFile(drID, parentPath, fileName string, isPu
 	}
 
 	return &writeFileHandle{
+		ctx:          ctx,
 		file:         f,
 		tempDir:      tempDir,
 		tempFilePath: tempFilePath,
@@ -1191,7 +1206,7 @@ func (fs *webdavFS) openForWrite(ctx context.Context, drID, subPath string) (web
 		return fs.openForWriteStream(ctx, drID, parentPath, fileName, size)
 	}
 
-	return fs.openForWriteTempFile(drID, parentPath, fileName, isPutFromCtx(ctx))
+	return fs.openForWriteTempFile(ctx, drID, parentPath, fileName, isPutFromCtx(ctx))
 }
 
 // Mkdir implements webdav.FileSystem.
@@ -1476,8 +1491,9 @@ func webdavStartupCheck(
 }
 
 var webdavServeCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Start a local WebDAV server exposing your datarooms",
+	Use:         "serve",
+	Annotations: map[string]string{annotationLongRunning: "true"},
+	Short:       "Start a local WebDAV server exposing your datarooms",
 	Long: `Start a local WebDAV server on localhost that exposes all your RETYC datarooms.
 
 Datarooms are exposed under the /dataroom folder; other element types may be
@@ -1493,7 +1509,22 @@ Example:
   RETYC_KEY_PASSPHRASE=your-passphrase retyc webdav serve --addr 127.0.0.1:8888 --auth
   # Then mount http://localhost:8888 in your WebDAV client
   # Datarooms appear under /dataroom`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (retErr error) {
+		// The init span covers everything before the port is bound (token,
+		// API reachability, key unlock, listeners) and is the only span
+		// parented to TRACEPARENT: the driver's NodeStageVolume trace must
+		// close once the server is up. Requests get their own roots. It
+		// starts before the passphrase check so a missing passphrase is
+		// still recorded as a failed init.
+		initCtx, initSpan := telemetry.Tracer().Start(cmd.Context(), "retyc webdav serve init")
+		initDone := false
+		defer func() {
+			if !initDone {
+				telemetry.RecordError(initSpan, retErr)
+				initSpan.End()
+			}
+		}()
+
 		// Fail-fast: passphrase must be set before any crypto operation.
 		if config.KeyPassphrase() == "" {
 			return config.ErrNoKeyPassphrase
@@ -1503,17 +1534,17 @@ Example:
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}
-		tokSrc, err := mustGetToken(cmd.Context(), cfg)
+		tokSrc, err := mustGetToken(initCtx, cfg)
 		if err != nil {
 			return err
 		}
 		client := api.New(cfg.API.BaseURL, cliUserAgent(), tokSrc, insecure, debug,
-			api.WrapTransport(metrics.RoundTripper))
+			apiTransport())
 
 		// Fail-fast before binding the port: auth + API reachability, then the
 		// key passphrase itself (a wrong one would otherwise only surface on the
 		// first dataroom access). The unlocked identity is kept for the whole run.
-		identity, err := webdavStartupCheck(cmd.Context(), client, webdavPassphraseReader)
+		identity, err := webdavStartupCheck(initCtx, client, webdavPassphraseReader)
 		if err != nil {
 			return err
 		}
@@ -1685,6 +1716,8 @@ Example:
 		}
 		fmt.Fprintf(os.Stderr, "WebDAV server listening on http://%s\n", ln.Addr())
 		health.setReady(true)
+		initSpan.End()
+		initDone = true
 
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("WebDAV server: %w", err)

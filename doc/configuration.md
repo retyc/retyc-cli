@@ -122,7 +122,7 @@ The cache does not exist on macOS and Windows, nor inside Docker.
 | Organization private key file | `admin.private_key_file` | `RETYC_ADMIN_PRIVATE_KEY_FILE` | — |
 | Admin API endpoint | `admin.base_url` | `RETYC_ADMIN_BASE_URL` | API endpoint + `/v1` |
 | WebDAV bind address | `webdav.addr` | `RETYC_WEBDAV_ADDR` | `127.0.0.1:8888` |
-| WebDAV metrics and probes listener | `webdav.metrics.addr` | `RETYC_WEBDAV_METRICS_ADDR` | — (disabled), see [WebDAV](webdav.md#metrics-and-probes) |
+| WebDAV metrics and probes listener | `webdav.metrics.addr` | `RETYC_WEBDAV_METRICS_ADDR` | — (disabled), see [WebDAV](webdav.md#metrics-probes-and-traces) |
 | WebDAV runtime metrics (`go_*`, `process_*`) | `webdav.metrics.runtime` | `RETYC_WEBDAV_METRICS_RUNTIME` | `true` |
 | WebDAV constant metric labels | `webdav.metrics.labels` (list of `key=value`) | `RETYC_WEBDAV_METRICS_LABELS` (space-separated) | — |
 | Config directory | — | `RETYC_CONFIG_DIR` | see [above](#where-settings-live) |
@@ -141,6 +141,42 @@ standard ones, [see above](#behind-a-corporate-proxy).
 | `--config <file>` | Read another config file (the token stays in the config directory) |
 | `--debug`, `-d` | Print every HTTP request and its response to stderr, with the proxy and CAs in use |
 | `--json` | Results as JSON on stdout, errors as `{"error": "..."}` on stderr (see [JSON output](commands.md#json-output)) |
+
+## Tracing (OpenTelemetry)
+
+The CLI can export traces to an OpenTelemetry collector over OTLP. It is off
+unless an endpoint is set, and only the environment can turn it on: there is
+no flag and no `config.yaml` key, so a workstation never exports anything by
+accident.
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318 retyc dataroom ls
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc OTEL_EXPORTER_OTLP_ENDPOINT=collector:4317 retyc dataroom ls
+```
+
+| Variable | Meaning |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Collector endpoint. Unset = tracing off (the OTel default of `localhost:4318` is deliberately not applied). |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | `http/protobuf` (default) or `grpc`. Another value disables tracing with a message under `--debug`. |
+| `OTEL_SDK_DISABLED` | `true` turns tracing off even with an endpoint. |
+| `TRACEPARENT`, `TRACESTATE` | W3C trace context of the caller; the command span becomes its child. For `webdav serve` only the startup span is, each request is then a new trace. |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | Resource; `service.name` defaults to `retyc-cli`, `service.version` is the CLI version. |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Sampling, e.g. `parentbased_traceidratio` / `0.1` for a busy WebDAV server. |
+| Other `OTEL_EXPORTER_OTLP_*` | Headers, TLS certificate, compression, timeout: standard OTLP exporter settings. |
+
+Under `--debug`, exporter failures are printed to stderr and may include the
+collector URL, and a malformed `OTEL_EXPORTER_OTLP_HEADERS` is echoed by the
+SDK's own logger, so do not put credentials in the endpoint and keep
+`--debug` off a shared terminal when the headers carry a token.
+
+For a local look, `scripts/start-jaeger.sh` runs Jaeger with OTLP on
+`4318` (HTTP) and `4317` (gRPC) and the UI on `http://localhost:16686`.
+
+Traces are flushed at exit with a 2 s bound; a collector that is down never
+fails a command. Spans carry methods, status codes, sizes, counts, durations,
+normalized API routes and identifiers. They never carry file or folder names,
+dataroom titles, command arguments, request bodies, headers or error messages:
+those are what the end-to-end encryption protects.
 
 ## Troubleshooting
 

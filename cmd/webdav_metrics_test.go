@@ -17,7 +17,11 @@ import (
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/internal/telemetry"
+	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 	"github.com/spf13/pflag"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"golang.org/x/oauth2"
 )
 
@@ -556,5 +560,171 @@ func TestResolveWebdavAddr_Default(t *testing.T) {
 	flags.String("addr", "127.0.0.1:8888", "")
 	if got := resolveWebdavAddr(flags); got != "127.0.0.1:8888" {
 		t.Errorf("got %q, want 127.0.0.1:8888", got)
+	}
+}
+
+func TestInstrumentWebdav_RootSpanPerRequest(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	var sawSpan bool
+	h := instrumentWebdav(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawSpan = oteltrace.SpanFromContext(r.Context()).SpanContext().IsValid()
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte("<multistatus/>"))
+	}))
+	req := httptest.NewRequest("PROPFIND", "/dataroom/Project%20SENTINEL/secret.pdf", strings.NewReader("<propfind/>"))
+	req.Header.Set("traceparent", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+	// A remote span context in the request's own context must also be
+	// ignored, not just the traceparent header: every WebDAV request is a
+	// new root regardless of how a parent might have been carried in.
+	remote := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+		TraceID: oteltrace.TraceID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		SpanID:  oteltrace.SpanID{1, 2, 3, 4, 5, 6, 7, 8},
+		Remote:  true, TraceFlags: oteltrace.FlagsSampled,
+	})
+	req = req.WithContext(oteltrace.ContextWithRemoteSpanContext(req.Context(), remote))
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if !sawSpan {
+		t.Error("the handler did not receive the request span in its context")
+	}
+	spans := exp.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	s := spans[0]
+	if s.Name != "WEBDAV PROPFIND" || s.SpanKind != oteltrace.SpanKindServer {
+		t.Errorf("span = %q kind %v", s.Name, s.SpanKind)
+	}
+	if s.Parent.IsValid() {
+		t.Error("the span must be a new root even when the context carries a remote " +
+			"parent (traceparent header or WithRemoteSpanContext)")
+	}
+	for _, kv := range s.Attributes {
+		if strings.Contains(kv.Value.String(), "SENTINEL") || kv.Key == "url.path" {
+			t.Errorf("attribute %s leaks the path: %s", kv.Key, kv.Value.String())
+		}
+	}
+	var status, reqSize, respSize int64
+	for _, kv := range s.Attributes {
+		switch kv.Key {
+		case "http.response.status_code":
+			status = kv.Value.AsInt64()
+		case "http.request.body.size":
+			reqSize = kv.Value.AsInt64()
+		case "http.response.body.size":
+			respSize = kv.Value.AsInt64()
+		}
+	}
+	if status != 207 || reqSize != int64(len("<propfind/>")) || respSize != int64(len("<multistatus/>")) {
+		t.Errorf("status=%d reqSize=%d respSize=%d", status, reqSize, respSize)
+	}
+}
+
+func TestInstrumentWebdav_5xxIsErrorStatus(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	h := instrumentWebdav(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/f", nil))
+	if s := exp.GetSpans()[0]; s.Status.Code != codes.Error {
+		t.Errorf("status = %v, want Error", s.Status.Code)
+	}
+}
+
+func TestWebdavServe_IsLongRunning(t *testing.T) {
+	if webdavServeCmd.Annotations[annotationLongRunning] != "true" {
+		t.Error("webdav serve must carry the long-running annotation")
+	}
+}
+
+func TestListNodes_EmitsCacheLookupEvents(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	ctx, parent := telemetry.Tracer().Start(context.Background(), "parent")
+	fs := &webdavFS{listFn: func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
+		return nil, nil
+	}}
+	for range 2 {
+		if _, err := fs.listNodes(ctx, "dr1", "/SENTINEL"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parent.End()
+
+	var hits []bool
+	for _, ev := range exp.GetSpans()[0].Events {
+		if ev.Name != "cache.lookup" {
+			continue
+		}
+		for _, kv := range ev.Attributes {
+			if kv.Key == "retyc.cache.hit" {
+				hits = append(hits, kv.Value.AsBool())
+			}
+			if strings.Contains(kv.Value.String(), "SENTINEL") {
+				t.Errorf("event attribute %s leaks the path", kv.Key)
+			}
+		}
+	}
+	if len(hits) != 2 || hits[0] || !hits[1] {
+		t.Errorf("cache.hit sequence = %v, want [false true]", hits)
+	}
+}
+
+// Resolving a dataroom from its title tags the current span with its ID: the
+// title never leaves the process, the UUID is what a trace needs.
+func TestDataroomCache_IdForNameTagsSpan(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	cache := newDataroomCache(func(context.Context) ([]dataroomCacheItem, error) {
+		return []dataroomCacheItem{{id: "019d7cba-c700-73c2-8eac-f3dc311d1b25", title: "SENTINEL"}}, nil
+	})
+	ctx, span := telemetry.Tracer().Start(context.Background(), "parent")
+	if _, err := cache.idForName(ctx, "SENTINEL"); err != nil {
+		t.Fatal(err)
+	}
+	span.End()
+
+	var got string
+	for _, kv := range exp.GetSpans()[0].Attributes {
+		if kv.Key == "retyc.dataroom.id" {
+			got = kv.Value.AsString()
+		}
+		if strings.Contains(kv.Value.String(), "SENTINEL") {
+			t.Errorf("attribute %s leaks the title", kv.Key)
+		}
+	}
+	if got != "019d7cba-c700-73c2-8eac-f3dc311d1b25" {
+		t.Errorf("retyc.dataroom.id = %q", got)
+	}
+}
+
+// A buffered PUT (unknown length, LOCK-driven create) uploads from Close, on
+// a context that must still carry the request span: otherwise the session
+// resolution, the chunk POSTs and the crypto spans become orphan traces.
+func TestWriteFileHandle_CloseUploadsUnderTheRequestSpan(t *testing.T) {
+	telemetrytest.Install(t)
+	ctx, span := telemetry.Tracer().Start(context.Background(), "WEBDAV PUT")
+	defer span.End()
+	var sawSpan bool
+	fs := &webdavFS{sessionFn: func(ctx context.Context, _ string) (*service.DataroomSession, error) {
+		// The cache wraps the resolver in its own session.unlock span, so the
+		// trace ID is what proves the request span is the ancestor.
+		sawSpan = oteltrace.SpanFromContext(ctx).SpanContext().TraceID() == span.SpanContext().TraceID()
+
+		return nil, errors.New("stop here")
+	}}
+	tempDir := t.TempDir()
+	tempFilePath := tempDir + "/f.txt"
+	f, err := os.Create(tempFilePath) //nolint:gosec // G304: our own TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &writeFileHandle{
+		ctx: ctx, file: f, tempDir: tempDir, tempFilePath: tempFilePath,
+		drID: "dr1", parentURI: "retyc://dr1/", wfs: fs, isPut: true,
+	}
+	if err := h.Close(); err == nil {
+		t.Fatal("expected the session error to propagate")
+	}
+	if !sawSpan {
+		t.Error("the upload context lost the request span")
 	}
 }

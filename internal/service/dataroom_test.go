@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/oauth2"
 )
 
@@ -222,7 +225,7 @@ func TestNodesFromItems_ModTime(t *testing.T) {
 	}
 	created := time.Date(2026, 9, 4, 10, 30, 0, 0, time.UTC)
 
-	nodes := nodesFromItems([]api.DataroomNodeItem{
+	nodes := nodesFromItems(context.Background(), []api.DataroomNodeItem{
 		{
 			Node:    api.DataroomNode{ID: "n1", NameEnc: nameEnc, TypeEnc: &typeEnc},
 			Version: &api.DataroomNodeVersion{ID: "v1", OriginalSize: 5, ChunkCount: 1, CreatedAt: created},
@@ -292,5 +295,94 @@ func TestGetDataroomSessionWithIdentity_SkipsUserKey(t *testing.T) {
 	}
 	if sess.NameSalt != "salt-123" {
 		t.Errorf("NameSalt = %q, want salt-123", sess.NameSalt)
+	}
+}
+
+// Decrypting a listing's names is one span under the caller's span, with the
+// node count only.
+func TestNodesFromItems_DecryptNamesSpan(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := identity.Recipient().String()
+	items := make([]api.DataroomNodeItem, 3)
+	for i := range items {
+		nameEnc, err := crypto.EncryptStringForKeys(fmt.Sprintf("SENTINEL-%d.txt", i), []string{pub})
+		if err != nil {
+			t.Fatal(err)
+		}
+		items[i] = api.DataroomNodeItem{Node: api.DataroomNode{ID: fmt.Sprintf("n%d", i), NameEnc: nameEnc}}
+	}
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
+	nodesFromItems(ctx, items, identity)
+	parent.End()
+
+	var found bool
+	for _, s := range exp.GetSpans() {
+		if s.Name != "crypto.decrypt_names" {
+			continue
+		}
+		found = true
+		if s.Parent.SpanID() != parent.SpanContext().SpanID() {
+			t.Error("crypto.decrypt_names is not a child of the caller's span")
+		}
+		if len(s.Attributes) != 1 || s.Attributes[0].Key != "retyc.node.count" || s.Attributes[0].Value.AsInt64() != 3 {
+			t.Errorf("attributes = %v, want node.count=3 only", s.Attributes)
+		}
+	}
+	if !found {
+		t.Fatal("no crypto.decrypt_names span")
+	}
+}
+
+// Resolving a path tags the current span with the node ID it lands on.
+func TestResolvePath_TagsSpanWithNodeID(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := identity.Recipient().String()
+	nameEnc, err := crypto.EncryptStringForKeys("SENTINEL.pdf", []string{pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(api.DataroomNodePage{
+			Items: []api.DataroomNodeItem{{
+				Node: api.DataroomNode{ID: "019e9e07-2200-743e-8ca4-054abf48702b", NameEnc: nameEnc},
+			}},
+			Pages: 1,
+		})
+	}))
+	defer srv.Close()
+	client := api.New(srv.URL, "retyc-test/1.0",
+		oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "t", TokenType: "Bearer"}), false, false)
+
+	ctx, span := otel.Tracer("test").Start(context.Background(), "parent")
+	id, err := resolvePath(ctx, client, "dr1", "/SENTINEL.pdf", identity)
+	if err != nil || id == nil {
+		t.Fatalf("resolvePath = %v, %v", id, err)
+	}
+	span.End()
+
+	var got string
+	for _, s := range exp.GetSpans() {
+		if s.Name != "parent" {
+			continue
+		}
+		for _, kv := range s.Attributes {
+			if kv.Key == "retyc.node.id" {
+				got = kv.Value.AsString()
+			}
+			if strings.Contains(kv.Value.String(), "SENTINEL") {
+				t.Errorf("attribute %s leaks the name", kv.Key)
+			}
+		}
+	}
+	if got != "019e9e07-2200-743e-8ca4-054abf48702b" {
+		t.Errorf("retyc.node.id = %q", got)
 	}
 }

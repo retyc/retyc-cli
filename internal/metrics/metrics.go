@@ -117,23 +117,146 @@ func Register(reg prometheus.Registerer) {
 	reg.MustRegister(all...)
 }
 
+// routeTemplates lists every route the CLI calls, as the backend templates
+// it maps to. NormalizeRoute matches a path against them position by
+// position: a segment sitting where a template expects {id} or {n} is
+// folded whatever its value, so an identifier that happens to equal a route
+// word ("users", "dataroom", ...) is folded too. The optional /v1 prefix is
+// the admin API. Extend the list when a new route appears.
+var routeTemplates = [][]string{
+	{"dataroom"},
+	{"dataroom", "{id}"},
+	{"dataroom", "{id}", "nodes"},
+	{"dataroom", "{id}", "node"},
+	{"dataroom", "{id}", "messages"},
+	{"dataroom", "{id}", "stats"},
+	{"dataroom", "{id}", "users"},
+	{"dataroom", "{id}", "users", "rekey"},
+	{"dataroom", "{id}", "user", "{id}"},
+	{"dataroom", "{id}", "ownership", "{id}"},
+	{"dataroom", "{id}", "rekey"},
+	{"dataroom", "node", "{id}"},
+	{"dataroom", "node", "{id}", "version"},
+	{"dataroom", "node", "{id}", "download", "{n}"},
+	{"dataroom", "node", "version", "{id}", "chunk", "{n}"},
+	{"share"},
+	{"share", "{id}"},
+	{"share", "{id}", "details"},
+	{"share", "{id}", "files"},
+	{"share", "{id}", "file"},
+	{"share", "{id}", "complete"},
+	{"share", "{id}", "re-enable"},
+	{"share", "{id}", "force"},
+	{"file", "{id}", "{n}"},
+	{"user", "me"},
+	{"user", "me", "key", "active"},
+	{"user", "quota"},
+	{"organization"},
+	{"organization", "quota"},
+	{"organization", "members"},
+	{"organization", "member", "{id}"},
+	{"organization", "member", "{id}", "enable"},
+	{"organization", "member", "{id}", "disable"},
+	{"organization", "blacklist-domains"},
+	{"organization", "blacklist-domains", "{id}"},
+	{"info", "scopes"},
+	{"transfer", "sent"},
+	{"transfer", "{id}"},
+	{"transfer", "{id}", "tracking"},
+	{"transfer", "{id}", "re-enable"},
+	{"transfer", "{id}", "force"},
+	{"transfer", "{id}", "rekey"},
+	{"login", "config", "public"},
+}
+
+// routeWords is the vocabulary of literal segments of routeTemplates. It is
+// the fallback for a path matching no template: route words are kept and
+// every other segment is folded, so even an unknown route never exports
+// anything a user typed.
+var routeWords = func() map[string]bool {
+	words := map[string]bool{"v1": true}
+	for _, tpl := range routeTemplates {
+		for _, seg := range tpl {
+			if seg != "{id}" && seg != "{n}" {
+				words[seg] = true
+			}
+		}
+	}
+
+	return words
+}()
+
 var (
 	uuidSegment    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	numericSegment = regexp.MustCompile(`^[0-9]+$`)
 )
 
-// NormalizeRoute replaces the identifiers of an API path with placeholders so
-// the route label stays bounded: UUID segments become {id}, numeric ones {n}.
+// NormalizeRoute turns an API path into its template. A path matching one of
+// routeTemplates is normalized by position; otherwise route words are kept,
+// numbers become {n} and every other segment becomes {id}. The result is
+// bounded and never contains an identifier, UUID or user-typed.
 func NormalizeRoute(path string) string {
-	segments := strings.Split(path, "/")
+	trailing := ""
+	if strings.HasSuffix(path, "/") && path != "/" {
+		trailing = "/"
+	}
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	prefix := ""
+	if len(segments) > 0 && segments[0] == "v1" {
+		prefix = "/v1"
+		segments = segments[1:]
+	}
+	if tpl := matchTemplate(segments); tpl != nil {
+		return prefix + "/" + strings.Join(tpl, "/") + trailing
+	}
 	for i, s := range segments {
 		switch {
-		case uuidSegment.MatchString(s):
-			segments[i] = "{id}"
+		case s == "" || routeWords[s]:
 		case numericSegment.MatchString(s):
 			segments[i] = "{n}"
+		default:
+			segments[i] = "{id}"
 		}
 	}
 
-	return strings.Join(segments, "/")
+	return prefix + "/" + strings.Join(segments, "/") + trailing
 }
+
+// matchTemplate returns the first template of the same length whose literal
+// segments equal the path's and whose {n} positions hold a number; {id}
+// accepts anything. A trailing empty segment ("/dataroom/") is ignored.
+func matchTemplate(segments []string) []string {
+	for _, tpl := range routeTemplates {
+		if len(tpl) != len(segments) {
+			continue
+		}
+		ok := true
+		for i, want := range tpl {
+			got := segments[i]
+			switch want {
+			case "{id}":
+				ok = got != ""
+			case "{n}":
+				ok = numericSegment.MatchString(got)
+			default:
+				ok = got == want
+			}
+			if !ok {
+				break
+			}
+		}
+		if ok {
+			return tpl
+		}
+	}
+
+	return nil
+}
+
+// IsUUIDSegment reports whether a path segment is a UUID (an identifier that
+// NormalizeRoute turns into {id}).
+func IsUUIDSegment(s string) bool { return uuidSegment.MatchString(s) }
+
+// IsNumericSegment reports whether a path segment is a number (a chunk index
+// that NormalizeRoute turns into {n}).
+func IsNumericSegment(s string) bool { return numericSegment.MatchString(s) }

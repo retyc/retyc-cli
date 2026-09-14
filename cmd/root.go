@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,8 +10,10 @@ import (
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -34,6 +37,20 @@ var (
 // root CA loading, so an invalid SSL_CERT_FILE inherited from another tool
 // cannot break them — the release CI runs `retyc mcp manifest`.
 const annotationOffline = "retyc:offline"
+
+// annotationLongRunning marks the servers (webdav serve, mcp serve). They get
+// no command span: one span spanning days would parent every request under a
+// single trace that never closes. They open their own per-request roots.
+const annotationLongRunning = "retyc:long-running"
+
+var (
+	// activeTelemetry is flushed by run once the command returns.
+	activeTelemetry *telemetry.Telemetry
+	// commandSpan wraps a one-shot command; opened in PersistentPreRunE,
+	// closed by run (cobra skips the PersistentPostRun hooks when RunE
+	// fails, so a post-run hook would leak it on every error).
+	commandSpan trace.Span
+)
 
 // rootCmd is the base command when called without any subcommands.
 var rootCmd = &cobra.Command{
@@ -66,16 +83,50 @@ var rootCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "TLS roots:", source)
 		}
 
+		// Tracing is decided by the environment only; a bad OTEL_* value is
+		// reported under --debug and the command runs untraced.
+		tel, err := telemetry.Init(cmd.Context(), telemetry.Options{Version: Version, Debug: debug})
+		if err != nil && debug {
+			fmt.Fprintln(os.Stderr, "Tracing disabled:", err)
+		}
+		activeTelemetry = tel
+
+		if cmd.Annotations[annotationLongRunning] != "true" {
+			ctx, span := telemetry.Tracer().Start(cmd.Context(), cmd.CommandPath(),
+				trace.WithAttributes(
+					telemetry.AttrCommand.String(cmd.CommandPath()),
+					telemetry.AttrCLIVersion.String(Version),
+				))
+			commandSpan = span
+			cmd.SetContext(ctx)
+		}
+
 		return nil
 	},
 }
 
 // Execute runs the root command and exits on error.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	if err := run(context.Background(), os.Args[1:]); err != nil {
 		printError(err)
 		os.Exit(1)
 	}
+}
+
+// run executes args against rootCmd with the TRACEPARENT parent in the
+// context, closes the command span with the outcome and flushes the traces.
+// Execute and the tests share it.
+func run(ctx context.Context, args []string) error {
+	rootCmd.SetArgs(args)
+	err := rootCmd.ExecuteContext(telemetry.ParentFromEnv(ctx))
+	if commandSpan != nil {
+		telemetry.RecordError(commandSpan, err)
+		commandSpan.End()
+		commandSpan = nil
+	}
+	activeTelemetry.Shutdown(context.Background())
+
+	return err
 }
 
 func init() {

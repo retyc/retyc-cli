@@ -18,6 +18,8 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/telemetry"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // — URI and path helpers —————————————————————————————————————————————————————
@@ -144,7 +146,7 @@ func resolveDataroomSessionUncached(
 		return nil, fmt.Errorf("no active encryption key - set up your key in the web interface first")
 	}
 
-	userIdentity, err := ResolveUserIdentity(cfg, kr.v, reader)
+	userIdentity, err := ResolveUserIdentity(ctx, cfg, kr.v, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +247,13 @@ func fetchChildItems(
 }
 
 // nodesFromItems decrypts API node items into DataroomNodeInfo using identity.
-func nodesFromItems(items []api.DataroomNodeItem, identity *age.HybridIdentity) []DataroomNodeInfo {
+func nodesFromItems(
+	ctx context.Context, items []api.DataroomNodeItem, identity *age.HybridIdentity,
+) []DataroomNodeInfo {
+	// One span per listing under the caller's span: the node count only.
+	_, span := telemetry.Tracer().Start(ctx, "crypto.decrypt_names",
+		trace.WithAttributes(telemetry.AttrNodeCount.Int(len(items))))
+	defer span.End()
 	result := make([]DataroomNodeInfo, 0, len(items))
 	for _, item := range items {
 		name, decErr := crypto.DecryptToString(item.Node.NameEnc, identity)
@@ -293,7 +301,7 @@ func ListNodesWithSession(
 		return nil, err
 	}
 
-	return nodesFromItems(items, sess.Identity), nil
+	return nodesFromItems(ctx, items, sess.Identity), nil
 }
 
 // ListNodesLiteralWithSession lists the children of the folder at nodePath,
@@ -308,7 +316,7 @@ func ListNodesLiteralWithSession(
 		return nil, err
 	}
 
-	return nodesFromItems(items, sess.Identity), nil
+	return nodesFromItems(ctx, items, sess.Identity), nil
 }
 
 // — Node traversal helpers ————————————————————————————————————————————————————
@@ -355,6 +363,8 @@ func resolvePath(
 	}
 
 	parts := strings.Split(strings.TrimPrefix(nodePath, "/"), "/")
+	trace.SpanFromContext(ctx).AddEvent("dataroom.resolve_path",
+		trace.WithAttributes(telemetry.AttrPathDepth.Int(len(parts))))
 	var currentParentID *string
 
 	for depth, part := range parts {
@@ -376,6 +386,9 @@ func resolvePath(
 					id := item.Node.ID
 					currentParentID = &id
 					found = true
+					// The last component wins: the span ends up tagged with the
+					// node the path resolves to.
+					trace.SpanFromContext(ctx).SetAttributes(telemetry.AttrNodeID.String(id))
 
 					break
 				}

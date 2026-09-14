@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/internal/metrics"
+	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/schollz/progressbar/v3"
 	"golang.org/x/oauth2"
@@ -111,7 +114,16 @@ func newAPIClient(ctx context.Context) (*config.Config, *api.Client, error) {
 		return nil, nil, err
 	}
 
-	return cfg, api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug), nil
+	return cfg, api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug, apiTransport()), nil
+}
+
+// apiTransport returns the client option every api.New call site uses:
+// tracing outermost (one CLIENT span per round trip, traceparent injected),
+// Prometheus metrics inside it.
+func apiTransport() api.Option {
+	return api.WrapTransport(func(base http.RoundTripper) http.RoundTripper {
+		return telemetry.RoundTripper(metrics.RoundTripper(base))
+	})
 }
 
 // newTransferBar creates a consistently styled progress bar for file transfers.
