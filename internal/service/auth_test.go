@@ -14,6 +14,11 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"golang.org/x/oauth2"
 )
 
@@ -357,5 +362,115 @@ func TestUnlockUserIdentity_ReaderError(t *testing.T) {
 	})
 	if !errors.Is(err, want) {
 		t.Errorf("error = %v, want %v", err, want)
+	}
+}
+
+// unlockKeySpans returns the crypto.unlock_key spans under parent, failing on
+// any attribute that carries the sentinel passphrase.
+func unlockKeySpans(
+	t *testing.T, exp *tracetest.InMemoryExporter, parent oteltrace.Span, sentinel string,
+) []tracetest.SpanStub {
+	t.Helper()
+	var out []tracetest.SpanStub
+	for _, s := range exp.GetSpans() {
+		if s.Name != "crypto.unlock_key" {
+			continue
+		}
+		if s.Parent.SpanID() != parent.SpanContext().SpanID() {
+			t.Errorf("crypto.unlock_key is not a child of the caller's span")
+		}
+		for _, kv := range s.Attributes {
+			if strings.Contains(kv.Value.String(), sentinel) {
+				t.Errorf("attribute %s leaks the passphrase", kv.Key)
+			}
+		}
+		out = append(out, s)
+	}
+
+	return out
+}
+
+func keyAttrs(s tracetest.SpanStub) (kind, source string) {
+	for _, kv := range s.Attributes {
+		switch kv.Key {
+		case "retyc.key.kind":
+			kind = kv.Value.AsString()
+		case "retyc.key.source":
+			source = kv.Value.AsString()
+		}
+	}
+
+	return kind, source
+}
+
+func TestUnlockUserIdentity_UnlockKeySpan(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	srv, _ := keyPassphraseTestServer(t, "SENTINEL-pw")
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
+	reader := func() (string, error) { return "SENTINEL-pw", nil }
+	if _, err := UnlockUserIdentity(ctx, newKeyTestClient(srv), reader); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	spans := unlockKeySpans(t, exp, parent, "SENTINEL-pw")
+	if len(spans) != 1 {
+		t.Fatalf("crypto.unlock_key spans = %d, want 1", len(spans))
+	}
+	if kind, source := keyAttrs(spans[0]); kind != "user" || source != "passphrase" {
+		t.Errorf("key.kind=%q key.source=%q, want user/passphrase", kind, source)
+	}
+}
+
+func TestResolveUserIdentity_UnlockKeySpanFromPassphrase(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	srv, _ := keyPassphraseTestServer(t, "SENTINEL-pw")
+	userKey, err := newKeyTestClient(srv).GetActiveKey(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{} // keyring disabled: the passphrase path runs scrypt
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
+	if _, err := ResolveUserIdentity(ctx, cfg, userKey, func() (string, error) { return "SENTINEL-pw", nil }); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	spans := unlockKeySpans(t, exp, parent, "SENTINEL-pw")
+	if len(spans) != 1 {
+		t.Fatalf("crypto.unlock_key spans = %d, want 1", len(spans))
+	}
+	if kind, source := keyAttrs(spans[0]); kind != "user" || source != "passphrase" {
+		t.Errorf("key.kind=%q key.source=%q, want user/passphrase", kind, source)
+	}
+}
+
+// decryptKeyWithPassphrase is the one helper every scrypt site goes through;
+// the transfer passphrase path is covered by it.
+func TestDecryptKeyWithPassphrase_TransferKind(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	enc, err := crypto.EncryptWithPassphrase([]byte("secret-key"), "SENTINEL-pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
+	got, err := decryptKeyWithPassphrase(ctx, "transfer", enc, "SENTINEL-pw")
+	if err != nil || got != "secret-key" {
+		t.Fatalf("decryptKeyWithPassphrase = %q, %v", got, err)
+	}
+	if _, err := decryptKeyWithPassphrase(ctx, "transfer", enc, "wrong"); err == nil {
+		t.Fatal("wrong passphrase must fail")
+	}
+	parent.End()
+
+	spans := unlockKeySpans(t, exp, parent, "SENTINEL-pw")
+	if len(spans) != 2 {
+		t.Fatalf("crypto.unlock_key spans = %d, want 2 (success and failure)", len(spans))
+	}
+	if kind, _ := keyAttrs(spans[0]); kind != "transfer" {
+		t.Errorf("key.kind = %q, want transfer", kind)
+	}
+	if spans[1].Status.Code != codes.Error || spans[1].Status.Description != "" {
+		t.Errorf("failed unlock status = %+v, want Error with empty description", spans[1].Status)
 	}
 }

@@ -9,11 +9,11 @@
 # the WebDAV client, and the trend line (first files vs last) shows whether the
 # per-file cost grows as the folder fills.
 #
-# Prerequisites: the server is already running (ideally with RETYC_TRACE=1 and
-# its stderr redirected to a file) and the WebDAV mount is active.
+# Prerequisites: the server is already running (ideally with OTEL_EXPORTER_OTLP_ENDPOINT
+# pointed at a local collector) and the WebDAV mount is active.
 #
 # - retyc dataroom create --title bench1
-# - RETYC_TRACE=1 retyc webdav serve --addr 127.0.0.1:8888 2> /tmp/trace3.log
+# - OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 retyc webdav serve --addr 127.0.0.1:8888
 # - sudo mkdir -p /mnt/a && sudo mount -t davfs -o dir_mode=0777,file_mode=0666 http://127.0.0.1:8888/dataroom/bench1 /mnt/a
 #
 #
@@ -68,7 +68,7 @@ if [ -n "$pid" ]; then
     tr '\0' '\n' < /proc/"$pid"/environ 2>/dev/null \
         | grep -E '^(RETYC_|HTTPS?_PROXY|SSL_CERT)' \
         | awk -F= '{
-              safe = ($1 == "RETYC_TRACE" || $1 == "RETYC_CONFIG_DIR" || $1 == "RETYC_API_BASE_URL")
+              safe = ($1 == "RETYC_CONFIG_DIR" || $1 == "RETYC_API_BASE_URL")
               print "    env     : " $1 "=" (safe ? substr($0, index($0, "=") + 1) : "<set, masked>")
           }'
 else
@@ -170,4 +170,4 @@ echo
 echo "per-file durations : $OUT/curl.ms  $OUT/davfs.ms"
 echo "full log           : $OUT/bench.log"
 echo
-echo "attach: this directory plus the server trace (RETYC_TRACE=1) covering $(ts)"
+echo "attach: this directory plus the server traces covering $(ts)"

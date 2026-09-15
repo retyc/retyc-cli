@@ -6,16 +6,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/retyc/retyc-cli/internal/metrics"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // TestUploadChunks_ProgressConcurrency verifies that the progress callback is invoked
@@ -403,5 +409,161 @@ func TestStreamDownloadChunks_ObservesDecryptPerChunk(t *testing.T) {
 	}
 	if got := cryptoSamples(t, "decrypt") - before; got != 2 {
 		t.Errorf("decrypt samples delta = %d, want 2 (one per chunk)", got)
+	}
+}
+
+// childSpans returns the exported spans named name whose parent is parent.
+func childSpans(exp *tracetest.InMemoryExporter, parent oteltrace.Span, name string) []tracetest.SpanStub {
+	var out []tracetest.SpanStub
+	for _, s := range exp.GetSpans() {
+		if s.Name == name && s.Parent.SpanID() == parent.SpanContext().SpanID() {
+			out = append(out, s)
+		}
+	}
+
+	return out
+}
+
+// chunkAttrs reads retyc.chunk.index and the size attribute of a crypto span:
+// plaintext bytes on crypto.encrypt, ciphertext bytes on crypto.decrypt.
+func chunkAttrs(t *testing.T, s tracetest.SpanStub) (index, size int64) {
+	t.Helper()
+	index, size = -1, -1
+	sizeKey := "retyc.chunk.plaintext_bytes"
+	if s.Name == "crypto.decrypt" {
+		sizeKey = "retyc.chunk.ciphertext_bytes"
+	}
+	for _, kv := range s.Attributes {
+		switch string(kv.Key) {
+		case "retyc.chunk.index":
+			index = kv.Value.AsInt64()
+		case sizeKey:
+			size = kv.Value.AsInt64()
+		default:
+			t.Errorf("unexpected attribute %s on %s", kv.Key, s.Name)
+		}
+	}
+
+	return index, size
+}
+
+func TestUploadChunks_OneEncryptSpanPerChunk(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
+	data := make([]byte, UploadChunkSize+1)
+	err = UploadChunks(ctx, bytes.NewReader(data), int64(len(data)), "SENTINEL.bin",
+		identity.Recipient().String(), nil, func(context.Context, int, []byte) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	spans := childSpans(exp, parent, "crypto.encrypt")
+	if len(spans) != 2 {
+		t.Fatalf("got %d crypto.encrypt spans under the parent, want 2 (one per chunk)", len(spans))
+	}
+	sizes := map[int64]int64{}
+	for _, s := range spans {
+		index, size := chunkAttrs(t, s)
+		sizes[index] = size
+		if s.EndTime.Before(s.StartTime) || s.EndTime.Equal(s.StartTime) {
+			t.Errorf("chunk %d: span has no duration", index)
+		}
+	}
+	if sizes[0] != UploadChunkSize || sizes[1] != 1 {
+		t.Errorf("chunk sizes = %v, want {0: %d, 1: 1}", sizes, UploadChunkSize)
+	}
+	for _, s := range exp.GetSpans() {
+		for _, kv := range s.Attributes {
+			if strings.Contains(kv.Value.String(), "SENTINEL") {
+				t.Errorf("attribute %s leaks the file name", kv.Key)
+			}
+		}
+	}
+}
+
+func TestStreamDownloadChunks_OneDecryptSpanPerChunk(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := crypto.EncryptBinaryForKey([]byte("abcd"), identity.Recipient().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
+	var buf bytes.Buffer
+	err = StreamDownloadChunks(ctx, &buf, 8, 3, identity, nil,
+		func(context.Context, int) ([]byte, error) { return enc, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	spans := childSpans(exp, parent, "crypto.decrypt")
+	if len(spans) != 3 {
+		t.Fatalf("got %d crypto.decrypt spans under the parent, want 3 (one per chunk)", len(spans))
+	}
+	seen := map[int64]bool{}
+	for _, s := range spans {
+		index, size := chunkAttrs(t, s)
+		seen[index] = true
+		if size != int64(len(enc)) {
+			t.Errorf("chunk %d: chunk.size = %d, want the encrypted size %d", index, size, len(enc))
+		}
+	}
+	if len(seen) != 3 || !seen[0] || !seen[1] || !seen[2] {
+		t.Errorf("chunk indexes = %v, want 0, 1, 2", seen)
+	}
+}
+
+func TestUploadChunks_EncryptFailureMarksTheSpan(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
+	err := UploadChunks(ctx, bytes.NewReader([]byte("data")), 4, "f.bin", "not-a-public-key", nil,
+		func(context.Context, int, []byte) error { return nil })
+	if err == nil {
+		t.Fatal("expected the encryption error")
+	}
+	parent.End()
+
+	spans := childSpans(exp, parent, "crypto.encrypt")
+	if len(spans) != 1 || spans[0].Status.Code != codes.Error || spans[0].Status.Description != "" {
+		t.Fatalf("crypto.encrypt spans = %+v, want one with status Error and no description", spans)
+	}
+	var hasType bool
+	for _, kv := range spans[0].Attributes {
+		if kv.Key == "error.type" {
+			hasType = true
+		}
+	}
+	if !hasType {
+		t.Error("error.type missing on the failed encrypt span")
+	}
+}
+
+func TestStreamDownloadChunks_DecryptFailureMarksTheSpan(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
+	var buf bytes.Buffer
+	err = StreamDownloadChunks(ctx, &buf, 4, 1, identity, nil,
+		func(context.Context, int) ([]byte, error) { return []byte("garbage"), nil })
+	if err == nil {
+		t.Fatal("expected the decryption error")
+	}
+	parent.End()
+
+	spans := childSpans(exp, parent, "crypto.decrypt")
+	if len(spans) != 1 || spans[0].Status.Code != codes.Error {
+		t.Fatalf("crypto.decrypt spans = %+v, want one with status Error", spans)
 	}
 }

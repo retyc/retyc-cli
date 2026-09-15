@@ -38,7 +38,7 @@ retyc webdav serve [flags]
 |----------------|-------|-------------|--------------------------------------------------------------------|
 | `--addr`       |       | `127.0.0.1:8888` | `host:port` to bind (`127.0.0.1` = local only; also `webdav.addr` / `RETYC_WEBDAV_ADDR`) |
 | `--auth`       |       | `false`     | Require HTTP Basic authentication                                  |
-| `--metrics-addr` |     | *(empty)*   | Expose Prometheus metrics and health probes on this address (see [below](#metrics-and-probes)) |
+| `--metrics-addr` |     | *(empty)*   | Expose Prometheus metrics and health probes on this address (see [below](#metrics-probes-and-traces)) |
 | `--metrics-runtime` |  | `true`      | Include the Go runtime and process metrics on `/metrics` (`--metrics-runtime=false` to drop them) |
 | `--metrics-label` |    | *(none)*    | Constant label `key=value` added to every series; repeatable |
 
@@ -162,7 +162,7 @@ rclone config create retyc webdav url http://localhost:8888 vendor other
 rclone ls retyc:/dataroom
 ```
 
-## Metrics and probes
+## Metrics, probes and traces
 
 `--metrics-addr` (or `webdav.metrics.addr` in `config.yaml`, or
 `RETYC_WEBDAV_METRICS_ADDR`) starts a second, unauthenticated HTTP listener meant
@@ -228,6 +228,21 @@ are folded into `OTHER`.
 Chunk counts are the `retyc_cli_api_requests_total` series of the chunk routes
 (`/dataroom/node/version/{id}/chunk/{n}` for uploads,
 `/dataroom/node/{id}/download/{n}` for downloads).
+
+### Traces
+
+With an OTLP endpoint in the environment (see
+[Tracing](configuration.md#tracing-opentelemetry)), `webdav serve` exports one
+startup span (`retyc webdav serve init`: login check, key unlock as a
+`crypto.unlock_key` child span, bind),
+parented to `TRACEPARENT` when set, then one new trace per request, named
+`WEBDAV <method>`, with the API calls, the per-chunk `crypto.encrypt` /
+`crypto.decrypt` spans and the cache events it caused. Requests are
+never parented to the startup span, so a caller's trace closes once the server
+is up. WebDAV clients issue many `PROPFIND`s: set
+`OTEL_TRACES_SAMPLER=parentbased_traceidratio` and `OTEL_TRACES_SAMPLER_ARG`
+to keep the volume reasonable. Spans never contain a path, a file name or a
+dataroom title.
 
 ## Lifecycle & auth expiry
 

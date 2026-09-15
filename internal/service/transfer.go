@@ -67,7 +67,7 @@ func GetTransferInfo(
 		return result, nil
 	}
 
-	userIdentity, err := ResolveUserIdentity(cfg, kr.v, reader)
+	userIdentity, err := ResolveUserIdentity(ctx, cfg, kr.v, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +290,7 @@ func DownloadTransfer(
 	var sessionIdentity *age.HybridIdentity
 
 	if kr.v != nil && details.SessionPrivateKeyEnc != nil {
-		userIdentity, err := ResolveUserIdentity(cfg, kr.v, reader)
+		userIdentity, err := ResolveUserIdentity(ctx, cfg, kr.v, reader)
 		if err != nil {
 			return nil, err
 		}
@@ -310,7 +310,7 @@ func DownloadTransfer(
 		if p.Passphrase == "" {
 			return nil, fmt.Errorf("transfer passphrase required but not provided")
 		}
-		ephPrivKey, err := crypto.DecryptToStringWithPassphrase(*details.EphemeralPrivateKeyEnc, p.Passphrase)
+		ephPrivKey, err := decryptKeyWithPassphrase(ctx, "transfer", *details.EphemeralPrivateKeyEnc, p.Passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("wrong transfer passphrase")
 		}

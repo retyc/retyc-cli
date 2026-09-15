@@ -1,19 +1,20 @@
 package service
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"filippo.io/age"
 	"github.com/retyc/retyc-cli/internal/crypto"
-	"time"
-
 	"github.com/retyc/retyc-cli/internal/metrics"
+	"github.com/retyc/retyc-cli/internal/telemetry"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -75,9 +76,15 @@ readLoop:
 
 		n, readErr := io.ReadFull(r, buf)
 		if n > 0 {
+			// One short span per chunk under the caller's span: index and size
+			// only, never the file name.
+			_, encSpan := telemetry.Tracer().Start(ctx, "crypto.encrypt", trace.WithAttributes(
+				telemetry.AttrChunkIndex.Int(chunkID), telemetry.AttrChunkPlaintextBytes.Int(n)))
 			encStart := time.Now()
 			encrypted, encErr := crypto.EncryptBinaryForKey(buf[:n], sessionPubKey)
 			metrics.CryptoDuration.WithLabelValues("encrypt").Observe(time.Since(encStart).Seconds())
+			telemetry.RecordError(encSpan, encErr)
+			encSpan.End()
 			if encErr != nil {
 				setErr(fmt.Errorf("encrypting chunk %d: %w", chunkID, encErr))
 
@@ -181,9 +188,15 @@ func StreamDownloadChunks(
 
 					return
 				}
+				// One short span per chunk under the caller's span (workers share
+				// ctx): index and encrypted size only.
+				_, decSpan := telemetry.Tracer().Start(ctx, "crypto.decrypt", trace.WithAttributes(
+					telemetry.AttrChunkIndex.Int(id), telemetry.AttrChunkCiphertextBytes.Int(len(encrypted))))
 				decStart := time.Now()
 				plaintext, err := crypto.DecryptBinary(encrypted, identity)
 				metrics.CryptoDuration.WithLabelValues("decrypt").Observe(time.Since(decStart).Seconds())
+				telemetry.RecordError(decSpan, err)
+				decSpan.End()
 				if err != nil {
 					results <- chunkResult{id: id, err: fmt.Errorf("decrypting chunk %d: %w", id, err)}
 

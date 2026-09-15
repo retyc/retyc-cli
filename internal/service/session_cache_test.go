@@ -16,7 +16,10 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
-
+	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"strings"
 )
 
 // countingResolver returns a resolver that records how many times it ran and the
@@ -351,4 +354,66 @@ func TestSessionCache_LenCountsResolvedSessions(t *testing.T) {
 	}
 }
 
+// A resolution is a span (scrypt, hundreds of ms) under the caller's span; a
+// cache hit opens none.
+func TestSessionCache_UnlockSpanPerResolution(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
+	release := make(chan struct{})
+	close(release)
+	fn, _, _ := countingResolver(release)
+	var c SessionCache
+	for range 2 { // miss, then hit
+		if _, err := c.Get(ctx, "dr1", fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parent.End()
 
+	var unlocks int
+	for _, s := range exp.GetSpans() {
+		if s.Name != "session.unlock" {
+			continue
+		}
+		unlocks++
+		if s.Parent.SpanID() != parent.SpanContext().SpanID() {
+			t.Error("session.unlock is not a child of the caller's span")
+		}
+		if len(s.Attributes) != 0 {
+			t.Errorf("session.unlock carries attributes %v, want none", s.Attributes)
+		}
+	}
+	if unlocks != 1 {
+		t.Errorf("session.unlock spans = %d, want 1", unlocks)
+	}
+}
+
+func TestSessionCache_FailedResolutionMarksTheUnlockSpan(t *testing.T) {
+	exp := telemetrytest.Install(t)
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
+	var c SessionCache
+	_, err := c.Get(ctx, "dr1", func(context.Context, string) (*DataroomSession, error) {
+		return nil, errors.New("wrong passphrase for SENTINEL")
+	})
+	if err == nil {
+		t.Fatal("expected the resolver error")
+	}
+	parent.End()
+
+	for _, s := range exp.GetSpans() {
+		if s.Name != "session.unlock" {
+			continue
+		}
+		if s.Status.Code != codes.Error || s.Status.Description != "" {
+			t.Errorf("status = %+v, want Error with empty description", s.Status)
+		}
+		for _, kv := range s.Attributes {
+			if strings.Contains(kv.Value.String(), "SENTINEL") {
+				t.Errorf("attribute %s leaks the message", kv.Key)
+			}
+		}
+
+		return
+	}
+	t.Fatal("no session.unlock span")
+}

@@ -45,17 +45,19 @@ internal/
     admin*.go                    # AdminListNodes, AdminDownloadNodes, AdminRekeyDataroom/Transfer, LoadAdminIdentity
   config/
     config.go                   # Structs, SetDefaults(), Load(), token persistence
-    env.go                      # Env-only settings kept out of viper (secrets, RETYC_CONFIG_DIR, RETYC_TRACE)
+    env.go                      # Env-only settings kept out of viper (secrets, RETYC_CONFIG_DIR)
     paths_dev.go                # configDir() + defaultAPIBaseURL for dev
     paths_prod.go               # configDir() + defaultAPIBaseURL for prod
   crypto/age.go                 # AGE encrypt/decrypt helpers (PQ-only, see below)
   metrics/                      # Prometheus metric declarations (retyc_cli_* / retyc_cli_webdav_*),
                                 #   Register(reg), NormalizeRoute, RoundTripper (API client wrapper)
+  telemetry/                    # OpenTelemetry tracing: env.go (only OTEL_*/TRACEPARENT reads), Init/Shutdown,
+                                #   RoundTripper (API spans), privacy helpers; telemetrytest/ for tests
   keyring/keyring.go            # Linux kernel session keyring cache (TTL-based)
-  trace/trace.go                # Opt-in timing instrumentation on stderr (RETYC_TRACE), Enabled() guard
 mcpb/icon.png                   # MCPB bundle icon (512×512)
 scripts/build-mcpb.sh           # Builds dist/retyc-<version>.mcpb from goreleaser dist/ (jq+zip, no Node)
 scripts/webdav-bench.sh         # Benchmark small-file writes through `retyc webdav serve` 
+scripts/start-jaeger.sh         # Local Jaeger (OTLP 4318/4317, UI 16686) for manual tracing checks
 Dockerfile                      # Multi-stage scratch image (golang:1.26 builder → scratch)
 .dockerignore
 .github/workflows/            # main.yml + _ci.yml + _docker.yml + release.yml
@@ -128,10 +130,10 @@ All overridable from `~/.config/retyc/config.yaml` (prod) or `.retyc/config.yaml
 - `internal/config/env.go` holds the settings that are **deliberately not**
   viper keys — `RETYC_TOKEN`, `RETYC_KEY_PASSPHRASE`, `RETYC_WEBDAV_PASSWORD`
   (secrets: a viper key would also make them settable from `config.yaml`),
-  `RETYC_CONFIG_DIR` and `RETYC_TRACE` (read before viper is initialised). Never
+  `RETYC_CONFIG_DIR` (read before viper is initialised). Never
   call `os.Getenv("RETYC_...")` outside this file; use the accessors
   `config.Token()`, `config.KeyPassphrase()`, `config.RequireKeyPassphrase()`,
-  `config.WebdavPassword()`, `config.TraceEnabled()`.
+  `config.WebdavPassword()`.
 - Both rules are enforced by tests, not just stated here:
   `TestRetycEnvReadOnlyHere` (`internal/config/env_test.go`) walks the syntax
   tree of every `.go` file and fails on `os.Getenv` / `os.LookupEnv` called
@@ -141,6 +143,10 @@ All overridable from `~/.config/retyc/config.yaml` (prod) or `.retyc/config.yaml
   `doc/configuration.md`. The env-only list is parsed out of `env.go`, so a new
   env-only variable needs its `Env…Name` constant there and a doc row — nothing
   to update in the tests.
+- Not test-enforced, convention only: `OTEL_*`, `TRACEPARENT` and
+  `TRACESTATE` are read only in `internal/telemetry/env.go`, never through
+  `internal/config`: they are the OTel SDK's contract, not CLI settings, and
+  the CLI never parses the endpoint value (it only tests that one is set).
 - Tests that call `SetDefaults()` or `initConfig()` must isolate themselves from
   the developer's shell: `resetViper` (`internal/config`) and `isolateConfig`
   (`cmd`) unset every inherited `RETYC_` variable for the test's duration.
@@ -491,6 +497,69 @@ or invalid name is an error at startup, not a panic. All three flags bind to
 their viper key in `resolveMetrics*`, never in `init()`; `config.Load` copies
 the labels through `GetStringSlice` because `Unmarshal` does not split an
 environment value.
+
+## Tracing (OpenTelemetry)
+
+`internal/telemetry`. Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set (and `OTEL_SDK_DISABLED` is not
+`true`); environment only, no flag, no config key. `http/protobuf` by default,
+`grpc` on `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. `Init` runs in
+`rootCmd.PersistentPreRunE`, `run()` closes the command span and flushes
+within 2 s; a failed init or export never changes the exit code.
+`annotationOffline` commands (`version`, `mcp manifest`) never initialise
+tracing, since `Init` runs in `PersistentPreRunE` after that early return.
+
+Span model:
+- one-shot command: span `retyc <command path>`, child of `TRACEPARENT`,
+  attributes `retyc.command`, `retyc.cli.version`;
+- the request or command span is tagged with `retyc.dataroom.id` when a
+  dataroom title is resolved (`dataroomCache.idForName`) and `retyc.node.id`
+  when a path resolves to a node (`service.resolvePath`): UUIDs only, never
+  the title or the name;
+- `retyc:long-running` commands (`webdav serve`, `mcp serve`) get no command
+  span: `webdav serve` opens `retyc webdav serve init` (child of
+  `TRACEPARENT`, ended once the port is bound) then one root `WEBDAV <method>`
+  per request (`instrumentWebdav`, `WithNewRoot`, incoming `traceparent`
+  ignored); `mcp serve` opens one root `MCP <tool>` per call; `toolErr`
+  records the failure on that span;
+- API calls: `telemetry.RoundTripper` (installed by `cmd.apiTransport()` on
+  every `api.New`), CLIENT span named by `metrics.NormalizeRoute`, `traceparent`
+  injected, route identifiers as named attributes (`retyc.dataroom.id`,
+  `retyc.node.id`, `retyc.version.id`, `retyc.transfer.id`, `retyc.file.id`,
+  `retyc.chunk.index`, ... keyed by the resource segment before the UUID,
+  `retyc.path.params` as the fallback); `metrics.NormalizeRoute` matches the
+  path against `routeTemplates` position by position and folds every `{id}` /
+  `{n}` position whatever its value (an identifier equal to a route word is
+  folded too); a path matching no template falls back to the vocabulary
+  (`routeWords` kept, anything else folded), so a user-typed title or e-mail
+  never reaches a span name or the Prometheus `route` label; the span ends when the response
+  headers arrive, body streaming is not included;
+- crypto and session work are child spans of the current span:
+  `crypto.encrypt` / `crypto.decrypt` (one per chunk, `retyc.chunk.index` and
+  `retyc.chunk.plaintext_bytes` / `retyc.chunk.ciphertext_bytes`; about 300
+  bytes each, so a 1 GB file adds 128 spans next to its 128 chunk POSTs),
+  `crypto.decrypt_names` (one per listing, `retyc.node.count`),
+  `crypto.unlock_key` (every scrypt: `retyc.key.kind` user|transfer,
+  `retyc.key.source` passphrase|keyring, `retyc.cache.hit` on the keyring
+  lookup; all sites go through `service.decryptKeyWithPassphrase`,
+  never the passphrase), `session.unlock` (one per cached dataroom session
+  resolution, i.e. the `webdav serve` / `mcp serve` path through
+  `SessionCache.Get`; one-shot commands resolve uncached and emit none);
+  cache lookups and path resolution stay events (`cache.lookup`,
+  `dataroom.resolve_path`).
+
+Every attribute key lives in `internal/telemetry/attrs.go` under the
+`retyc.` prefix (`retyc.chunk.plaintext_bytes` on `crypto.encrypt`,
+`retyc.chunk.ciphertext_bytes` on `crypto.decrypt`, `retyc.key.kind`,
+`retyc.cache.hit`, ...); instrumentation sites never spell a key literal.
+
+Privacy rule, enforced by `cmd/tracing_privacy_test.go`: no span name,
+attribute, event, status description or resource ever carries a WebDAV path,
+a file or folder name, a dataroom title, a command argument, an HTTP body or
+header, an error message or the user's e-mail. Errors are status `Error` +
+`error.type` (`telemetry.RecordError`). No `otelhttp` on the WebDAV server
+(it records `url.path`), no `resource.WithProcess()` (it records
+`process.command_args`).
 
 ## API — backend nomenclature
 

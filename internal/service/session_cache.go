@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+
+	"github.com/retyc/retyc-cli/internal/telemetry"
 )
 
 // SessionCache caches resolved dataroom sessions for the life of the process.
@@ -67,9 +69,14 @@ func (c *SessionCache) Get(
 	// runs, so it must not die with the leader's request: a client aborting
 	// its own request (disconnect, MCP cancellation) would otherwise fail every
 	// waiter with context.Canceled. Values (deadline excluded) are kept.
+	// One span per resolution under the caller's span, covering the wait for
+	// the serialization lock and the key fetch + decryption (scrypt).
+	unlockCtx, span := telemetry.Tracer().Start(ctx, "session.unlock")
 	c.resolveMu.Lock()
-	f.sess, f.err = resolve(context.WithoutCancel(ctx), drID)
+	f.sess, f.err = resolve(context.WithoutCancel(unlockCtx), drID)
 	c.resolveMu.Unlock()
+	telemetry.RecordError(span, f.err)
+	span.End()
 
 	c.mu.Lock()
 	delete(c.inflight, drID)

@@ -17,8 +17,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/retyc/retyc-cli/internal/metrics"
+	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // webdavHealth is the state behind the readiness probe of `webdav serve`.
@@ -211,12 +215,14 @@ var webdavMethods = map[string]bool{
 	"LOCK": true, "UNLOCK": true,
 }
 
-// statusRecorder captures the status code written by the WebDAV handler. It
-// keeps Flush and Unwrap so streaming responses behave as without the wrapper
-// (http.ResponseController reaches the underlying writer through Unwrap).
+// statusRecorder captures the status code and byte count written by the
+// WebDAV handler. It keeps Flush and Unwrap so streaming responses behave as
+// without the wrapper (http.ResponseController reaches the underlying writer
+// through Unwrap).
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status  int
+	written int64
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
@@ -230,8 +236,10 @@ func (r *statusRecorder) Write(p []byte) (int, error) {
 	if r.status == 0 {
 		r.status = http.StatusOK
 	}
+	n, err := r.ResponseWriter.Write(p)
+	r.written += int64(n)
 
-	return r.ResponseWriter.Write(p)
+	return n, err
 }
 
 func (r *statusRecorder) Flush() {
@@ -242,14 +250,24 @@ func (r *statusRecorder) Flush() {
 
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
-// instrumentWebdav feeds the retyc_cli_webdav_requests_total,
-// retyc_cli_webdav_request_duration_seconds and retyc_cli_webdav_inflight_requests
-// metrics from every request that reaches next.
+// instrumentWebdav feeds the retyc_cli_webdav_* request metrics and opens one
+// root SERVER span per request, named "WEBDAV <method>". Incoming traceparent
+// headers are ignored on purpose (WithNewRoot): the server's life is not one
+// trace. otelhttp is not used here because it records url.path, and WebDAV
+// paths are the file names the platform encrypts; only the method, the
+// status and the sizes are exported.
 func instrumentWebdav(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method := r.Method
 		if !webdavMethods[method] {
 			method = "OTHER"
+		}
+		ctx, span := telemetry.Tracer().Start(r.Context(), "WEBDAV "+method,
+			trace.WithNewRoot(),
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(attribute.String("http.request.method", method)))
+		if r.ContentLength >= 0 {
+			span.SetAttributes(attribute.Int64("http.request.body.size", r.ContentLength))
 		}
 		metrics.WebdavInflight.Inc()
 		start := time.Now()
@@ -262,7 +280,15 @@ func instrumentWebdav(next http.Handler) http.Handler {
 				status = http.StatusOK
 			}
 			metrics.WebdavRequests.WithLabelValues(method, strconv.Itoa(status)).Inc()
+			span.SetAttributes(
+				attribute.Int("http.response.status_code", status),
+				attribute.Int64("http.response.body.size", rec.written),
+			)
+			if status >= http.StatusInternalServerError {
+				span.SetStatus(codes.Error, "")
+			}
+			span.End()
 		}()
-		next.ServeHTTP(rec, r)
+		next.ServeHTTP(rec, r.WithContext(ctx))
 	})
 }

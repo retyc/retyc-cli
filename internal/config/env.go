@@ -11,9 +11,8 @@ import (
 // The secrets (token, key passphrase, WebDAV password) are kept out of viper
 // because routing them through AutomaticEnv would also make them settable from
 // config.yaml — viper cannot tell the two sources apart — and these values must
-// never be written to disk in clear text. RETYC_CONFIG_DIR and RETYC_TRACE are
-// read before viper is initialised: the first to locate the config file itself,
-// the second at package init time by internal/trace.
+// never be written to disk in clear text. RETYC_CONFIG_DIR is read before
+// viper is initialised, to locate the config file itself.
 //
 // Every RETYC_ variable read by the CLI is declared here; TestRetycEnvReadOnlyHere
 // fails on a direct os.Getenv elsewhere.
@@ -22,7 +21,6 @@ const (
 	EnvKeyPassphraseName  = "RETYC_KEY_PASSPHRASE"  //nolint:gosec // G101: variable name, not a credential
 	EnvWebdavPasswordName = "RETYC_WEBDAV_PASSWORD" //nolint:gosec // G101: variable name, not a credential
 	EnvConfigDirName      = "RETYC_CONFIG_DIR"
-	EnvTraceName          = "RETYC_TRACE"
 )
 
 // ErrNoKeyPassphrase is returned when the key passphrase is required but the
@@ -76,11 +74,4 @@ func RequireKeyPassphrase() (string, error) {
 // today, but no deliberate password starts with "${user_config.".
 func WebdavPassword() string {
 	return fromEnv(EnvWebdavPasswordName)
-}
-
-// TraceEnabled reports whether RETYC_TRACE asks for timing instrumentation: any
-// non-empty value turns it on. internal/trace evaluates it once, at package
-// init, so that its Enabled() stays a single flag test.
-func TraceEnabled() bool {
-	return fromEnv(EnvTraceName) != ""
 }
