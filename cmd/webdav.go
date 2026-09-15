@@ -894,15 +894,76 @@ func (fs *webdavFS) listNodes(ctx context.Context, drID, nodePath string) ([]ser
 	return f.nodes, f.err
 }
 
-// fetchNodes is the real listing behind listNodes: cached session + API walk.
+// fetchNodes is the real listing behind listNodes: cached session + one API
+// listing of the folder.
+//
+// The folder ID comes from its parent's listing through parentNodeID, which is
+// cached and single-flighted, so a miss costs the folder's own listing instead
+// of a walk from the root (service.resolvePath lists every level again, often
+// while a concurrent PROPFIND is fetching the very same listings). Names are
+// matched literally: WebDAV paths are client names, never glob patterns.
+//
+// The parent listing can be up to nodeCacheTTL stale and name a folder deleted
+// elsewhere, which the listing itself does not reveal (see fetchNodesOnce): the
+// folder check then answers 404 or 410, and the listing is retried once against
+// a fresh parent listing. As for RemoveAll and Rename, a folder moved elsewhere
+// within that window is listed at its new location until the TTL expires.
 func (fs *webdavFS) fetchNodes(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error) {
 	sess, err := fs.getSession(ctx, drID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Literal resolution: WebDAV paths are client names, never glob patterns.
-	return service.ListNodesLiteralWithSession(ctx, fs.client, drID, nodePath, sess)
+	nodes, err := fs.fetchNodesOnce(ctx, drID, nodePath, sess)
+	if errors.Is(err, api.ErrNotFound) && strings.Trim(nodePath, "/") != "" {
+		grandParent, _ := splitWebdavPath(nodePath)
+		fs.invalidateNodeCache(dataroomURI(drID, grandParent))
+		nodes, err = fs.fetchNodesOnce(ctx, drID, nodePath, sess)
+		if errors.Is(err, api.ErrNotFound) {
+			err = os.ErrNotExist
+		}
+	}
+
+	return nodes, err
+}
+
+// fetchNodesOnce resolves the folder ID of nodePath and lists its children.
+//
+// The API lists children by a bare parent_id filter: for a folder deleted since
+// its ID was cached, it answers an empty page, or the children its asynchronous
+// purge has not reached yet — never 404. So the folder itself is fetched in
+// parallel with the listing, and a folder that is gone (404, or 410 while the
+// purge is pending) overrides the listing. The check costs one concurrent
+// request per listed folder and no latency; any other check failure is ignored,
+// the listing stands.
+func (fs *webdavFS) fetchNodesOnce(
+	ctx context.Context, drID, nodePath string, sess *service.DataroomSession,
+) ([]service.DataroomNodeInfo, error) {
+	folderID, err := fs.parentNodeID(ctx, drID, nodePath)
+	if errors.Is(err, os.ErrInvalid) {
+		// The path names a file, which has no children: not found (404), where
+		// ErrInvalid would reach the client as a 405.
+		return nil, os.ErrNotExist
+	}
+	if err != nil {
+		return nil, err
+	}
+	if folderID == nil {
+		return service.ListNodesByIDWithSession(ctx, fs.client, drID, nil, sess)
+	}
+	trace.SpanFromContext(ctx).SetAttributes(telemetry.AttrNodeID.String(*folderID))
+
+	checked := make(chan error, 1)
+	go func() {
+		_, err := fs.client.GetDataroomNode(ctx, *folderID)
+		checked <- err
+	}()
+	nodes, err := service.ListNodesByIDWithSession(ctx, fs.client, drID, folderID, sess)
+	if checkErr := <-checked; errors.Is(checkErr, api.ErrNotFound) {
+		return nil, checkErr
+	}
+
+	return nodes, err
 }
 
 // nodesToFileInfos converts a slice of DataroomNodeInfo to []os.FileInfo.

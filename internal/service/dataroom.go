@@ -231,6 +231,14 @@ func fetchChildItems(
 		return nil, err
 	}
 
+	return fetchChildItemsByID(ctx, client, dataroomID, parentID)
+}
+
+// fetchChildItemsByID lists every page of the children of parentID (nil for
+// the dataroom root).
+func fetchChildItemsByID(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
+) ([]api.DataroomNodeItem, error) {
 	var items []api.DataroomNodeItem
 	for page := 1; ; page++ {
 		pg, err := client.ListDataroomNodes(ctx, dataroomID, parentID, page, 50)
@@ -312,6 +320,20 @@ func ListNodesLiteralWithSession(
 	ctx context.Context, client *api.Client, dataroomID, nodePath string, sess *DataroomSession,
 ) ([]DataroomNodeInfo, error) {
 	items, err := fetchChildItems(ctx, client, dataroomID, nodePath, sess.Identity)
+	if err != nil {
+		return nil, err
+	}
+
+	return nodesFromItems(ctx, items, sess.Identity), nil
+}
+
+// ListNodesByIDWithSession lists the children of the folder parentID (nil for
+// the dataroom root), for callers that already know its ID and so need no path
+// resolution.
+func ListNodesByIDWithSession(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string, sess *DataroomSession,
+) ([]DataroomNodeInfo, error) {
+	items, err := fetchChildItemsByID(ctx, client, dataroomID, parentID)
 	if err != nil {
 		return nil, err
 	}

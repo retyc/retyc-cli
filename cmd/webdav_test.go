@@ -1501,6 +1501,199 @@ func TestWebdavFS_RenameMissingSourceOrInvalidDestination(t *testing.T) {
 	}
 }
 
+// — fetchNodes resolves the folder from its parent's cached listing ————————————
+
+// Listing a folder whose parent listing is cached must cost that folder's
+// listing, plus the concurrent check that the folder still exists: resolving
+// its path through the API walked every level from the root again, duplicating
+// listings a concurrent PROPFIND was often fetching at the same moment.
+func TestWebdavFS_FetchNodesUsesCachedParentListing(t *testing.T) {
+	var log callLog
+	var pub string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		log.add(r.Method + " " + r.URL.Path + " parent=" + r.URL.Query().Get("parent_id"))
+		switch {
+		case r.URL.Path == "/dataroom/dr1/nodes" && r.URL.Query().Get("parent_id") == "d-b":
+			fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"f-1": "doc.txt"}))
+		case r.URL.Path == "/dataroom/node/d-b":
+			fmt.Fprint(w, `{"id":"d-b"}`)
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.String(), http.StatusInternalServerError)
+		}
+	}
+	fs, identity := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/":  {{ID: "d-a", Name: "a", Type: "dir"}},
+		"retyc://dr1/a": {{ID: "d-b", Name: "b", Type: "dir"}},
+	})
+	pub = identity.Recipient().String()
+
+	nodes, err := fs.listNodes(context.Background(), "dr1", "/a/b")
+	if err != nil {
+		t.Fatalf("listNodes: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Name != "doc.txt" {
+		t.Errorf("nodes = %+v, want doc.txt", nodes)
+	}
+	want := []string{"GET /dataroom/dr1/nodes parent=d-b", "GET /dataroom/node/d-b parent="}
+	if calls := log.sorted(); !slices.Equal(calls, want) {
+		t.Errorf("calls = %v, want %v", calls, want)
+	}
+}
+
+// The dataroom root has no node to check: listing it is the listing alone.
+func TestWebdavFS_FetchNodesRootHasNoCheck(t *testing.T) {
+	var log callLog
+	var pub string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		log.add(r.Method + " " + r.URL.Path)
+		fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"f-1": "doc.txt"}))
+	}
+	fs, identity := newCachedListingsFS(t, handler, nil)
+	pub = identity.Recipient().String()
+
+	if _, err := fs.listNodes(context.Background(), "dr1", "/"); err != nil {
+		t.Fatalf("listNodes: %v", err)
+	}
+	if calls := log.list(); !slices.Equal(calls, []string{"GET /dataroom/dr1/nodes"}) {
+		t.Errorf("calls = %v, want the root listing only", calls)
+	}
+}
+
+// With nothing cached, each level is listed once and kept: listing a sibling
+// folder afterwards costs its own listing only.
+func TestWebdavFS_FetchNodesCachesEveryLevel(t *testing.T) {
+	var log callLog
+	var pub string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/dataroom/node/") {
+			fmt.Fprint(w, `{"id":"x"}`) // every folder still exists
+
+			return
+		}
+		parent := r.URL.Query().Get("parent_id")
+		log.add("parent=" + parent)
+		switch parent {
+		case "":
+			fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"d-a": "a"}))
+		case "d-a":
+			fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"d-b": "b", "d-c": "c"}))
+		case "d-b", "d-c":
+			fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{}))
+		default:
+			http.Error(w, "unexpected parent "+parent, http.StatusInternalServerError)
+		}
+	}
+	fs, identity := newCachedListingsFS(t, handler, nil)
+	pub = identity.Recipient().String()
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/a/b"); err != nil {
+		t.Fatalf("listNodes /a/b: %v", err)
+	}
+	if _, err := fs.listNodes(ctx, "dr1", "/a/c"); err != nil {
+		t.Fatalf("listNodes /a/c: %v", err)
+	}
+	want := []string{"parent=", "parent=d-a", "parent=d-b", "parent=d-c"}
+	if calls := log.list(); !slices.Equal(calls, want) {
+		t.Errorf("calls = %v, want %v", calls, want)
+	}
+}
+
+// The cached parent listing can name a folder deleted elsewhere. The API lists
+// children by a bare parent_id filter, so it never answers 404 for it: it
+// returns an empty page, or the children its asynchronous purge has not reached
+// yet. The concurrent check of the folder (404 or 410) must discard that
+// listing and retry once against a fresh parent listing.
+func TestWebdavFS_FetchNodesRetriesOnStaleParent(t *testing.T) {
+	staleChildren := map[string]map[string]string{
+		"empty page":     {},
+		"ghost children": {"f-ghost": "ghost.txt"},
+	}
+	for _, status := range goneStatuses {
+		for label, ghosts := range staleChildren {
+			t.Run(http.StatusText(status)+"/"+label, func(t *testing.T) {
+				var pub string
+				handler := func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/dataroom/node/d-old":
+						http.Error(w, "gone", status)
+					case "/dataroom/node/d-new":
+						fmt.Fprint(w, `{"id":"d-new"}`)
+					case "/dataroom/dr1/nodes":
+						switch r.URL.Query().Get("parent_id") {
+						case "d-old":
+							fmt.Fprint(w, nodesPageJSON(t, pub, ghosts))
+						case "":
+							fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"d-new": "a"}))
+						case "d-new":
+							fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"f-1": "doc.txt"}))
+						}
+					default:
+						http.Error(w, "unexpected "+r.Method+" "+r.URL.String(), http.StatusInternalServerError)
+					}
+				}
+				fs, identity := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+					"retyc://dr1/": {{ID: "d-old", Name: "a", Type: "dir"}},
+				})
+				pub = identity.Recipient().String()
+
+				nodes, err := fs.listNodes(context.Background(), "dr1", "/a")
+				if err != nil {
+					t.Fatalf("listNodes: %v", err)
+				}
+				if len(nodes) != 1 || nodes[0].Name != "doc.txt" {
+					t.Errorf("nodes = %+v, want the re-created folder's doc.txt", nodes)
+				}
+			})
+		}
+	}
+}
+
+// A folder whose check fails for another reason (a transient error) keeps its
+// listing: only a node that is gone invalidates it.
+func TestWebdavFS_FetchNodesKeepsListingOnCheckError(t *testing.T) {
+	var pub string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/dataroom/node/d-a" {
+			http.Error(w, "boom", http.StatusInternalServerError)
+
+			return
+		}
+		fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"f-1": "doc.txt"}))
+	}
+	fs, identity := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/": {{ID: "d-a", Name: "a", Type: "dir"}},
+	})
+	pub = identity.Recipient().String()
+
+	nodes, err := fs.listNodes(context.Background(), "dr1", "/a")
+	if err != nil {
+		t.Fatalf("listNodes: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].Name != "doc.txt" {
+		t.Errorf("nodes = %+v, want doc.txt", nodes)
+	}
+}
+
+// A path under a file names nothing: it must answer not found (404), not
+// os.ErrInvalid, which the WebDAV handler would turn into a 405.
+func TestWebdavFS_FetchNodesUnderAFileIsNotFound(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected API call %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}
+	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
+	})
+
+	if _, err := fs.listNodes(context.Background(), "dr1", "/doc.txt"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("listNodes under a file: error = %v, want os.ErrNotExist", err)
+	}
+	if _, err := fs.Stat(context.Background(), "/dataroom/DR/doc.txt/child"); !os.IsNotExist(err) {
+		t.Errorf("Stat under a file: error = %v, want a bare not-exist error for the WebDAV handler", err)
+	}
+}
+
 // — Cached parent resolution and cache upsert ————————————————————————————————
 
 // countingListFn returns a listFn serving a fixed tree and counting its calls.
