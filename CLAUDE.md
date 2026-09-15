@@ -538,7 +538,9 @@ Span model:
   `crypto.encrypt` / `crypto.decrypt` (one per chunk, `retyc.chunk.index` and
   `retyc.chunk.plaintext_bytes` / `retyc.chunk.ciphertext_bytes`; about 300
   bytes each, so a 1 GB file adds 128 spans next to its 128 chunk POSTs),
-  `crypto.decrypt_names` (one per listing, `retyc.node.count`),
+  `crypto.decrypt_names` (one per listing, or one per page where pages are
+  decrypted as they arrive — `ListNodesByIDWithSession`, the WebDAV path;
+  `retyc.node.count`),
   `crypto.unlock_key` (every scrypt: `retyc.key.kind` user|transfer,
   `retyc.key.source` passphrase|keyring, `retyc.cache.hit` on the keyring
   lookup; all sites go through `service.decryptKeyWithPassphrase`,
