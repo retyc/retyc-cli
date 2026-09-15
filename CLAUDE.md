@@ -369,7 +369,7 @@ Creates directory node. Parent path must exist.
 1. `GET /user/me/key/active` → user's public key
 2. Generate session keypair
 3. `EncryptStringForKeys(sessionPrivKey, [userPublicKey])` → `session_private_key_enc`
-4. `POST /dataroom/` with title, session_private_key_enc, session_public_key
+4. `POST /dataroom` with title, session_private_key_enc, session_public_key
 
 ### `dataroom info <id>`
 Parallel fetch of `GET /dataroom/{id}`, `GET /dataroom/{id}/stats`,

@@ -89,7 +89,7 @@ type DataroomNodePage struct {
 // ListDatarooms returns a paginated list of datarooms.
 func (c *Client) ListDatarooms(ctx context.Context, page int) (*DataroomPage, error) {
 	var result DataroomPage
-	if err := c.Get(ctx, fmt.Sprintf("/dataroom/?page=%d", page), &result); err != nil {
+	if err := c.Get(ctx, fmt.Sprintf("/dataroom?page=%d", page), &result); err != nil {
 		return nil, err
 	}
 
@@ -144,7 +144,7 @@ func (c *Client) CreateDataroom(
 		return nil, err
 	}
 	var result Dataroom
-	if err := c.Post(ctx, "/dataroom/", bytes.NewReader(data), &result); err != nil {
+	if err := c.Post(ctx, "/dataroom", bytes.NewReader(data), &result); err != nil {
 		return nil, err
 	}
 

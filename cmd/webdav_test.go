@@ -880,7 +880,7 @@ func newStartupTestServer(t *testing.T, keyPassphrase string) *httptest.Server {
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/dataroom/":
+		case "/dataroom":
 			_, _ = io.WriteString(w, `{"items":[],"total":0}`)
 		case "/user/me/key/active":
 			_, _ = fmt.Fprintf(w, `{"id":"k1","public_key":%q,"private_key_enc":%q}`,
