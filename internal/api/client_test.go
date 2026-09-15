@@ -73,6 +73,30 @@ func TestClient_Get_Non2xx(t *testing.T) {
 	}
 }
 
+// A node in pending-deletion state answers 410. It is gone for every caller
+// that handles a missing node, so the error matches ErrNotFound as well as
+// ErrGone, on both the JSON and the binary paths.
+func TestClient_Gone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Node is deleted", http.StatusGone)
+	}))
+	defer srv.Close()
+	c := newTestClient(srv)
+
+	_, bytesErr := c.GetBytes(context.Background(), "/gone")
+	for name, err := range map[string]error{
+		"Get":      c.Get(context.Background(), "/gone", nil),
+		"GetBytes": bytesErr,
+	} {
+		if !errors.Is(err, ErrGone) || !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: error %v should match both ErrGone and ErrNotFound", name, err)
+		}
+		if err == nil || !strings.HasPrefix(err.Error(), "API error 410: ") {
+			t.Errorf("%s: error %v should start with the plain API error text", name, err)
+		}
+	}
+}
+
 func TestClient_Get_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "not valid json {{")

@@ -572,8 +572,9 @@ type StreamUploadInit struct {
 // delete it, and its earlier versions must be preserved.
 //
 // The caller is responsible for the staleness of its node ID. The API answers
-// 404 (api.ErrNotFound) when the node is gone, which callers should treat as a
-// signal to fall back to the full InitStreamUploadInto path.
+// 404, or 410 while its purge is pending (both match api.ErrNotFound), when the
+// node is gone, which callers should treat as a signal to fall back to the full
+// InitStreamUploadInto path.
 func AddVersionToNode(
 	ctx context.Context,
 	client *api.Client,
@@ -1263,13 +1264,22 @@ func MoveDataroomNodeWithSession(
 		return err
 	}
 
+	return MoveDataroomNodeByID(ctx, client, *srcNodeID, dstParentID, newName, sess)
+}
+
+// MoveDataroomNodeByID renames node nodeID to newName under dstParentID (nil for
+// the dataroom root), for callers that already know both IDs and so need no
+// path resolution.
+func MoveDataroomNodeByID(
+	ctx context.Context, client *api.Client, nodeID string, dstParentID *string, newName string, sess *DataroomSession,
+) error {
 	nameEnc, err := crypto.EncryptStringForKeys(newName, []string{sess.PublicKey})
 	if err != nil {
 		return fmt.Errorf("encrypting new name: %w", err)
 	}
 
 	if err := client.UpdateDataroomNode(
-		ctx, *srcNodeID, nameEnc, nodeNameHash(newName, sess.NameSalt), dstParentID,
+		ctx, nodeID, nameEnc, nodeNameHash(newName, sess.NameSalt), dstParentID,
 	); err != nil {
 		return fmt.Errorf("moving node: %w", err)
 	}

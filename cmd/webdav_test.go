@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,12 +10,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"golang.org/x/net/webdav"
 	"golang.org/x/oauth2"
 
@@ -1098,9 +1101,404 @@ func newSubtreeTestFS(t *testing.T) *webdavFS {
 		"retyc://dr1/y", "retyc://dr1/y/old"} {
 		fs.nodeCache[uri] = &nodeCacheEntry{fetchedAt: time.Now()}
 	}
+	// The root listing names /x, as the PROPFIND preceding a DELETE would have.
+	fs.nodeCache["retyc://dr1/"].nodes = []service.DataroomNodeInfo{{ID: "n-x", Name: "x", Type: "dir"}}
 	fs.nodeMu.Unlock()
 
 	return fs
+}
+
+// — Fake API helpers for the cached-listing tests —————————————————————————————
+
+// callLog records the requests a fake API server receives. Handlers run on the
+// server's goroutines, and the race detector cannot see through the socket, so
+// every access is locked.
+type callLog struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (l *callLog) add(call string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls = append(l.calls, call)
+}
+
+// list returns the recorded calls in arrival order.
+func (l *callLog) list() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return slices.Clone(l.calls)
+}
+
+// sorted returns the recorded calls sorted, for requests issued concurrently.
+func (l *callLog) sorted() []string {
+	calls := l.list()
+	slices.Sort(calls)
+
+	return calls
+}
+
+// nodesPageJSON renders one page of listing items for the fake API, with the
+// names encrypted for pub. It may run on a server goroutine, so it reports a
+// failure with t.Errorf, never t.Fatalf.
+func nodesPageJSON(t *testing.T, pub string, nodes map[string]string) string {
+	t.Helper()
+	items := make([]string, 0, len(nodes))
+	for id, name := range nodes {
+		nameEnc, err := crypto.EncryptStringForKeys(name, []string{pub})
+		if err != nil {
+			t.Errorf("EncryptStringForKeys: %v", err)
+
+			return ""
+		}
+		items = append(items, fmt.Sprintf(
+			`{"node":{"id":%q,"name_enc":%q,"type_enc":null,"parent_id":null},"node_version":null}`, id, nameEnc))
+	}
+
+	return fmt.Sprintf(`{"items":[%s],"total":%d,"pages":1,"page":1}`, strings.Join(items, ","), len(items))
+}
+
+// newCachedListingsFS returns a webdavFS on handler with an unlocked session for
+// dataroom "dr1" (title "DR") and the given listings cached.
+func newCachedListingsFS(
+	t *testing.T, handler http.HandlerFunc, listings map[string][]service.DataroomNodeInfo,
+) (*webdavFS, *age.HybridIdentity) {
+	t.Helper()
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	fs := newWebdavTestFS(srv)
+	fs.cache = newDataroomCache(func(_ context.Context) ([]dataroomCacheItem, error) {
+		return []dataroomCacheItem{{id: "dr1", title: "DR"}}, nil
+	})
+	fs.sessions.Store("dr1", &service.DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()})
+	fs.nodeCache = map[string]*nodeCacheEntry{}
+	for uri, nodes := range listings {
+		fs.nodeCache[uri] = &nodeCacheEntry{nodes: nodes, fetchedAt: time.Now()}
+	}
+
+	return fs, identity
+}
+
+// goneStatuses are the answers of the API for a node that no longer exists:
+// 404 once purged, 410 while its asynchronous purge is pending.
+var goneStatuses = []int{http.StatusNotFound, http.StatusGone}
+
+// — RemoveAll resolves the node from the cached listing ———————————————————————
+
+// A DELETE is always preceded by a Stat that the cached parent listing
+// answers: the node ID is already known, so deleting must cost the DELETE
+// alone, not one uncached listing per path level on top of it.
+func TestWebdavFS_RemoveAllUsesCachedListing(t *testing.T) {
+	var log callLog
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		log.add(r.Method + " " + r.URL.Path)
+		if r.Method == http.MethodDelete && r.URL.Path == "/dataroom/node/f-1" {
+			w.WriteHeader(http.StatusNoContent)
+
+			return
+		}
+		http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+	}
+	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/a/b": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
+	})
+
+	if err := fs.RemoveAll(context.Background(), "/dataroom/DR/a/b/doc.txt"); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if calls := log.list(); len(calls) != 1 {
+		t.Errorf("issued %d API calls (%v), want 1 (the DELETE only)", len(calls), calls)
+	}
+	if nodeCacheHas(fs, "retyc://dr1/a/b") {
+		t.Error("the parent listing still names the deleted file")
+	}
+}
+
+// The cached listing can be up to nodeCacheTTL stale: when the node it names
+// is gone (deleted, or replaced by a new node of the same name elsewhere), the
+// DELETE answers 404 or 410 and must be retried against a fresh listing.
+func TestWebdavFS_RemoveAllRetriesOnStaleListing(t *testing.T) {
+	for _, status := range goneStatuses {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var log callLog
+			var pub string
+			handler := func(w http.ResponseWriter, r *http.Request) {
+				log.add(r.Method + " " + r.URL.Path)
+				switch {
+				case r.Method == http.MethodDelete && r.URL.Path == "/dataroom/node/f-old":
+					http.Error(w, "gone", status)
+				case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/nodes":
+					fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"f-new": "doc.txt"}))
+				case r.Method == http.MethodDelete && r.URL.Path == "/dataroom/node/f-new":
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+				}
+			}
+			fs, identity := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+				"retyc://dr1/": {{ID: "f-old", Name: "doc.txt", Type: "file"}},
+			})
+			pub = identity.Recipient().String()
+
+			if err := fs.RemoveAll(context.Background(), "/dataroom/DR/doc.txt"); err != nil {
+				t.Fatalf("RemoveAll: %v", err)
+			}
+			want := []string{"DELETE /dataroom/node/f-old", "GET /dataroom/dr1/nodes", "DELETE /dataroom/node/f-new"}
+			if calls := log.list(); !slices.Equal(calls, want) {
+				t.Errorf("calls = %v, want %v", calls, want)
+			}
+			if nodeCacheHas(fs, "retyc://dr1/") {
+				t.Error("the parent listing still names the deleted file")
+			}
+		})
+	}
+}
+
+// A file absent from the listing is reported as not existing, which the
+// WebDAV handler turns into a 404, and nothing is deleted.
+func TestWebdavFS_RemoveAllMissingNode(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected API call %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}
+	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
+	})
+
+	err := fs.RemoveAll(context.Background(), "/dataroom/DR/nope.txt")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("RemoveAll error = %v, want os.ErrNotExist", err)
+	}
+}
+
+// — Rename resolves source and destination from the cached listings ———————————
+
+// moveBody is the JSON body of PUT /dataroom/node/{id}.
+type moveBody struct {
+	NameEnc  string  `json:"name_enc"`
+	NameHash string  `json:"name_hash"`
+	ParentID *string `json:"parent_id"`
+}
+
+// decodeMove decodes a PUT body; it runs on a server goroutine.
+func decodeMove(t *testing.T, r *http.Request) moveBody {
+	t.Helper()
+	var body moveBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		t.Errorf("decoding PUT body: %v", err)
+	}
+
+	return body
+}
+
+func parentLabel(id *string) string {
+	if id == nil {
+		return "root"
+	}
+
+	return *id
+}
+
+// The source listing is normally cached (the client listed the folder before
+// moving from it) and the handler Stats the destination, which caches its
+// parent listing: the rename must then cost the PUT alone, not one uncached
+// listing per level of both paths.
+func TestWebdavFS_RenameUsesCachedListings(t *testing.T) {
+	var log callLog
+	var mu sync.Mutex
+	var body moveBody
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		log.add(r.Method + " " + r.URL.Path)
+		if r.Method == http.MethodPut && r.URL.Path == "/dataroom/node/f-1" {
+			b := decodeMove(t, r)
+			mu.Lock()
+			body = b
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+
+			return
+		}
+		http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+	}
+	fs, identity := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/a": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
+		"retyc://dr1/":  {{ID: "d-a", Name: "a", Type: "dir"}, {ID: "d-b", Name: "b", Type: "dir"}},
+	})
+
+	if err := fs.Rename(context.Background(), "/dataroom/DR/a/doc.txt", "/dataroom/DR/b/new.txt"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if calls := log.list(); len(calls) != 1 {
+		t.Errorf("issued %d API calls (%v), want 1 (the PUT only)", len(calls), calls)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if body.ParentID == nil || *body.ParentID != "d-b" {
+		t.Errorf("parent_id = %v, want d-b", body.ParentID)
+	}
+	if name, err := crypto.DecryptToString(body.NameEnc, identity); err != nil || name != "new.txt" {
+		t.Errorf("name_enc decrypts to %q (err %v), want new.txt", name, err)
+	}
+	for _, uri := range []string{"retyc://dr1/a", "retyc://dr1/b"} {
+		if nodeCacheHas(fs, uri) {
+			t.Errorf("%s still cached after the rename", uri)
+		}
+	}
+}
+
+// A stale source listing makes the PUT answer 404 or 410: the rename must be
+// retried against a fresh listing, which names the node that now holds the path.
+func TestWebdavFS_RenameRetriesOnStaleListing(t *testing.T) {
+	for _, status := range goneStatuses {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var log callLog
+			var pub string
+			handler := func(w http.ResponseWriter, r *http.Request) {
+				log.add(r.Method + " " + r.URL.Path)
+				switch {
+				case r.Method == http.MethodPut && r.URL.Path == "/dataroom/node/f-old":
+					http.Error(w, "gone", status)
+				case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/nodes":
+					fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"f-new": "doc.txt"}))
+				case r.Method == http.MethodPut && r.URL.Path == "/dataroom/node/f-new":
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+				}
+			}
+			fs, identity := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+				"retyc://dr1/": {{ID: "f-old", Name: "doc.txt", Type: "file"}},
+			})
+			pub = identity.Recipient().String()
+
+			if err := fs.Rename(context.Background(), "/dataroom/DR/doc.txt", "/dataroom/DR/new.txt"); err != nil {
+				t.Fatalf("Rename: %v", err)
+			}
+			want := []string{"PUT /dataroom/node/f-old", "GET /dataroom/dr1/nodes", "PUT /dataroom/node/f-new"}
+			if calls := log.list(); !slices.Equal(calls, want) {
+				t.Errorf("calls = %v, want %v", calls, want)
+			}
+		})
+	}
+}
+
+// The API answers 409 both for a name already taken in the destination and
+// for a destination folder deleted since its listing was cached (the dangling
+// parent_id fails a foreign key). A destination re-created under the same name
+// has a new ID: the rename must be retried into it.
+func TestWebdavFS_RenameRetriesWhenDestinationWasRecreated(t *testing.T) {
+	var log callLog
+	var pub string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/dataroom/node/f-1":
+			parent := parentLabel(decodeMove(t, r).ParentID)
+			log.add("PUT f-1 into " + parent)
+			if parent == "d-old" {
+				http.Error(w, "Duplicate node name hash", http.StatusConflict)
+
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/nodes":
+			log.add("GET listing " + r.URL.Query().Get("parent_id"))
+			fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"f-1": "doc.txt", "d-new": "b"}))
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+		}
+	}
+	fs, identity := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/": {{ID: "f-1", Name: "doc.txt", Type: "file"}, {ID: "d-old", Name: "b", Type: "dir"}},
+	})
+	pub = identity.Recipient().String()
+
+	if err := fs.Rename(context.Background(), "/dataroom/DR/doc.txt", "/dataroom/DR/b/doc.txt"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	want := []string{"PUT f-1 into d-old", "GET listing ", "PUT f-1 into d-new"}
+	if calls := log.list(); !slices.Equal(calls, want) {
+		t.Errorf("calls = %v, want %v", calls, want)
+	}
+}
+
+// A 409 whose destination folder is unchanged is a genuine name conflict: it is
+// returned after one fresh listing, without repeating the PUT.
+func TestWebdavFS_RenameReturnsGenuineConflict(t *testing.T) {
+	var log callLog
+	var pub string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/dataroom/node/f-1":
+			log.add("PUT f-1 into " + parentLabel(decodeMove(t, r).ParentID))
+			http.Error(w, "Duplicate node name hash", http.StatusConflict)
+		case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/nodes":
+			log.add("GET listing " + r.URL.Query().Get("parent_id"))
+			fmt.Fprint(w, nodesPageJSON(t, pub, map[string]string{"f-1": "doc.txt", "d-b": "b"}))
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+		}
+	}
+	fs, identity := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/": {{ID: "f-1", Name: "doc.txt", Type: "file"}, {ID: "d-b", Name: "b", Type: "dir"}},
+	})
+	pub = identity.Recipient().String()
+
+	err := fs.Rename(context.Background(), "/dataroom/DR/doc.txt", "/dataroom/DR/b/doc.txt")
+	if !errors.Is(err, api.ErrConflict) {
+		t.Errorf("Rename error = %v, want api.ErrConflict", err)
+	}
+	want := []string{"PUT f-1 into d-b", "GET listing "}
+	if calls := log.list(); !slices.Equal(calls, want) {
+		t.Errorf("calls = %v, want %v", calls, want)
+	}
+}
+
+// A 409 for a destination at the dataroom root cannot come from a deleted
+// folder: it is returned as is, without any re-resolution.
+func TestWebdavFS_RenameConflictAtRootIsNotRetried(t *testing.T) {
+	var log callLog
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		log.add(r.Method + " " + r.URL.Path)
+		http.Error(w, "Duplicate node name hash", http.StatusConflict)
+	}
+	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
+	})
+
+	err := fs.Rename(context.Background(), "/dataroom/DR/doc.txt", "/dataroom/DR/new.txt")
+	if !errors.Is(err, api.ErrConflict) {
+		t.Errorf("Rename error = %v, want api.ErrConflict", err)
+	}
+	if calls := log.list(); len(calls) != 1 {
+		t.Errorf("calls = %v, want the single PUT", calls)
+	}
+}
+
+// A source absent from its listing is reported as not existing, and a
+// destination whose parent is a file is refused, both without any API call.
+func TestWebdavFS_RenameMissingSourceOrInvalidDestination(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected API call %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}
+	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
+	})
+	ctx := context.Background()
+
+	if err := fs.Rename(ctx, "/dataroom/DR/nope.txt", "/dataroom/DR/new.txt"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Rename of a missing source: error = %v, want os.ErrNotExist", err)
+	}
+	if err := fs.Rename(ctx, "/dataroom/DR/doc.txt", "/dataroom/DR/doc.txt/new.txt"); !errors.Is(err, os.ErrInvalid) {
+		t.Errorf("Rename under a file: error = %v, want os.ErrInvalid", err)
+	}
 }
 
 // — Cached parent resolution and cache upsert ————————————————————————————————

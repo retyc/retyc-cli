@@ -216,14 +216,7 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if resp.StatusCode == http.StatusConflict {
-			return nil, fmt.Errorf("%w: %s", ErrConflict, string(body))
-		}
-		if resp.StatusCode == http.StatusNotFound {
-			return nil, fmt.Errorf("API error %d: %s: %w", resp.StatusCode, string(body), ErrNotFound)
-		}
-
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, statusError(resp.StatusCode, body)
 	}
 
 	return body, nil
@@ -260,14 +253,7 @@ func (c *Client) do(req *http.Request, dst any) error {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if resp.StatusCode == http.StatusConflict {
-			return fmt.Errorf("%w: %s", ErrConflict, string(body))
-		}
-		if resp.StatusCode == http.StatusNotFound {
-			return fmt.Errorf("API error %d: %s: %w", resp.StatusCode, string(body), ErrNotFound)
-		}
-
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return statusError(resp.StatusCode, body)
 	}
 
 	if dst != nil {
@@ -277,4 +263,20 @@ func (c *Client) do(req *http.Request, dst any) error {
 	}
 
 	return nil
+}
+
+// statusError builds the error of a non-2xx response. The sentinels are
+// wrapped at the end so the message keeps its "API error <code>: " prefix;
+// a 410 matches both ErrGone and ErrNotFound (see ErrGone).
+func statusError(code int, body []byte) error {
+	switch code {
+	case http.StatusConflict:
+		return fmt.Errorf("%w: %s", ErrConflict, string(body))
+	case http.StatusNotFound:
+		return fmt.Errorf("API error %d: %s: %w", code, string(body), ErrNotFound)
+	case http.StatusGone:
+		return fmt.Errorf("API error %d: %s: %w: %w", code, string(body), ErrGone, ErrNotFound)
+	default:
+		return fmt.Errorf("API error %d: %s", code, string(body))
+	}
 }
