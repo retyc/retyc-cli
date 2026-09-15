@@ -10,19 +10,16 @@ import (
 // Every page is a round trip, so a listing costs as few pages as the API allows.
 const nodeListPageSize = 100
 
-// nodeListPageConcurrency bounds the pages fetched at once after the first.
-const nodeListPageConcurrency = 4
-
 // fetchAllPages returns every page of a paginated listing, fetched then
 // processed, in page order.
 //
 // fetch performs one page's round trip and returns its raw result with the page
 // count the API reported. The count is unknown until the first page answers, so
-// page 1 is fetched alone, then the remaining pages concurrently,
-// nodeListPageConcurrency at a time. A folder that grows while it is listed
-// reports a larger count on a later page: those extra pages are fetched in a
-// further round, as the sequential loop did by re-reading the count on every
-// page.
+// page 1 is fetched alone, then the remaining pages concurrently, at most
+// api.concurrency.list at a time (see SetConcurrency). A folder that grows
+// while it is listed reports a larger count on a later page: those extra pages
+// are fetched in a further round, as the sequential loop did by re-reading the
+// count on every page.
 //
 // process turns a raw page into its result (decrypting names). It runs in its
 // own goroutine as soon as the page has arrived, outside the fetch slots: a
@@ -67,7 +64,7 @@ func fetchAllPages[R, T any](
 	return slices.Concat(rounds...), nil
 }
 
-// fetchPageRange fetches pages from..to concurrently, nodeListPageConcurrency
+// fetchPageRange fetches pages from..to concurrently, api.concurrency.list
 // round trips at a time, and returns the slice their processed results are
 // written into, in page order, with the largest page count any of them
 // reported. Each page is handed to process in a goroutine tracked by
@@ -88,7 +85,7 @@ func fetchPageRange[R, T any](
 		firstErr error
 		reported int
 	)
-	slots := make(chan struct{}, nodeListPageConcurrency)
+	slots := make(chan struct{}, Concurrency().List)
 	for page := from; page <= to; page++ {
 		select {
 		case slots <- struct{}{}:

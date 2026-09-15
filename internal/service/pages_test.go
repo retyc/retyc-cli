@@ -23,7 +23,7 @@ import (
 func keepPage(_ context.Context, page int) int { return page }
 
 // Pages after the first are fetched concurrently, never more than
-// nodeListPageConcurrency at once, and returned in page order whatever order
+// api.concurrency.list at once, and returned in page order whatever order
 // they complete in.
 func TestFetchAllPages_ConcurrentInOrder(t *testing.T) {
 	var inFlight, peak int32
@@ -54,8 +54,8 @@ func TestFetchAllPages_ConcurrentInOrder(t *testing.T) {
 	if len(got) != 10 {
 		t.Fatalf("got %d pages, want 10", len(got))
 	}
-	if peak < 2 || peak > nodeListPageConcurrency {
-		t.Errorf("peak concurrency = %d, want between 2 and %d", peak, nodeListPageConcurrency)
+	if limit := Concurrency().List; peak < 2 || int(peak) > limit {
+		t.Errorf("peak concurrency = %d, want between 2 and %d", peak, limit)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestFetchAllPages_ErrorCancelsTheRest(t *testing.T) {
 // first one. Here every process step blocks until the last page is fetched,
 // which can only happen if processing leaves every slot free.
 func TestFetchAllPages_ProcessingHoldsNoSlot(t *testing.T) {
-	const pages = nodeListPageConcurrency + 2
+	pages := Concurrency().List + 2
 	lastFetched := make(chan struct{})
 	fetch := func(_ context.Context, page int) (int, int, error) {
 		if page == pages {

@@ -109,6 +109,28 @@ keyring:
 
 The cache does not exist on macOS and Windows, nor inside Docker.
 
+### Tune parallel requests
+
+A large folder is listed 100 nodes per page, and files are transferred in
+8 MB chunks. After the first page, pages and chunks are requested several at
+a time:
+
+```yaml
+# config.yaml
+api:
+  concurrency:
+    list: 4       # listing pages fetched at once
+    upload: 4     # chunks uploaded at once, per file
+    download: 4   # chunks downloaded at once, per file
+```
+
+Every value must be between 1 and 32. All requests share a single HTTP/2 connection
+to the API, so a higher value mostly saves waiting on latency: it speeds up
+the listing of large folders (`dataroom ls`, `webdav serve`) but does not
+multiply the bandwidth of a transfer, and it puts more load on the server.
+A download holds up to twice `download` decrypted chunks in memory
+(8 MB each).
+
 ## Reference
 
 ### Settings
@@ -116,6 +138,9 @@ The cache does not exist on macOS and Windows, nor inside Docker.
 | Setting | `config.yaml` key | Environment variable | Default |
 |---|---|---|---|
 | API endpoint | `api.base_url` | `RETYC_API_BASE_URL` | `https://api.retyc.com` |
+| Listing pages fetched at once | `api.concurrency.list` | `RETYC_API_CONCURRENCY_LIST` | `4`, see [below](#tune-parallel-requests) |
+| Chunks uploaded at once per file | `api.concurrency.upload` | `RETYC_API_CONCURRENCY_UPLOAD` | `4` |
+| Chunks downloaded at once per file | `api.concurrency.download` | `RETYC_API_CONCURRENCY_DOWNLOAD` | `4` |
 | Key cache | `keyring.enabled` | `RETYC_KEYRING_ENABLED` | `true` (Linux only) |
 | Key cache lifetime, seconds | `keyring.ttl` | `RETYC_KEYRING_TTL` | `60` |
 | Organization API key | `admin.api_key` | `RETYC_ADMIN_API_KEY` | — |

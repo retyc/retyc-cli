@@ -20,17 +20,11 @@ import (
 const (
 	// UploadChunkSize is the plaintext size of each upload chunk before encryption.
 	UploadChunkSize = 8 * 1024 * 1024 // 8 MB
-
-	// UploadConcurrency is the number of chunks uploaded simultaneously per file.
-	UploadConcurrency = 4
-
-	// DownloadConcurrency is the number of chunks downloaded simultaneously per file.
-	DownloadConcurrency = 4
 )
 
 // UploadChunks reads r in UploadChunkSize chunks, encrypts each with sessionPubKey,
-// and calls uploadFn for each encrypted chunk using up to UploadConcurrency concurrent
-// goroutines. An internal context is cancelled as soon as the first error is detected,
+// and calls uploadFn for each encrypted chunk using up to api.concurrency.upload
+// concurrent goroutines (see SetConcurrency). An internal context is cancelled as soon as the first error is detected,
 // stopping all in-flight workers promptly. progress is called (if non-nil) after each
 // chunk is successfully uploaded.
 func UploadChunks(
@@ -45,7 +39,7 @@ func UploadChunks(
 	innerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	sem := make(chan struct{}, UploadConcurrency)
+	sem := make(chan struct{}, Concurrency().Upload)
 	var (
 		wg       sync.WaitGroup
 		mu       sync.Mutex
@@ -155,10 +149,7 @@ func StreamDownloadChunks(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	concurrency := DownloadConcurrency
-	if chunkCount < concurrency {
-		concurrency = chunkCount
-	}
+	concurrency := min(Concurrency().Download, chunkCount)
 	if concurrency < 1 {
 		// Nothing to download (empty file, or a malformed negative chunkCount).
 		return nil
@@ -170,7 +161,7 @@ func StreamDownloadChunks(
 	// long-running streaming server. A slot is taken at dispatch and released once
 	// the chunk has been written in order, so peak memory is bounded to `window`
 	// decrypted chunks regardless of file size.
-	window := DownloadConcurrency * 2
+	window := concurrency * 2
 
 	jobs := make(chan int, concurrency)
 	results := make(chan chunkResult, concurrency*2)

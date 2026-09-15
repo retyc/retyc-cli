@@ -32,7 +32,29 @@ type OIDCConfig struct {
 
 // APIConfig holds REST API connection parameters.
 type APIConfig struct {
-	BaseURL string `yaml:"base_url" mapstructure:"base_url"`
+	BaseURL     string            `yaml:"base_url" mapstructure:"base_url"`
+	Concurrency ConcurrencyConfig `yaml:"concurrency" mapstructure:"concurrency"`
+}
+
+// DefaultConcurrency is the default of every api.concurrency.* key.
+const DefaultConcurrency = 4
+
+// MaxConcurrency is the largest value every api.concurrency.* key accepts.
+// Higher would flood the API — well before HTTP/2's 250 streams per
+// connection, one request per page or per chunk is already a lot — and a
+// download holds up to twice its value in decrypted 8 MB chunks.
+const MaxConcurrency = 32
+
+// ConcurrencyConfig bounds the API requests a single operation runs at once.
+// The API is served over HTTP/2, so they share one multiplexed connection:
+// these values bound the load put on the backend, not a connection pool.
+type ConcurrencyConfig struct {
+	// List is the listing pages fetched at once after the first.
+	List int `yaml:"list" mapstructure:"list"`
+	// Upload is the chunks uploaded at once per file.
+	Upload int `yaml:"upload" mapstructure:"upload"`
+	// Download is the chunks downloaded at once per file.
+	Download int `yaml:"download" mapstructure:"download"`
 }
 
 // KeyringConfig controls the kernel keyring cache for the decrypted AGE identity.
@@ -98,6 +120,9 @@ const envPrefix = "RETYC"
 // see env.go.
 func SetDefaults() {
 	viper.SetDefault("api.base_url", defaultAPIBaseURL)
+	viper.SetDefault("api.concurrency.list", DefaultConcurrency)
+	viper.SetDefault("api.concurrency.upload", DefaultConcurrency)
+	viper.SetDefault("api.concurrency.download", DefaultConcurrency)
 	// Dev builds only (see cmd/insecure_dev.go). Registered unconditionally so
 	// that the key appears in viper.AllKeys() and stays documented.
 	viper.SetDefault("insecure", false)
@@ -128,6 +153,21 @@ func Load() (*Config, error) {
 	// Unmarshal keeps an environment value as a single item; GetStringSlice
 	// splits it on spaces, which is the documented environment syntax.
 	cfg.Webdav.Metrics.Labels = viper.GetStringSlice("webdav.metrics.labels")
+
+	// A bound below 1 leaves the workers without a single slot, and one above
+	// MaxConcurrency is more than the API or this process should take on.
+	for _, c := range []struct {
+		key   string
+		value int
+	}{
+		{"api.concurrency.list", cfg.API.Concurrency.List},
+		{"api.concurrency.upload", cfg.API.Concurrency.Upload},
+		{"api.concurrency.download", cfg.API.Concurrency.Download},
+	} {
+		if c.value < 1 || c.value > MaxConcurrency {
+			return nil, fmt.Errorf("%s must be between 1 and %d, got %d", c.key, MaxConcurrency, c.value)
+		}
+	}
 
 	return &cfg, nil
 }

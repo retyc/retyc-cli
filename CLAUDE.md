@@ -108,6 +108,12 @@ All overridable from `~/.config/retyc/config.yaml` (prod) or `.retyc/config.yaml
   `config.OIDCConfig`. Nothing in `SetDefaults()` covers them.
 - API base URL: per build mode (see above)
 - Keyring: enabled by default, TTL 60s (configurable via `keyring.enabled` / `keyring.ttl`)
+- Concurrency: `api.concurrency.list` / `.upload` / `.download`, default 4 each, between 1
+  and `config.MaxConcurrency` (32) — `config.Load` rejects anything else. The service reads them process-wide through
+  `service.Concurrency()`: `applyServiceConfig`, in `rootCmd.PersistentPreRunE`, calls
+  `service.SetConcurrency` once and ignores a config that does not load (each command
+  reports it itself). The API is HTTP/2 only: one multiplexed connection, so these bound
+  backend load, not a connection pool.
 
 ## Persistent flags (root)
 
@@ -299,7 +305,7 @@ Full flow:
 5. Generate session + ephemeral keypairs
 6. Encrypt keys (see key chain above)
 7. `POST /share/{id}/file` + chunk upload in **8 MB** chunks (`POST /file/{id}/{chunk}`, multipart)
-   — **4 concurrent uploads** per file (semaphore pattern, `uploadConcurrency = 4`)
+   — **4 concurrent uploads** per file by default (semaphore pattern, `api.concurrency.upload`)
    — main goroutine reads+encrypts sequentially; each encrypted chunk is dispatched immediately
 8. `PUT /share/{id}/complete`
 9. `GET /share/{id}/details` → display `web_url`
@@ -310,7 +316,7 @@ Flags: `--title`, `--expire` (seconds, default 3600), `--message`, `--passphrase
 
 ### `transfer download <id> [-o dir] [-y]`
 Downloads and decrypts all files of a transfer into a local directory.
-- **4 concurrent downloads** per file (`downloadConcurrency = 4`)
+- **4 concurrent downloads** per file by default (`api.concurrency.download`)
 - Reorder buffer (`map[int][]byte`) ensures chunks are always written to disk in order (0→1→2→…)
   regardless of network arrival order
 - On error: context cancellation propagated to all workers, channels drained cleanly
@@ -325,9 +331,9 @@ Upload and download chunk logic is factored out of both transfer and dataroom co
 
 - **`uploadChunks(ctx, f, size, displayName, sessionPubKey, uploadFn)`** — reads the file
   sequentially in 8 MB chunks, encrypts each, dispatches to `uploadFn` with a semaphore
-  (4 concurrent goroutines). Progress bar via `newTransferBar`.
+  (`api.concurrency.upload` goroutines). Progress bar via `newTransferBar`.
 - **`downloadChunks(ctx, outputDir, name, size, chunkCount, identity, downloadFn)`** —
-  downloads chunks via `downloadFn` concurrently (4 goroutines), decrypts, writes in order
+  downloads chunks via `downloadFn` concurrently (`api.concurrency.download` goroutines), decrypts, writes in order
   using a reorder buffer. Creates the output file.
 
 Both `uploadTransferFile` and `uploadDataroomFile` call `uploadChunks` with their respective
