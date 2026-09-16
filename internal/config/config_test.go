@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -449,5 +450,71 @@ func TestWebdavAddr_EnvBinding(t *testing.T) {
 	}
 	if cfg.Webdav.Addr != "0.0.0.0:9000" {
 		t.Errorf("Webdav.Addr = %q, want 0.0.0.0:9000", cfg.Webdav.Addr)
+	}
+}
+
+func TestAPIConcurrency_Defaults(t *testing.T) {
+	resetViper(t)
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := ConcurrencyConfig{List: DefaultConcurrency, Upload: DefaultConcurrency, Download: DefaultConcurrency}
+	if cfg.API.Concurrency != want {
+		t.Errorf("API.Concurrency = %+v, want %+v", cfg.API.Concurrency, want)
+	}
+}
+
+func TestAPIConcurrency_EnvBinding(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_API_CONCURRENCY_LIST", "8")
+	t.Setenv("RETYC_API_CONCURRENCY_UPLOAD", "2")
+	t.Setenv("RETYC_API_CONCURRENCY_DOWNLOAD", "6")
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := ConcurrencyConfig{List: 8, Upload: 2, Download: 6}
+	if cfg.API.Concurrency != want {
+		t.Errorf("API.Concurrency = %+v, want %+v", cfg.API.Concurrency, want)
+	}
+}
+
+// A concurrency below 1 would deadlock the bounded workers (no slot ever
+// free), and one above MaxConcurrency would flood the API and hold far too
+// many decrypted chunks: Load refuses both and names the key.
+func TestAPIConcurrency_RejectsOutOfRange(t *testing.T) {
+	for _, key := range []string{"LIST", "UPLOAD", "DOWNLOAD"} {
+		for _, value := range []string{"0", "-1", strconv.Itoa(MaxConcurrency + 1), "4611686018427387905"} {
+			t.Run(key+"="+value, func(t *testing.T) {
+				resetViper(t)
+				t.Setenv("RETYC_API_CONCURRENCY_"+key, value)
+				SetDefaults()
+				_, err := Load()
+				if err == nil {
+					t.Fatalf("Load() accepted a concurrency of %s", value)
+				}
+				if want := "api.concurrency." + strings.ToLower(key); !strings.Contains(err.Error(), want) {
+					t.Errorf("Load() error = %q, want it to name %s", err, want)
+				}
+			})
+		}
+	}
+}
+
+// The bounds themselves are accepted.
+func TestAPIConcurrency_AcceptsTheBounds(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_API_CONCURRENCY_LIST", "1")
+	t.Setenv("RETYC_API_CONCURRENCY_UPLOAD", strconv.Itoa(MaxConcurrency))
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.API.Concurrency.List != 1 || cfg.API.Concurrency.Upload != MaxConcurrency {
+		t.Errorf("API.Concurrency = %+v, want list 1 and upload %d", cfg.API.Concurrency, MaxConcurrency)
 	}
 }

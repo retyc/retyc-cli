@@ -12,8 +12,8 @@ import (
 
 func TestListDatarooms(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/dataroom/" {
-			t.Errorf("path = %q, want /dataroom/", r.URL.Path)
+		if r.URL.Path != "/dataroom" {
+			t.Errorf("path = %q, want /dataroom", r.URL.Path)
 		}
 		if got := r.URL.Query().Get("page"); got != "1" {
 			t.Errorf("page = %q, want 1", got)
@@ -86,8 +86,8 @@ func TestCreateDataroom(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s, want POST", r.Method)
 		}
-		if r.URL.Path != "/dataroom/" {
-			t.Errorf("path = %q, want /dataroom/", r.URL.Path)
+		if r.URL.Path != "/dataroom" {
+			t.Errorf("path = %q, want /dataroom", r.URL.Path)
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -83,6 +84,8 @@ var rootCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "TLS roots:", source)
 		}
 
+		applyServiceConfig()
+
 		// Tracing is decided by the environment only; a bad OTEL_* value is
 		// reported under --debug and the command runs untraced.
 		tel, err := telemetry.Init(cmd.Context(), telemetry.Options{Version: Version, Debug: debug})
@@ -150,6 +153,20 @@ func init() {
 // cliUserAgent returns the User-Agent string used for all outgoing HTTP requests.
 func cliUserAgent() string {
 	return fmt.Sprintf("retyc-cli/%s (%s/%s)", Version, runtime.GOOS, runtime.GOARCH)
+}
+
+// applyServiceConfig hands the settings the service reads process-wide
+// (api.concurrency.*) to it, once, before the command runs.
+//
+// A configuration that does not load is left for the command to report through
+// its own config.Load; some commands deliberately tolerate it (auth logout), so
+// failing here would break them. The service then keeps its defaults.
+func applyServiceConfig() {
+	cfg, err := config.Load()
+	if err != nil {
+		return
+	}
+	service.SetConcurrency(cfg.API.Concurrency)
 }
 
 // initConfig reads the configuration file and environment variables.

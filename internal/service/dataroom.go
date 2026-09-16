@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -231,26 +232,44 @@ func fetchChildItems(
 		return nil, err
 	}
 
-	var items []api.DataroomNodeItem
-	for page := 1; ; page++ {
-		pg, err := client.ListDataroomNodes(ctx, dataroomID, parentID, page, 50)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, pg.Items...)
-		if page >= pg.Pages {
-			break
-		}
+	return fetchChildItemsByID(ctx, client, dataroomID, parentID)
+}
+
+// fetchChildItemsByID lists every page of the children of parentID (nil for
+// the dataroom root), pages fetched concurrently (see fetchAllPages).
+func fetchChildItemsByID(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
+) ([]api.DataroomNodeItem, error) {
+	pages, err := fetchAllPages(ctx, nodePageFetcher(client, dataroomID, parentID),
+		func(_ context.Context, items []api.DataroomNodeItem) []api.DataroomNodeItem { return items })
+	if err != nil {
+		return nil, err
 	}
 
-	return items, nil
+	return slices.Concat(pages...), nil
+}
+
+// nodePageFetcher returns the fetch step of fetchAllPages for the children of
+// parentID: one page of nodeListPageSize raw items and the reported page count.
+func nodePageFetcher(
+	client *api.Client, dataroomID string, parentID *string,
+) func(ctx context.Context, page int) ([]api.DataroomNodeItem, int, error) {
+	return func(ctx context.Context, page int) ([]api.DataroomNodeItem, int, error) {
+		pg, err := client.ListDataroomNodes(ctx, dataroomID, parentID, page, nodeListPageSize)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		return pg.Items, pg.Pages, nil
+	}
 }
 
 // nodesFromItems decrypts API node items into DataroomNodeInfo using identity.
 func nodesFromItems(
 	ctx context.Context, items []api.DataroomNodeItem, identity *age.HybridIdentity,
 ) []DataroomNodeInfo {
-	// One span per listing under the caller's span: the node count only.
+	// One span per call under the caller's span (a listing, or one page of it
+	// when pages are decrypted as they arrive): the node count only.
 	_, span := telemetry.Tracer().Start(ctx, "crypto.decrypt_names",
 		trace.WithAttributes(telemetry.AttrNodeCount.Int(len(items))))
 	defer span.End()
@@ -319,6 +338,25 @@ func ListNodesLiteralWithSession(
 	return nodesFromItems(ctx, items, sess.Identity), nil
 }
 
+// ListNodesByIDWithSession lists the children of the folder parentID (nil for
+// the dataroom root), for callers that already know its ID and so need no path
+// resolution.
+func ListNodesByIDWithSession(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string, sess *DataroomSession,
+) ([]DataroomNodeInfo, error) {
+	// Each page is decrypted as soon as it arrives, in parallel with the other
+	// pages and outside the fetch slots (see fetchAllPages).
+	pages, err := fetchAllPages(ctx, nodePageFetcher(client, dataroomID, parentID),
+		func(ctx context.Context, items []api.DataroomNodeItem) []DataroomNodeInfo {
+			return nodesFromItems(ctx, items, sess.Identity)
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	return slices.Concat(pages...), nil
+}
+
 // — Node traversal helpers ————————————————————————————————————————————————————
 
 // namedNode pairs a decrypted name with its API item.
@@ -327,29 +365,29 @@ type namedNode struct {
 	item api.DataroomNodeItem
 }
 
-// fetchNodesWithNames lists all paginated nodes in a folder and decrypts their names.
+// fetchNodesWithNames lists all paginated nodes in a folder and decrypts their
+// names, each page as soon as it arrives (see fetchAllPages).
 func fetchNodesWithNames(
 	ctx context.Context, client *api.Client, dataroomID string, parentID *string, identity *age.HybridIdentity,
 ) ([]namedNode, error) {
-	var result []namedNode
-	for page := 1; ; page++ {
-		p, err := client.ListDataroomNodes(ctx, dataroomID, parentID, page, 50)
-		if err != nil {
-			return nil, err
-		}
-		for _, item := range p.Items {
-			name, decErr := crypto.DecryptToString(item.Node.NameEnc, identity)
-			if decErr != nil {
-				continue
+	pages, err := fetchAllPages(ctx, nodePageFetcher(client, dataroomID, parentID),
+		func(_ context.Context, items []api.DataroomNodeItem) []namedNode {
+			named := make([]namedNode, 0, len(items))
+			for _, item := range items {
+				name, decErr := crypto.DecryptToString(item.Node.NameEnc, identity)
+				if decErr != nil {
+					continue
+				}
+				named = append(named, namedNode{name: name, item: item})
 			}
-			result = append(result, namedNode{name: name, item: item})
-		}
-		if page >= p.Pages {
-			break
-		}
+
+			return named
+		})
+	if err != nil {
+		return nil, err
 	}
 
-	return result, nil
+	return slices.Concat(pages...), nil
 }
 
 // resolvePath resolves a unix-style path to the node ID of the final component.
@@ -373,7 +411,7 @@ func resolvePath(
 		}
 		found := false
 		for page := 1; ; page++ {
-			nodesPage, err := client.ListDataroomNodes(ctx, dataroomID, currentParentID, page, 50)
+			nodesPage, err := client.ListDataroomNodes(ctx, dataroomID, currentParentID, page, nodeListPageSize)
 			if err != nil {
 				return nil, fmt.Errorf("listing nodes at depth %d: %w", depth, err)
 			}
@@ -572,8 +610,9 @@ type StreamUploadInit struct {
 // delete it, and its earlier versions must be preserved.
 //
 // The caller is responsible for the staleness of its node ID. The API answers
-// 404 (api.ErrNotFound) when the node is gone, which callers should treat as a
-// signal to fall back to the full InitStreamUploadInto path.
+// 404, or 410 while its purge is pending (both match api.ErrNotFound), when the
+// node is gone, which callers should treat as a signal to fall back to the full
+// InitStreamUploadInto path.
 func AddVersionToNode(
 	ctx context.Context,
 	client *api.Client,
@@ -1263,13 +1302,22 @@ func MoveDataroomNodeWithSession(
 		return err
 	}
 
+	return MoveDataroomNodeByID(ctx, client, *srcNodeID, dstParentID, newName, sess)
+}
+
+// MoveDataroomNodeByID renames node nodeID to newName under dstParentID (nil for
+// the dataroom root), for callers that already know both IDs and so need no
+// path resolution.
+func MoveDataroomNodeByID(
+	ctx context.Context, client *api.Client, nodeID string, dstParentID *string, newName string, sess *DataroomSession,
+) error {
 	nameEnc, err := crypto.EncryptStringForKeys(newName, []string{sess.PublicKey})
 	if err != nil {
 		return fmt.Errorf("encrypting new name: %w", err)
 	}
 
 	if err := client.UpdateDataroomNode(
-		ctx, *srcNodeID, nameEnc, nodeNameHash(newName, sess.NameSalt), dstParentID,
+		ctx, nodeID, nameEnc, nodeNameHash(newName, sess.NameSalt), dstParentID,
 	); err != nil {
 		return fmt.Errorf("moving node: %w", err)
 	}
