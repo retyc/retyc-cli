@@ -1178,22 +1178,19 @@ func (h *streamWriteHandle) Close() error {
 	return nil
 }
 
-// cleanup removes the orphaned node after a failed streaming upload. It can only
-// delete brand-new nodes: for a new version of a pre-existing node, deleting the
-// node would destroy good prior versions, so we only warn (no per-version delete
-// API is available).
+// cleanup removes what a failed streaming upload left behind: the node it
+// created, or only its new version on a node that already existed, whose prior
+// versions must survive (see service.DiscardFailedUpload).
 func (h *streamWriteHandle) cleanup() {
-	if !h.newNode {
-		fmt.Fprintf(os.Stderr,
-			"webdav: upload of %s failed; its new version may be incomplete\n", h.info.Name())
-
-		return
-	}
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if delErr := h.wfs.client.DeleteDataroomNode(cleanupCtx, h.nodeID); delErr == nil {
+	err := service.DiscardFailedUpload(h.wfs.client, h.nodeID, h.info.versionID, h.newNode)
+	switch {
+	case err == nil && h.newNode:
 		fmt.Fprintf(os.Stderr, "webdav: cleaned up orphaned node: %s\n", h.info.Name())
+	case err == nil:
+		fmt.Fprintf(os.Stderr, "webdav: discarded the failed version of %s\n", h.info.Name())
+	default:
+		fmt.Fprintf(os.Stderr, "webdav: upload of %s failed and could not be cleaned up: %v\n", h.info.Name(), err)
 	}
-	cancel()
 }
 func (h *streamWriteHandle) Read(_ []byte) (int, error)           { return 0, os.ErrPermission }
 func (h *streamWriteHandle) Seek(_ int64, _ int) (int64, error)   { return 0, os.ErrPermission }

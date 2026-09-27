@@ -386,3 +386,31 @@ func TestResolvePath_TagsSpanWithNodeID(t *testing.T) {
 		t.Errorf("retyc.node.id = %q", got)
 	}
 }
+
+// TestDiscardFailedUpload verifies that a failed upload removes the node only
+// when it created it, and otherwise just its own version, so that the earlier
+// versions of a pre-existing file survive.
+func TestDiscardFailedUpload(t *testing.T) {
+	cases := []struct {
+		newNode bool
+		want    string
+	}{
+		{true, "DELETE /dataroom/node/n1"},
+		{false, "DELETE /dataroom/node/version/v2"},
+	}
+	for _, c := range cases {
+		var calls []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		err := DiscardFailedUpload(newExportTestClient(srv), "n1", "v2", c.newNode)
+		srv.Close()
+		if err != nil {
+			t.Errorf("newNode=%v: DiscardFailedUpload() = %v", c.newNode, err)
+		}
+		if len(calls) != 1 || calls[0] != c.want {
+			t.Errorf("newNode=%v: calls = %v, want [%s]", c.newNode, calls, c.want)
+		}
+	}
+}

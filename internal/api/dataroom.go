@@ -268,6 +268,13 @@ func (c *Client) DeleteDataroomNode(ctx context.Context, nodeID string) error {
 	return c.Delete(ctx, "/dataroom/node/"+nodeID)
 }
 
+// DeleteDataroomNodeVersion removes a single version of a file node, leaving the
+// node and its other versions in place. It requires the can_delete capability
+// (privileged roles), like DeleteDataroomNode.
+func (c *Client) DeleteDataroomNodeVersion(ctx context.Context, versionID string) error {
+	return c.Delete(ctx, "/dataroom/node/version/"+versionID)
+}
+
 // CreateDataroomNodeVersion creates a new version for a file node.
 //
 // chunkCount is announced up front (chunk_count_expected): the API rejects any

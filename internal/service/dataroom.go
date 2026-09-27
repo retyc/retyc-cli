@@ -598,6 +598,25 @@ type StreamUploadInit struct {
 	NewNode   bool      // node created here; callers delete it on upload failure
 }
 
+// DiscardFailedUpload removes what a failed upload left behind: the whole node
+// when the upload created it, otherwise only the version it added, so that the
+// node's earlier versions survive. A failed version can never be completed —
+// stored chunks are immutable and the API refuses any index beyond the count
+// announced at creation — so left in place it only clutters the history.
+//
+// It runs detached from the upload context, which is usually cancelled by then,
+// on its own short timeout. It is best-effort: deleting requires the can_delete
+// capability, which contributors lack, so the caller only reports its error.
+func DiscardFailedUpload(client *api.Client, nodeID, versionID string, newNode bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if newNode {
+		return client.DeleteDataroomNode(ctx, nodeID)
+	}
+
+	return client.DeleteDataroomNodeVersion(ctx, versionID)
+}
+
 // AddVersionToNode creates a new version on a node that is already known to
 // exist, and returns the same descriptor as InitStreamUploadInto.
 //
@@ -783,6 +802,12 @@ func uploadDataroomFile(
 		ctx, targetNodeID, info.Size(), ChunkCount(info.Size()), typeEnc,
 	)
 	if err != nil {
+		// A node created here without any version would linger as an empty,
+		// undownloadable entry.
+		if newNode {
+			_ = DiscardFailedUpload(client, targetNodeID, "", true)
+		}
+
 		return fmt.Errorf("creating node version: %w", err)
 	}
 
@@ -790,12 +815,12 @@ func uploadDataroomFile(
 		func(ctx context.Context, chunkID int, data []byte) error {
 			return client.UploadDataroomChunk(ctx, version.ID, chunkID, data)
 		})
-	if uploadErr != nil && newNode {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if delErr := client.DeleteDataroomNode(cleanupCtx, targetNodeID); delErr == nil {
+	if uploadErr != nil {
+		if delErr := DiscardFailedUpload(client, targetNodeID, version.ID, newNode); delErr == nil {
 			fmt.Fprintf(os.Stderr, "  cleaned up: %s\n", displayName)
+		} else {
+			fmt.Fprintf(os.Stderr, "  %s: could not clean up the failed upload: %v\n", displayName, delErr)
 		}
-		cleanupCancel()
 	}
 
 	return uploadErr

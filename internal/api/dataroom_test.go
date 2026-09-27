@@ -273,6 +273,23 @@ func TestDeleteDataroomNode(t *testing.T) {
 	}
 }
 
+func TestDeleteDataroomNodeVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/dataroom/node/version/ver-9" {
+			t.Errorf("path = %q, want /dataroom/node/version/ver-9", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	if err := newTestClient(srv).DeleteDataroomNodeVersion(context.Background(), "ver-9"); err != nil {
+		t.Fatalf("DeleteDataroomNodeVersion() error = %v", err)
+	}
+}
+
 func TestCreateDataroomNodeVersion(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

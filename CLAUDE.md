@@ -351,8 +351,12 @@ glob patterns (`*`, `?`, `[...]`) resolved against decrypted node names at each 
 ### `dataroom cp <src...> <dst>`
 Direction detected from which argument is a `retyc://` URI:
 - **Upload** (`local → retyc://`): one or more local paths, last arg is remote dest folder.
-  Directories are uploaded recursively (BFS). SIGINT cancels and deletes any orphaned node
-  created mid-upload (`DeleteDataroomNode`).
+  Directories are uploaded recursively (BFS). SIGINT or a failed upload discards what the
+  upload created (`service.DiscardFailedUpload`): the node if it was new, otherwise only the
+  new version (`DeleteDataroomNodeVersion`) — best-effort, deleting needs `can_delete`.
+- Version creation announces `chunk_count_expected` = `service.ChunkCount(size)`; the API
+  refuses any chunk index beyond it (422) and never overwrites a stored chunk, so
+  `UploadChunks` fails when the source does not yield exactly the declared size.
 - **Download** (`retyc:// → local`): one remote path (or glob) → local dir. Directories in
   glob results are skipped with a warning.
 - 409 on upload → existing node found by name → new version created instead.
