@@ -1914,7 +1914,8 @@ func TestStreamWriteHandle_CachesVersionCreationTime(t *testing.T) {
 		mimeType:  "text/plain",
 		createdAt: createdAt,
 		parentURI: "retyc://dr1/",
-		info:      &webdavFileInfo{name: "f.txt", size: 0, nodeID: "n1", versionID: "v1"},
+		info:      &webdavFileInfo{name: "f.txt", size: service.UploadChunkSize + 1, nodeID: "n1", versionID: "v1"},
+		written:   service.UploadChunkSize + 1,
 	}
 	if err := h.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -1929,6 +1930,10 @@ func TestStreamWriteHandle_CachesVersionCreationTime(t *testing.T) {
 	}
 	if nodes[0].MIMEType != "text/plain" || nodes[0].VersionID != "v1" {
 		t.Errorf("cached entry = %+v, want the stored MIME type and version", nodes[0])
+	}
+	// Downloads read exactly ChunkCount chunks: it must be the announced count.
+	if nodes[0].ChunkCount != 2 {
+		t.Errorf("cached ChunkCount = %d, want 2", nodes[0].ChunkCount)
 	}
 }
 
@@ -2011,6 +2016,12 @@ func TestInitUpload_OverwriteSkipsConflictAndRelisting(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.Method+" "+r.URL.Path)
 		if r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/f-1/version" {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			// The API rejects any chunk beyond the announced count: 10 bytes is one chunk.
+			if body["chunk_count_expected"] != float64(1) {
+				t.Errorf("chunk_count_expected = %v, want 1", body["chunk_count_expected"])
+			}
 			fmt.Fprint(w, `{"id":"v-2","created_at":"2026-09-08T10:00:00Z"}`)
 
 			return

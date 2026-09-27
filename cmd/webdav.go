@@ -19,7 +19,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1131,10 +1130,9 @@ type streamWriteHandle struct {
 	done      chan error
 	parentURI string
 	info      *webdavFileInfo
-	written   int64        // bytes accepted from the client, for short-upload detection
-	chunks    atomic.Int64 // chunks actually uploaded, for the cached listing entry
-	mimeType  string       // MIME type stored with the node, for the cached listing entry
-	createdAt time.Time    // version creation time, as a later listing will report it
+	written   int64     // bytes accepted from the client, for short-upload detection
+	mimeType  string    // MIME type stored with the node, for the cached listing entry
+	createdAt time.Time // version creation time, as a later listing will report it
 }
 
 func (h *streamWriteHandle) Write(p []byte) (int, error) {
@@ -1151,8 +1149,9 @@ func (h *streamWriteHandle) Close() error {
 	// Guard against a truncated body: the node version was created upfront with the
 	// client-declared Content-Length, so committing fewer bytes would leave a
 	// version whose chunk_count never matches its stored chunks (later downloads
-	// would 404 mid-stream or silently truncate). A clean pipe EOF after a client
-	// abort otherwise looks like success, so validate the byte count explicitly.
+	// would 404 mid-stream or silently truncate). UploadChunks already fails on a
+	// clean pipe EOF short of the declared size; the byte count is checked here
+	// too so the guard does not rest on that alone.
 	if err == nil && h.written != h.info.size {
 		err = fmt.Errorf("incomplete upload: wrote %d of %d bytes", h.written, h.info.size)
 	}
@@ -1171,7 +1170,9 @@ func (h *streamWriteHandle) Close() error {
 		MIMEType:   h.mimeType,
 		Size:       h.info.size,
 		VersionID:  h.info.versionID,
-		ChunkCount: int(h.chunks.Load()),
+		// A successful UploadChunks sent exactly the count announced when the
+		// version was created.
+		ChunkCount: service.ChunkCount(h.info.size),
 	}.WithModTime(h.createdAt))
 
 	return nil
@@ -1234,20 +1235,11 @@ func (fs *webdavFS) openForWriteStream(
 		},
 	}
 
-	// Started after h exists so the counter always has a home: the cached
-	// listing entry needs the exact chunk count, since downloads read that
-	// many chunks, and deriving it from the size would duplicate the chunking
-	// rule held by UploadChunks.
 	go func() {
 		uploadErr := service.UploadChunks(
 			ctx, pipeR, size, fileName, sess.PublicKey, nil,
 			func(gctx context.Context, chunkID int, data []byte) error {
-				if err := fs.client.UploadDataroomChunk(gctx, init.VersionID, chunkID, data); err != nil {
-					return err
-				}
-				h.chunks.Add(1)
-
-				return nil
+				return fs.client.UploadDataroomChunk(gctx, init.VersionID, chunkID, data)
 			},
 		)
 		if uploadErr != nil {

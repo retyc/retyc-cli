@@ -629,7 +629,7 @@ func AddVersionToNode(
 		return StreamUploadInit{}, fmt.Errorf("encrypting MIME type: %w", err)
 	}
 
-	version, err := client.CreateDataroomNodeVersion(ctx, nodeID, totalSize, typeEnc)
+	version, err := client.CreateDataroomNodeVersion(ctx, nodeID, totalSize, ChunkCount(totalSize), typeEnc)
 	if err != nil {
 		return StreamUploadInit{}, fmt.Errorf("creating node version: %w", err)
 	}
@@ -699,7 +699,7 @@ func InitStreamUploadInto(
 		targetNodeID = node.ID
 	}
 
-	version, err := client.CreateDataroomNodeVersion(ctx, targetNodeID, totalSize, typeEnc)
+	version, err := client.CreateDataroomNodeVersion(ctx, targetNodeID, totalSize, ChunkCount(totalSize), typeEnc)
 	if err != nil {
 		if isNewNode {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -779,7 +779,9 @@ func uploadDataroomFile(
 		targetNodeID = node.ID
 	}
 
-	version, err := client.CreateDataroomNodeVersion(ctx, targetNodeID, info.Size(), typeEnc)
+	version, err := client.CreateDataroomNodeVersion(
+		ctx, targetNodeID, info.Size(), ChunkCount(info.Size()), typeEnc,
+	)
 	if err != nil {
 		return fmt.Errorf("creating node version: %w", err)
 	}
