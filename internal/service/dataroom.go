@@ -543,9 +543,21 @@ func resolveGlob(
 	return finalItems, nil
 }
 
+// ErrNameBeingDeleted reports a name the API still reserves for a deleted node.
+//
+// Deleting a node only marks it: the async purge removes the row later, and
+// until then the folder's name uniqueness still counts it. Creating a node of
+// that name answers 409, yet no listing shows the node it conflicts with. The
+// window is seconds with the workers keeping up, longer when their queue lags.
+var ErrNameBeingDeleted = errors.New(
+	"a node of that name was deleted and the server has not released the name yet; retry in a moment")
+
 // findNodeAndTypeByName scans a folder for a node whose decrypted name matches name.
 // It uses the listing (TypeEnc from ListDataroomNodes) rather than GetDataroomNode, because
 // the GET /dataroom/node/{id} endpoint does not return type_enc in its response.
+//
+// Callers reach it after a 409 on creation, so a miss in this fresh listing
+// means the conflicting node is one pending purge: ErrNameBeingDeleted.
 func findNodeAndTypeByName(
 	ctx context.Context, client *api.Client, dataroomID string,
 	parentID *string, name string, identity *age.HybridIdentity,
@@ -560,7 +572,7 @@ func findNodeAndTypeByName(
 		}
 	}
 
-	return "", false, fmt.Errorf("node %q not found in folder", name)
+	return "", false, fmt.Errorf("%q: %w", name, ErrNameBeingDeleted)
 }
 
 // — Upload / download helpers —————————————————————————————————————————————————
@@ -707,6 +719,9 @@ func InitStreamUploadInto(
 			return StreamUploadInit{}, fmt.Errorf("creating file node: %w", createErr)
 		}
 		existingID, isFile, findErr := findNodeAndTypeByName(ctx, client, dataroomID, parentID, fileName, sess.Identity)
+		if errors.Is(findErr, ErrNameBeingDeleted) {
+			return StreamUploadInit{}, findErr
+		}
 		if findErr != nil {
 			return StreamUploadInit{}, fmt.Errorf("node already exists but could not be located: %w", findErr)
 		}
@@ -786,6 +801,9 @@ func uploadDataroomFile(
 			return fmt.Errorf("creating file node: %w", createErr)
 		}
 		existingID, isFile, findErr := findNodeAndTypeByName(ctx, client, dataroomID, parentID, name, sessionIdentity)
+		if errors.Is(findErr, ErrNameBeingDeleted) {
+			return findErr
+		}
 		if findErr != nil {
 			return fmt.Errorf("node already exists but could not be located: %w", findErr)
 		}
@@ -869,6 +887,9 @@ func uploadDataroomDir(
 					existingID, isFile, findErr := findNodeAndTypeByName(
 						ctx, client, dataroomID, entry.remoteParent, e.Name(), sessionIdentity,
 					)
+					if errors.Is(findErr, ErrNameBeingDeleted) {
+						return findErr
+					}
 					if findErr != nil {
 						return fmt.Errorf("folder %s already exists but could not be located: %w", e.Name(), findErr)
 					}
