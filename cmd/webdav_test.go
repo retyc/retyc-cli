@@ -227,13 +227,18 @@ func TestStreamWriteHandle_ShortUploadFails(t *testing.T) {
 	done := make(chan error, 1)
 	done <- nil // upload goroutine "succeeded" (clean pipe EOF)
 
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
 	h := &streamWriteHandle{
-		wfs:       &webdavFS{},
-		newNode:   false, // existing-node path: cleanup only warns, no client call
+		wfs:       newWebdavTestFS(srv),
+		newNode:   false,
 		pipeW:     pipeW,
 		done:      done,
 		parentURI: "retyc://dr/",
-		info:      &webdavFileInfo{name: "f.bin", size: 100},
+		info:      &webdavFileInfo{name: "f.bin", size: 100, versionID: "v-2"},
 		written:   40, // only 40 of 100 bytes arrived
 	}
 
@@ -243,6 +248,54 @@ func TestStreamWriteHandle_ShortUploadFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "incomplete upload") {
 		t.Errorf("error = %v, want it to mention incomplete upload", err)
+	}
+}
+
+// TestStreamWriteHandle_CleanupDiscardsWhatTheUploadCreated verifies that a
+// failed PUT removes the node it created, but only its own version on a node
+// that already existed, and that a refused delete (contributors lack
+// can_delete) still surfaces the upload error rather than the cleanup one.
+func TestStreamWriteHandle_CleanupDiscardsWhatTheUploadCreated(t *testing.T) {
+	cases := []struct {
+		name       string
+		newNode    bool
+		deleteCode int
+		wantCall   string
+	}{
+		{"new node", true, http.StatusNoContent, "DELETE /dataroom/node/n1"},
+		{"existing node", false, http.StatusNoContent, "DELETE /dataroom/node/version/v2"},
+		{"delete refused", false, http.StatusForbidden, "DELETE /dataroom/node/version/v2"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var calls []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls = append(calls, r.Method+" "+r.URL.Path)
+				w.WriteHeader(c.deleteCode)
+			}))
+			defer srv.Close()
+
+			done := make(chan error, 1)
+			done <- errors.New("chunk upload failed")
+			_, pipeW := io.Pipe()
+			h := &streamWriteHandle{
+				wfs:       newWebdavTestFS(srv),
+				nodeID:    "n1",
+				newNode:   c.newNode,
+				pipeW:     pipeW,
+				done:      done,
+				parentURI: "retyc://dr1/",
+				info:      &webdavFileInfo{name: "f.bin", size: 100, versionID: "v2"},
+				written:   100,
+			}
+			err := h.Close()
+			if err == nil || !strings.Contains(err.Error(), "chunk upload failed") {
+				t.Errorf("Close() = %v, want the upload error", err)
+			}
+			if len(calls) != 1 || calls[0] != c.wantCall {
+				t.Errorf("calls = %v, want [%s]", calls, c.wantCall)
+			}
+		})
 	}
 }
 
@@ -1914,7 +1967,8 @@ func TestStreamWriteHandle_CachesVersionCreationTime(t *testing.T) {
 		mimeType:  "text/plain",
 		createdAt: createdAt,
 		parentURI: "retyc://dr1/",
-		info:      &webdavFileInfo{name: "f.txt", size: 0, nodeID: "n1", versionID: "v1"},
+		info:      &webdavFileInfo{name: "f.txt", size: service.UploadChunkSize + 1, nodeID: "n1", versionID: "v1"},
+		written:   service.UploadChunkSize + 1,
 	}
 	if err := h.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -1930,17 +1984,25 @@ func TestStreamWriteHandle_CachesVersionCreationTime(t *testing.T) {
 	if nodes[0].MIMEType != "text/plain" || nodes[0].VersionID != "v1" {
 		t.Errorf("cached entry = %+v, want the stored MIME type and version", nodes[0])
 	}
+	// Downloads read exactly ChunkCount chunks: it must be the announced count.
+	if nodes[0].ChunkCount != 2 {
+		t.Errorf("cached ChunkCount = %d, want 2", nodes[0].ChunkCount)
+	}
 }
 
 // A failed upload must leave the cache exactly as it was: the node either never
 // existed or still holds its previous version, and inventing an entry for it
 // would serve a file the server never accepted.
 func TestStreamWriteHandle_FailedUploadLeavesCacheUntouched(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
 	previous := []service.DataroomNodeInfo{{ID: "n1", Name: "f.bin", Type: "file", Size: 10, VersionID: "v1"}}
-	fs := &webdavFS{
-		nodeCache: map[string]*nodeCacheEntry{
-			"retyc://dr1/": {nodes: previous, fetchedAt: time.Now()},
-		},
+	fs := newWebdavTestFS(srv)
+	fs.nodeCache = map[string]*nodeCacheEntry{
+		"retyc://dr1/": {nodes: previous, fetchedAt: time.Now()},
 	}
 	done := make(chan error, 1)
 	done <- errors.New("chunk upload failed")
@@ -1949,7 +2011,7 @@ func TestStreamWriteHandle_FailedUploadLeavesCacheUntouched(t *testing.T) {
 	h := &streamWriteHandle{
 		wfs:       fs,
 		nodeID:    "n1",
-		newNode:   false, // existing node: cleanup only warns, no client call
+		newNode:   false,
 		pipeW:     pipeW,
 		done:      done,
 		parentURI: "retyc://dr1/",
@@ -2011,6 +2073,12 @@ func TestInitUpload_OverwriteSkipsConflictAndRelisting(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.Method+" "+r.URL.Path)
 		if r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/f-1/version" {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			// The API rejects any chunk beyond the announced count: 10 bytes is one chunk.
+			if body["chunk_count_expected"] != float64(1) {
+				t.Errorf("chunk_count_expected = %v, want 1", body["chunk_count_expected"])
+			}
 			fmt.Fprint(w, `{"id":"v-2","created_at":"2026-09-08T10:00:00Z"}`)
 
 			return

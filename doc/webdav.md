@@ -253,7 +253,9 @@ dataroom title.
 - If the **refresh token expires**, the server shuts down gracefully (draining any
   in-flight uploads) and exits with a message. Run `retyc auth login` and restart it.
 - `Ctrl-C` (SIGINT) or SIGTERM triggers a graceful shutdown: in-flight uploads finish,
-  temporary files are cleaned up, and any orphaned node from a failed upload is removed.
+  temporary files are cleaned up, and a failed upload is discarded: the node it created,
+  or only its new version when it overwrote an existing file (best-effort — deleting needs
+  a privileged role, so a contributor's failed version is reported, not removed).
 
 ## Security notes
 

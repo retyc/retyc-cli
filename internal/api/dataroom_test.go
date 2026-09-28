@@ -273,6 +273,23 @@ func TestDeleteDataroomNode(t *testing.T) {
 	}
 }
 
+func TestDeleteDataroomNodeVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/dataroom/node/version/ver-9" {
+			t.Errorf("path = %q, want /dataroom/node/version/ver-9", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	if err := newTestClient(srv).DeleteDataroomNodeVersion(context.Background(), "ver-9"); err != nil {
+		t.Fatalf("DeleteDataroomNodeVersion() error = %v", err)
+	}
+}
+
 func TestCreateDataroomNodeVersion(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -286,6 +303,9 @@ func TestCreateDataroomNodeVersion(t *testing.T) {
 		if body["original_size"] != float64(1024) {
 			t.Errorf("original_size = %v, want 1024", body["original_size"])
 		}
+		if body["chunk_count_expected"] != float64(1) {
+			t.Errorf("chunk_count_expected = %v, want 1", body["chunk_count_expected"])
+		}
 		if body["type_enc"] != "enc-mime" {
 			t.Errorf("type_enc = %v, want enc-mime", body["type_enc"])
 		}
@@ -294,7 +314,7 @@ func TestCreateDataroomNodeVersion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ver, err := newTestClient(srv).CreateDataroomNodeVersion(context.Background(), "node-1", 1024, "enc-mime")
+	ver, err := newTestClient(srv).CreateDataroomNodeVersion(context.Background(), "node-1", 1024, 1, "enc-mime")
 	if err != nil {
 		t.Fatalf("CreateDataroomNodeVersion() error = %v", err)
 	}

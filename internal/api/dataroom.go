@@ -268,13 +268,25 @@ func (c *Client) DeleteDataroomNode(ctx context.Context, nodeID string) error {
 	return c.Delete(ctx, "/dataroom/node/"+nodeID)
 }
 
+// DeleteDataroomNodeVersion removes a single version of a file node, leaving the
+// node and its other versions in place. It requires the can_delete capability
+// (privileged roles), like DeleteDataroomNode.
+func (c *Client) DeleteDataroomNodeVersion(ctx context.Context, versionID string) error {
+	return c.Delete(ctx, "/dataroom/node/version/"+versionID)
+}
+
 // CreateDataroomNodeVersion creates a new version for a file node.
+//
+// chunkCount is announced up front (chunk_count_expected): the API rejects any
+// chunk index outside [0, chunkCount) with 422, and never lets a chunk already
+// stored be overwritten, so it must match exactly what the upload will send.
 func (c *Client) CreateDataroomNodeVersion(
-	ctx context.Context, nodeID string, originalSize int64, typeEnc string,
+	ctx context.Context, nodeID string, originalSize int64, chunkCount int, typeEnc string,
 ) (*DataroomNodeVersion, error) {
 	body := map[string]any{
-		"original_size": originalSize,
-		"type_enc":      typeEnc,
+		"original_size":        originalSize,
+		"chunk_count_expected": chunkCount,
+		"type_enc":             typeEnc,
 	}
 	data, err := json.Marshal(body)
 	if err != nil {

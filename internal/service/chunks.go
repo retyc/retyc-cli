@@ -22,11 +22,30 @@ const (
 	UploadChunkSize = 8 * 1024 * 1024 // 8 MB
 )
 
+// ChunkCount is the number of chunks UploadChunks sends for fileSize bytes (none
+// for an empty file). A dataroom version announces it when it is created
+// (chunk_count_expected), before a single byte is read.
+func ChunkCount(fileSize int64) int {
+	if fileSize <= 0 {
+		return 0
+	}
+
+	// Ceiling without the usual "+ size - 1", which would overflow for a size
+	// near MaxInt64 — reachable from a client-supplied WebDAV Content-Length.
+	return int((fileSize-1)/UploadChunkSize + 1)
+}
+
 // UploadChunks reads r in UploadChunkSize chunks, encrypts each with sessionPubKey,
 // and calls uploadFn for each encrypted chunk using up to api.concurrency.upload
 // concurrent goroutines (see SetConcurrency). An internal context is cancelled as soon as the first error is detected,
 // stopping all in-flight workers promptly. progress is called (if non-nil) after each
 // chunk is successfully uploaded.
+//
+// r must yield exactly fileSize bytes, so that exactly ChunkCount(fileSize) chunks
+// are sent: the dataroom API rejects a chunk index beyond the count announced at
+// version creation, and a chunk it already stored cannot be sent again. A source
+// that grows past fileSize (a local file appended to mid-upload) fails before
+// the extra chunk is sent; one that ends early fails once the last chunk is in.
 func UploadChunks(
 	ctx context.Context,
 	r io.Reader,
@@ -62,6 +81,7 @@ func UploadChunks(
 	}
 
 	buf := make([]byte, UploadChunkSize)
+	var total int64
 readLoop:
 	for chunkID := 0; ; chunkID++ {
 		if hasErr() {
@@ -69,6 +89,12 @@ readLoop:
 		}
 
 		n, readErr := io.ReadFull(r, buf)
+		total += int64(n)
+		if total > fileSize {
+			setErr(fmt.Errorf("source is larger than its declared %d bytes", fileSize))
+
+			break
+		}
 		if n > 0 {
 			// One short span per chunk under the caller's span: index and size
 			// only, never the file name.
@@ -123,6 +149,9 @@ readLoop:
 	}
 
 	wg.Wait()
+	if firstErr == nil && total < fileSize {
+		return fmt.Errorf("source ended after %d of its declared %d bytes", total, fileSize)
+	}
 
 	return firstErr
 }

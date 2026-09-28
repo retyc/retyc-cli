@@ -543,9 +543,21 @@ func resolveGlob(
 	return finalItems, nil
 }
 
+// ErrNameBeingDeleted reports a name the API still reserves for a deleted node.
+//
+// Deleting a node only marks it: the async purge removes the row later, and
+// until then the folder's name uniqueness still counts it. Creating a node of
+// that name answers 409, yet no listing shows the node it conflicts with. The
+// window is seconds with the workers keeping up, longer when their queue lags.
+var ErrNameBeingDeleted = errors.New(
+	"a node of that name was deleted and the server has not released the name yet; retry in a moment")
+
 // findNodeAndTypeByName scans a folder for a node whose decrypted name matches name.
 // It uses the listing (TypeEnc from ListDataroomNodes) rather than GetDataroomNode, because
 // the GET /dataroom/node/{id} endpoint does not return type_enc in its response.
+//
+// Callers reach it after a 409 on creation, so a miss in this fresh listing
+// means the conflicting node is one pending purge: ErrNameBeingDeleted.
 func findNodeAndTypeByName(
 	ctx context.Context, client *api.Client, dataroomID string,
 	parentID *string, name string, identity *age.HybridIdentity,
@@ -560,7 +572,7 @@ func findNodeAndTypeByName(
 		}
 	}
 
-	return "", false, fmt.Errorf("node %q not found in folder", name)
+	return "", false, fmt.Errorf("%q: %w", name, ErrNameBeingDeleted)
 }
 
 // — Upload / download helpers —————————————————————————————————————————————————
@@ -598,6 +610,25 @@ type StreamUploadInit struct {
 	NewNode   bool      // node created here; callers delete it on upload failure
 }
 
+// DiscardFailedUpload removes what a failed upload left behind: the whole node
+// when the upload created it, otherwise only the version it added, so that the
+// node's earlier versions survive. A failed version can never be completed —
+// stored chunks are immutable and the API refuses any index beyond the count
+// announced at creation — so left in place it only clutters the history.
+//
+// It runs detached from the upload context, which is usually cancelled by then,
+// on its own short timeout. It is best-effort: deleting requires the can_delete
+// capability, which contributors lack, so the caller only reports its error.
+func DiscardFailedUpload(client *api.Client, nodeID, versionID string, newNode bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if newNode {
+		return client.DeleteDataroomNode(ctx, nodeID)
+	}
+
+	return client.DeleteDataroomNodeVersion(ctx, versionID)
+}
+
 // AddVersionToNode creates a new version on a node that is already known to
 // exist, and returns the same descriptor as InitStreamUploadInto.
 //
@@ -629,7 +660,7 @@ func AddVersionToNode(
 		return StreamUploadInit{}, fmt.Errorf("encrypting MIME type: %w", err)
 	}
 
-	version, err := client.CreateDataroomNodeVersion(ctx, nodeID, totalSize, typeEnc)
+	version, err := client.CreateDataroomNodeVersion(ctx, nodeID, totalSize, ChunkCount(totalSize), typeEnc)
 	if err != nil {
 		return StreamUploadInit{}, fmt.Errorf("creating node version: %w", err)
 	}
@@ -688,6 +719,9 @@ func InitStreamUploadInto(
 			return StreamUploadInit{}, fmt.Errorf("creating file node: %w", createErr)
 		}
 		existingID, isFile, findErr := findNodeAndTypeByName(ctx, client, dataroomID, parentID, fileName, sess.Identity)
+		if errors.Is(findErr, ErrNameBeingDeleted) {
+			return StreamUploadInit{}, findErr
+		}
 		if findErr != nil {
 			return StreamUploadInit{}, fmt.Errorf("node already exists but could not be located: %w", findErr)
 		}
@@ -699,7 +733,7 @@ func InitStreamUploadInto(
 		targetNodeID = node.ID
 	}
 
-	version, err := client.CreateDataroomNodeVersion(ctx, targetNodeID, totalSize, typeEnc)
+	version, err := client.CreateDataroomNodeVersion(ctx, targetNodeID, totalSize, ChunkCount(totalSize), typeEnc)
 	if err != nil {
 		if isNewNode {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -767,6 +801,9 @@ func uploadDataroomFile(
 			return fmt.Errorf("creating file node: %w", createErr)
 		}
 		existingID, isFile, findErr := findNodeAndTypeByName(ctx, client, dataroomID, parentID, name, sessionIdentity)
+		if errors.Is(findErr, ErrNameBeingDeleted) {
+			return findErr
+		}
 		if findErr != nil {
 			return fmt.Errorf("node already exists but could not be located: %w", findErr)
 		}
@@ -779,8 +816,16 @@ func uploadDataroomFile(
 		targetNodeID = node.ID
 	}
 
-	version, err := client.CreateDataroomNodeVersion(ctx, targetNodeID, info.Size(), typeEnc)
+	version, err := client.CreateDataroomNodeVersion(
+		ctx, targetNodeID, info.Size(), ChunkCount(info.Size()), typeEnc,
+	)
 	if err != nil {
+		// A node created here without any version would linger as an empty,
+		// undownloadable entry.
+		if newNode {
+			_ = DiscardFailedUpload(client, targetNodeID, "", true)
+		}
+
 		return fmt.Errorf("creating node version: %w", err)
 	}
 
@@ -788,12 +833,12 @@ func uploadDataroomFile(
 		func(ctx context.Context, chunkID int, data []byte) error {
 			return client.UploadDataroomChunk(ctx, version.ID, chunkID, data)
 		})
-	if uploadErr != nil && newNode {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if delErr := client.DeleteDataroomNode(cleanupCtx, targetNodeID); delErr == nil {
+	if uploadErr != nil {
+		if delErr := DiscardFailedUpload(client, targetNodeID, version.ID, newNode); delErr == nil {
 			fmt.Fprintf(os.Stderr, "  cleaned up: %s\n", displayName)
+		} else {
+			fmt.Fprintf(os.Stderr, "  %s: could not clean up the failed upload: %v\n", displayName, delErr)
 		}
-		cleanupCancel()
 	}
 
 	return uploadErr
@@ -842,6 +887,9 @@ func uploadDataroomDir(
 					existingID, isFile, findErr := findNodeAndTypeByName(
 						ctx, client, dataroomID, entry.remoteParent, e.Name(), sessionIdentity,
 					)
+					if errors.Is(findErr, ErrNameBeingDeleted) {
+						return findErr
+					}
 					if findErr != nil {
 						return fmt.Errorf("folder %s already exists but could not be located: %w", e.Name(), findErr)
 					}

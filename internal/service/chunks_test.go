@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -565,5 +566,98 @@ func TestStreamDownloadChunks_DecryptFailureMarksTheSpan(t *testing.T) {
 	spans := childSpans(exp, parent, "crypto.decrypt")
 	if len(spans) != 1 || spans[0].Status.Code != codes.Error {
 		t.Fatalf("crypto.decrypt spans = %+v, want one with status Error", spans)
+	}
+}
+
+// TestChunkCount pins the count announced at version creation to the chunking
+// UploadChunks actually performs, on every boundary.
+func TestChunkCount(t *testing.T) {
+	cases := []struct {
+		size int64
+		want int
+	}{
+		{0, 0},
+		{1, 1},
+		{UploadChunkSize - 1, 1},
+		{UploadChunkSize, 1},
+		{UploadChunkSize + 1, 2},
+		{UploadChunkSize * 3, 3},
+	}
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("generating keypair: %v", err)
+	}
+	for _, c := range cases {
+		if got := ChunkCount(c.size); got != c.want {
+			t.Errorf("ChunkCount(%d) = %d, want %d", c.size, got, c.want)
+		}
+		var sent atomic.Int32
+		err := UploadChunks(context.Background(), bytes.NewReader(make([]byte, c.size)), c.size, "f.bin",
+			identity.Recipient().String(), nil, func(context.Context, int, []byte) error {
+				sent.Add(1)
+
+				return nil
+			})
+		if err != nil {
+			t.Fatalf("UploadChunks(%d bytes): %v", c.size, err)
+		}
+		if int(sent.Load()) != c.want {
+			t.Errorf("UploadChunks(%d bytes) sent %d chunks, ChunkCount says %d", c.size, sent.Load(), c.want)
+		}
+	}
+}
+
+// TestChunkCount_LargestSize verifies that the count stays positive for the
+// largest size an int64 holds: a WebDAV client picks the Content-Length, and a
+// negative count would be announced to the API as is.
+func TestChunkCount_LargestSize(t *testing.T) {
+	if got, want := ChunkCount(math.MaxInt64), 1<<40; got != want {
+		t.Errorf("ChunkCount(MaxInt64) = %d, want %d", got, want)
+	}
+}
+
+// TestUploadChunks_SourceLargerThanDeclared verifies that a source growing past
+// its declared size (a local file appended to mid-upload) fails before the chunk
+// the API would reject as outside the announced count is ever sent.
+func TestUploadChunks_SourceLargerThanDeclared(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("generating keypair: %v", err)
+	}
+	declared := int64(UploadChunkSize)
+	data := make([]byte, declared+10)
+
+	var mu sync.Mutex
+	var sent []int
+	err = UploadChunks(context.Background(), bytes.NewReader(data), declared, "f.bin",
+		identity.Recipient().String(), nil, func(_ context.Context, chunkID int, _ []byte) error {
+			mu.Lock()
+			sent = append(sent, chunkID)
+			mu.Unlock()
+
+			return nil
+		})
+	if err == nil || !strings.Contains(err.Error(), "larger than its declared") {
+		t.Fatalf("err = %v, want a declared-size error", err)
+	}
+	for _, id := range sent {
+		if id >= ChunkCount(declared) {
+			t.Errorf("chunk %d sent, beyond the %d announced", id, ChunkCount(declared))
+		}
+	}
+}
+
+// TestUploadChunks_SourceShorterThanDeclared verifies that a source ending early
+// (a truncated WebDAV body, a file shrunk mid-upload) is an error, not a version
+// silently missing its last chunks.
+func TestUploadChunks_SourceShorterThanDeclared(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("generating keypair: %v", err)
+	}
+	err = UploadChunks(context.Background(), bytes.NewReader(make([]byte, 40)), 100, "f.bin",
+		identity.Recipient().String(), nil, func(context.Context, int, []byte) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "40 of its declared 100") {
+		t.Fatalf("err = %v, want a short-source error", err)
 	}
 }

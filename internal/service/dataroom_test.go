@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -384,5 +385,60 @@ func TestResolvePath_TagsSpanWithNodeID(t *testing.T) {
 	}
 	if got != "019e9e07-2200-743e-8ca4-054abf48702b" {
 		t.Errorf("retyc.node.id = %q", got)
+	}
+}
+
+// TestDiscardFailedUpload verifies that a failed upload removes the node only
+// when it created it, and otherwise just its own version, so that the earlier
+// versions of a pre-existing file survive.
+func TestDiscardFailedUpload(t *testing.T) {
+	cases := []struct {
+		newNode bool
+		want    string
+	}{
+		{true, "DELETE /dataroom/node/n1"},
+		{false, "DELETE /dataroom/node/version/v2"},
+	}
+	for _, c := range cases {
+		var calls []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		err := DiscardFailedUpload(newExportTestClient(srv), "n1", "v2", c.newNode)
+		srv.Close()
+		if err != nil {
+			t.Errorf("newNode=%v: DiscardFailedUpload() = %v", c.newNode, err)
+		}
+		if len(calls) != 1 || calls[0] != c.want {
+			t.Errorf("newNode=%v: calls = %v, want [%s]", c.newNode, calls, c.want)
+		}
+	}
+}
+
+// TestInitStreamUploadInto_NameHeldByDeletedNode verifies that a 409 whose node
+// no fresh listing shows — a deleted node the async purge has not removed yet —
+// reports ErrNameBeingDeleted instead of an unexplained "could not be located".
+func TestInitStreamUploadInto_NameHeldByDeletedNode(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/dr1/node":
+			http.Error(w, `{"detail":"Duplicate node name hash in the same folder"}`, http.StatusConflict)
+		case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/nodes":
+			fmt.Fprint(w, `{"items":[],"total":0,"page":1,"pages":1}`)
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+	_, err = InitStreamUploadInto(context.Background(), newExportTestClient(srv), "dr1", nil, "doc.txt", 10, sess)
+	if !errors.Is(err, ErrNameBeingDeleted) {
+		t.Fatalf("err = %v, want ErrNameBeingDeleted", err)
 	}
 }
