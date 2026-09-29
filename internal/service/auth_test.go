@@ -348,8 +348,8 @@ func TestUnlockUserIdentity_Wrong(t *testing.T) {
 	if err == nil {
 		t.Fatal("UnlockUserIdentity() error = nil, want wrong passphrase error")
 	}
-	if !strings.Contains(err.Error(), "wrong key passphrase") {
-		t.Errorf("error = %q, want it to mention 'wrong key passphrase'", err)
+	if !errors.Is(err, ErrWrongKeyPassphrase) {
+		t.Errorf("error = %q, want it to wrap ErrWrongKeyPassphrase", err)
 	}
 }
 

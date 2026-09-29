@@ -20,6 +20,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// ErrWrongKeyPassphrase is returned when the key passphrase does not decrypt
+// the user's private key. Retrying with the same passphrase cannot succeed.
+var ErrWrongKeyPassphrase = errors.New("wrong key passphrase")
+
 // decryptKeyWithPassphrase runs the scrypt that unlocks a private key with a
 // passphrase, as one crypto.unlock_key span under the caller's span. kind is
 // "user" (the account key) or "transfer" (the ephemeral key of a transfer);
@@ -71,7 +75,7 @@ func ResolveUserIdentity(
 		}
 		identityStr, err = decryptKeyWithPassphrase(ctx, "user", userKey.PrivateKeyEnc, passphrase)
 		if err != nil {
-			return nil, fmt.Errorf("wrong key passphrase: %w", err)
+			return nil, fmt.Errorf("%w: %w", ErrWrongKeyPassphrase, err)
 		}
 		// The scrypt above needs ~256 MiB of working memory (age work factor 2^18).
 		// Hand it back to the OS now rather than letting the runtime scavenge it over
@@ -116,7 +120,7 @@ func UnlockUserIdentity(ctx context.Context, client *api.Client, reader Passphra
 	}
 	identityStr, err := decryptKeyWithPassphrase(ctx, "user", userKey.PrivateKeyEnc, passphrase)
 	if err != nil {
-		return nil, fmt.Errorf("wrong key passphrase: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrWrongKeyPassphrase, err)
 	}
 	// Same reasoning as ResolveUserIdentity: release the ~256 MiB scrypt buffer now.
 	debug.FreeOSMemory()

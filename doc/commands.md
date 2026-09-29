@@ -24,6 +24,18 @@ retyc --json transfer ls | jq -r '.items[] | select(.status == "active") | .id'
 retyc --json user quota | jq .used_storage
 ```
 
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Success |
+| `1`  | Any failure, including transient ones (network, API or identity provider unreachable) |
+| `77` | Authentication required: no stored token, or the refresh token was rejected (expired or revoked). Retrying cannot help: run `retyc auth login` or provide a new `RETYC_TOKEN` |
+| `78` | Key passphrase missing (`RETYC_KEY_PASSPHRASE` unset and no TTY to prompt) or wrong. Retrying cannot help: fix the passphrase |
+
+Codes `77` (`EX_NOPERM` in `sysexits.h`) and `78` (`EX_CONFIG`) are stable: a
+supervisor restarting `retyc webdav serve` should stop on them rather than retry.
+
 ## Config
 
 | Command             | Description                                                              |

@@ -602,5 +602,9 @@ The CLI exposes everything as `transfer`. Do not rename backend routes.
 - No `vendor/` directory — dependencies fetched from module cache
 - `.retyc/` in CWD is gitignored (dev token/config should not be committed)
 - `SilenceUsage: true` + `SilenceErrors: true` on rootCmd — errors printed once by `RunE`, not by cobra
+- Exit codes: `exitCode` (`cmd/root.go`) returns `exitAuthRequired` (77) when the error wraps
+  `auth.ErrNoToken` / `auth.ErrNoRefreshToken`, `exitConfig` (78) for `config.ErrNoKeyPassphrase` /
+  `service.ErrWrongKeyPassphrase`, 1 otherwise. Supervisors (`retyc-k8s-csi`) rely on 77/78 to stop
+  restarting `webdav serve`: keep those sentinels wrapped (`%w`) up to `RunE`
 - No auto-commit
 - Always perform linting with `make lint-fix` after editing code (uses `golangci-lint` with `--fix` to auto-apply simple fixes)
