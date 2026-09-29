@@ -362,9 +362,15 @@ func DownloadTransfer(
 		outputDir = "transfer-" + RandomLetters(8)
 	}
 
+	names := make([]string, len(decFiles))
+	for i, f := range decFiles {
+		names[i] = f.name
+	}
+	localNames := localFileNames(names)
+
 	if _, err := os.Stat(outputDir); err == nil {
-		for _, f := range decFiles {
-			dest := filepath.Join(outputDir, filepath.Base(f.name))
+		for _, local := range localNames {
+			dest := filepath.Join(outputDir, local)
 			if _, err := os.Stat(dest); err == nil {
 				return nil, fmt.Errorf("file already exists: %s", dest)
 			}
@@ -375,14 +381,14 @@ func DownloadTransfer(
 	}
 
 	var downloadedFiles []string
-	for _, f := range decFiles {
-		if err := DownloadChunks(ctx, outputDir, f.name, f.OriginalSize, f.ChunkCount, sessionIdentity, progress,
+	for i, f := range decFiles {
+		if err := DownloadChunks(ctx, outputDir, localNames[i], f.OriginalSize, f.ChunkCount, sessionIdentity, progress,
 			func(ctx context.Context, chunkID int) ([]byte, error) {
 				return client.DownloadChunk(ctx, f.ID, chunkID)
 			}); err != nil {
 			return nil, fmt.Errorf("%s: %w", f.name, err)
 		}
-		downloadedFiles = append(downloadedFiles, filepath.Base(f.name))
+		downloadedFiles = append(downloadedFiles, localNames[i])
 	}
 
 	return &DownloadTransferResult{

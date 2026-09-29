@@ -21,6 +21,7 @@ import (
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/internal/ui"
 )
 
 // jsonOutput is bound to the --json persistent flag on rootCmd.
@@ -41,7 +42,8 @@ func printJSON(v any) error {
 // printError writes err on stderr, as {"error": "..."} when --json is set.
 func printError(err error) {
 	if !jsonOutput {
-		fmt.Fprintln(os.Stderr, err)
+		// Errors quote names and server messages: escape them, keeping line breaks.
+		fmt.Fprintln(os.Stderr, ui.EscapeLines(err.Error()))
 
 		return
 	}

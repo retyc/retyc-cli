@@ -302,3 +302,18 @@ func TestBuildAdminNodeTree_SiblingCollisionsSuffixed(t *testing.T) {
 		}
 	}
 }
+
+// Control and bidi characters in a decrypted name must not reach the file
+// system: they are replaced, on top of the separator neutralisation.
+func TestSanitizeNodeName_ControlCharacters(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"facture.pdf\x1b[2K\rFILE  x.pdf\x1b]0;PWNED\x07", "facture.pdf_[2K_FILE  x.pdf_]0;PWNED_"},
+		{"invoice\u202Efdp.exe", "invoice_fdp.exe"},
+		{"a/b\x1b..c", "a_b___c"},
+	}
+	for _, tt := range tests {
+		if got := sanitizeNodeName(tt.in); got != tt.want {
+			t.Errorf("sanitizeNodeName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/telemetry"
+	"github.com/retyc/retyc-cli/internal/ui"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -297,6 +298,36 @@ func StreamDownloadChunks(
 // already present: nothing is overwritten.
 var ErrFileExists = errors.New("file already exists")
 
+// localFileName is the on-disk name of a downloaded file: the base of its
+// decrypted name, with control and format characters replaced so a name
+// chosen by the sender cannot plant escape sequences in a directory listing,
+// and never a name that designates the directory itself. It is idempotent,
+// so DownloadChunks can apply it again to a name its caller already mapped.
+func localFileName(name string) string {
+	base := ui.FileName(filepath.Base(name))
+	switch base {
+	case ".", "..", string(filepath.Separator):
+		return "_"
+	}
+
+	return base
+}
+
+// localFileNames maps the decrypted names of files downloaded into the same
+// directory to distinct on-disk names. localFileName is many-to-one ("a_"
+// and "a\x1b" both give "a_", and a transfer may hold two "report.pdf"): a
+// collision would otherwise stop the download halfway on ErrFileExists. The
+// later duplicates are suffixed ("a_ (2)") the way the admin export does.
+func localFileNames(names []string) []string {
+	taken := make(map[string]bool, len(names))
+	local := make([]string, len(names))
+	for i, name := range names {
+		local[i] = uniqueSiblingName(taken, "", localFileName(name))
+	}
+
+	return local
+}
+
 func DownloadChunks(
 	ctx context.Context,
 	outputDir string,
@@ -307,7 +338,7 @@ func DownloadChunks(
 	progress ProgressFn,
 	downloadFn func(ctx context.Context, chunkID int) ([]byte, error),
 ) (retErr error) {
-	dest := filepath.Join(outputDir, filepath.Base(name))
+	dest := filepath.Join(outputDir, localFileName(name))
 	partDest := dest + ".part"
 
 	if _, err := os.Stat(dest); err == nil {

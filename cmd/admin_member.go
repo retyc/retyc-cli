@@ -6,6 +6,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/retyc/retyc-cli/internal/api"
+	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -50,7 +51,7 @@ var adminMemberLsCmd = &cobra.Command{
 		fmt.Fprintln(w, "USER ID\tEMAIL\tNAME\tROLE\tSTATUS\tCREATED")
 		for _, m := range members {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				m.ID, m.Email, m.FullName, m.OrganizationRole, m.Status,
+				m.ID, ui.Escape(m.Email), ui.Escape(m.FullName), m.OrganizationRole, m.Status,
 				m.CreatedAt.Format("2006-01-02"))
 		}
 		_ = w.Flush()
@@ -79,8 +80,8 @@ var adminMemberInfoCmd = &cobra.Command{
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(w, "ID:\t%s\n", m.ID)
-		fmt.Fprintf(w, "Email:\t%s\n", m.Email)
-		fmt.Fprintf(w, "Name:\t%s\n", m.FullName)
+		fmt.Fprintf(w, "Email:\t%s\n", ui.Escape(m.Email))
+		fmt.Fprintf(w, "Name:\t%s\n", ui.Escape(m.FullName))
 		fmt.Fprintf(w, "Role:\t%s\n", m.OrganizationRole)
 		fmt.Fprintf(w, "Status:\t%s\n", m.Status)
 		fmt.Fprintf(w, "Created:\t%s\n", m.CreatedAt.Format("2006-01-02 15:04"))
@@ -203,7 +204,7 @@ var adminMemberRmCmd = &cobra.Command{
 				Status string `json:"status"`
 			}{args[0], m.Email, "removed"})
 		}
-		fmt.Printf("Member %s removed.\n", m.Email)
+		fmt.Printf("Member %s removed.\n", ui.Escape(m.Email))
 
 		return nil
 	},

@@ -6,6 +6,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/retyc/retyc-cli/internal/api"
+	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -45,7 +46,7 @@ var adminBlacklistLsCmd = &cobra.Command{
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "DOMAIN ID\tDOMAIN\tCREATED")
 		for _, d := range domains {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", d.ID, d.DomainName, d.CreatedAt.Format("2006-01-02"))
+			fmt.Fprintf(w, "%s\t%s\t%s\n", d.ID, ui.Escape(d.DomainName), d.CreatedAt.Format("2006-01-02"))
 		}
 		_ = w.Flush()
 
@@ -69,7 +70,7 @@ var adminBlacklistAddCmd = &cobra.Command{
 		if jsonOutput {
 			return printJSON(d)
 		}
-		fmt.Printf("Domain %s blacklisted (id %s).\n", d.DomainName, d.ID)
+		fmt.Printf("Domain %s blacklisted (id %s).\n", ui.Escape(d.DomainName), d.ID)
 
 		return nil
 	},

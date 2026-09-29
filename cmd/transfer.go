@@ -73,7 +73,7 @@ var transferLsCmd = &cobra.Command{
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 				t.ID,
 				t.Status,
-				title,
+				ui.Escape(title),
 				t.CreatedAt.Format("2006-01-02 15:04"),
 			)
 		}
@@ -114,7 +114,7 @@ var transferInfoCmd = &cobra.Command{
 
 		d := info.Details
 		fmt.Printf("ID:      %s\n", ptrOr(d.ID, "-"))
-		fmt.Printf("Title:   %s\n", ptrOr(d.Title, "-"))
+		fmt.Printf("Title:   %s\n", ui.Escape(ptrOr(d.Title, "-")))
 		fmt.Printf("Status:  %s\n", d.Status)
 		if d.CreatedAt != nil {
 			fmt.Printf("Created: %s\n", d.CreatedAt.Format("2006-01-02 15:04"))
@@ -123,7 +123,7 @@ var transferInfoCmd = &cobra.Command{
 			fmt.Printf("Expires: %s\n", d.ExpiresAt.Format("2006-01-02 15:04"))
 		}
 		if d.WebURL != "" {
-			fmt.Printf("URL:     %s\n", d.WebURL)
+			fmt.Printf("URL:     %s\n", ui.Escape(d.WebURL))
 		}
 
 		if len(d.Recipients) > 0 {
@@ -134,7 +134,7 @@ var transferInfoCmd = &cobra.Command{
 				if r.KeyEncrypted {
 					status = "user key encrypted"
 				}
-				fmt.Printf("  %s  [%s]\n", email, status)
+				fmt.Printf("  %s  [%s]\n", ui.Escape(email), status)
 			}
 		}
 
@@ -158,7 +158,7 @@ var transferInfoCmd = &cobra.Command{
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "  NAME\tSIZE")
 		for _, f := range info.Files {
-			fmt.Fprintf(w, "  %s\t%s\n", f.Name, ui.FormatSize(f.Size))
+			fmt.Fprintf(w, "  %s\t%s\n", ui.Escape(f.Name), ui.FormatSize(f.Size))
 		}
 		_ = w.Flush()
 
@@ -257,11 +257,12 @@ func confirmFileList(names []string, sizes []int64, totalSize int64, extras []st
 }
 
 // printBoxedMessage prints a decrypted message with a left vertical bar.
+// The message is written by the sender: each line is escaped.
 func printBoxedMessage(msg string) {
 	fmt.Println("\nMessage:")
 	scanner := bufio.NewScanner(strings.NewReader(msg))
 	for scanner.Scan() {
-		fmt.Printf(" │ %s\n", scanner.Text())
+		fmt.Printf(" │ %s\n", ui.Escape(scanner.Text()))
 	}
 	fmt.Println()
 }
@@ -400,7 +401,7 @@ var transferCreateCmd = &cobra.Command{
 
 		fmt.Printf("Transfer %s ready.\n", result.ID)
 		if result.WebURL != "" {
-			fmt.Printf("URL: %s\n", result.WebURL)
+			fmt.Printf("URL: %s\n", ui.Escape(result.WebURL))
 		}
 		if result.Passphrase != "" && genPassphrase {
 			fmt.Printf("Passphrase: %s\n", result.Passphrase)

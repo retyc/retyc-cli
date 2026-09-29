@@ -35,6 +35,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/telemetry"
+	"github.com/retyc/retyc-cli/internal/ui"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -381,9 +382,11 @@ func (h *readFileHandle) ensureDownloaded() error {
 		return fmt.Errorf("dataroom session: %w", err)
 	}
 
-	name := h.info.Name()
+	// tempDir is private to this handle: a fixed file name spares mapping the
+	// decrypted name to a local one (service sanitizes it) and back.
+	const tempName = "content"
 	err = service.DownloadChunks(
-		h.ctx, tempDir, name,
+		h.ctx, tempDir, tempName,
 		h.info.Size(), h.chunkCount, sess.Identity, nil,
 		func(ctx context.Context, chunkID int) ([]byte, error) {
 			return h.wfs.client.DownloadDataroomChunk(ctx, h.versionID, chunkID)
@@ -396,7 +399,7 @@ func (h *readFileHandle) ensureDownloaded() error {
 		return err
 	}
 
-	localPath := filepath.Join(tempDir, filepath.Base(name))
+	localPath := filepath.Join(tempDir, tempName)
 	//nolint:gosec // G304: localPath is within our own tempDir
 	f, err := os.Open(localPath)
 	if err != nil {
@@ -454,7 +457,7 @@ func isClientGoneErr(err error) bool {
 // truncated response and reports an I/O error. Dropping the entry makes the next
 // request re-list and answer a clean 404.
 func (h *readFileHandle) onDownloadError(err error) {
-	fmt.Fprintf(os.Stderr, "webdav: download error (%s): %v\n", h.info.Name(), err)
+	fmt.Fprintf(os.Stderr, "webdav: download error (%s): %s\n", ui.Escape(h.info.Name()), ui.EscapeLines(err.Error()))
 	if h.parentURI != "" {
 		h.wfs.invalidateNodeCache(h.parentURI)
 	}
@@ -1164,12 +1167,12 @@ func (h *streamWriteHandle) Close() error {
 	// listing would return for this node is known here, so the next PROPFIND
 	// is served from cache instead of paying a fresh round-trip to the API.
 	h.wfs.upsertNodeCache(h.parentURI, service.DataroomNodeInfo{
-		ID:         h.nodeID,
-		Name:       h.info.name,
-		Type:       "file",
-		MIMEType:   h.mimeType,
-		Size:       h.info.size,
-		VersionID:  h.info.versionID,
+		ID:        h.nodeID,
+		Name:      h.info.name,
+		Type:      "file",
+		MIMEType:  h.mimeType,
+		Size:      h.info.size,
+		VersionID: h.info.versionID,
 		// A successful UploadChunks sent exactly the count announced when the
 		// version was created.
 		ChunkCount: service.ChunkCount(h.info.size),
@@ -1185,11 +1188,12 @@ func (h *streamWriteHandle) cleanup() {
 	err := service.DiscardFailedUpload(h.wfs.client, h.nodeID, h.info.versionID, h.newNode)
 	switch {
 	case err == nil && h.newNode:
-		fmt.Fprintf(os.Stderr, "webdav: cleaned up orphaned node: %s\n", h.info.Name())
+		fmt.Fprintf(os.Stderr, "webdav: cleaned up orphaned node: %s\n", ui.Escape(h.info.Name()))
 	case err == nil:
-		fmt.Fprintf(os.Stderr, "webdav: discarded the failed version of %s\n", h.info.Name())
+		fmt.Fprintf(os.Stderr, "webdav: discarded the failed version of %s\n", ui.Escape(h.info.Name()))
 	default:
-		fmt.Fprintf(os.Stderr, "webdav: upload of %s failed and could not be cleaned up: %v\n", h.info.Name(), err)
+		fmt.Fprintf(os.Stderr, "webdav: upload of %s failed and could not be cleaned up: %s\n",
+			ui.Escape(h.info.Name()), ui.EscapeLines(err.Error()))
 	}
 }
 func (h *streamWriteHandle) Read(_ []byte) (int, error)           { return 0, os.ErrPermission }
@@ -1734,12 +1738,14 @@ Example:
 			FileSystem: fs,
 			LockSystem: webdav.NewMemLS(),
 			Logger: func(r *http.Request, err error) {
+				// URL.Path is percent-decoded: "%1b" arrives as a raw ESC.
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "webdav: %s %s: %v\n", r.Method, r.URL.Path, err)
+					fmt.Fprintf(os.Stderr, "webdav: %s %s: %s\n",
+						r.Method, ui.Escape(r.URL.Path), ui.EscapeLines(err.Error()))
 
 					return
 				}
-				fmt.Fprintf(os.Stderr, "webdav: %s %s\n", r.Method, r.URL.Path)
+				fmt.Fprintf(os.Stderr, "webdav: %s %s\n", r.Method, ui.Escape(r.URL.Path))
 			},
 		}
 

@@ -129,22 +129,26 @@ func apiTransport() api.Option {
 // newTransferBar creates a consistently styled progress bar for file transfers.
 func newTransferBar(name string, sizeBytes int64) *progressbar.ProgressBar {
 	const descWidth = 24
-	desc := name
-	if len(desc) > descWidth {
-		desc = desc[:descWidth-1] + "…"
+	// name is decrypted, chosen by the sender: escape it before display, and
+	// truncate by rune so a multi-byte character is never cut in half.
+	desc := ui.Escape(name)
+	if runes := []rune(desc); len(runes) > descWidth {
+		desc = string(runes[:descWidth-1]) + "…"
 	}
 
 	return progressbar.NewOptions64(
 		sizeBytes,
 		progressbar.OptionSetDescription(fmt.Sprintf("  %-*s", descWidth, desc)),
-		progressbar.OptionEnableColorCodes(true),
 		progressbar.OptionSetWriter(os.Stderr),
 		progressbar.OptionShowBytes(true),
 		progressbar.OptionSetWidth(28),
 		progressbar.OptionThrottle(100*time.Millisecond),
+		// No OptionEnableColorCodes: colorstring would parse the description
+		// too, and has no escape syntax, so a sender-chosen name such as
+		// "[hidden]x.pdf" would style its own label. The bar stays uncolored.
 		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "[green]=[reset]",
-			SaucerHead:    "[green]>[reset]",
+			Saucer:        "=",
+			SaucerHead:    ">",
 			SaucerPadding: " ",
 			BarStart:      "[",
 			BarEnd:        "]",

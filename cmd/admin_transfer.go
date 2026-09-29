@@ -7,6 +7,7 @@ import (
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -49,7 +50,7 @@ var adminTransferLsCmd = &cobra.Command{
 		fmt.Fprintln(w, "TRANSFER ID\tTITLE\tSTATUS\tRECIPIENTS\tCREATED")
 		for _, tr := range transfers {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n",
-				tr.ID, tr.Title, tr.Status, len(tr.Recipients), tr.CreatedAt.Format("2006-01-02"))
+				tr.ID, ui.Escape(tr.Title), tr.Status, len(tr.Recipients), tr.CreatedAt.Format("2006-01-02"))
 		}
 		_ = w.Flush()
 
@@ -77,9 +78,9 @@ var adminTransferInfoCmd = &cobra.Command{
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(w, "ID:\t%s\n", tr.ID)
-		fmt.Fprintf(w, "Title:\t%s\n", tr.Title)
+		fmt.Fprintf(w, "Title:\t%s\n", ui.Escape(tr.Title))
 		fmt.Fprintf(w, "Status:\t%s\n", tr.Status)
-		fmt.Fprintf(w, "URL:\t%s\n", tr.WebURL)
+		fmt.Fprintf(w, "URL:\t%s\n", ui.Escape(tr.WebURL))
 		fmt.Fprintf(w, "Passphrase access:\t%t\n", tr.UsePassphrase)
 		orgKeyMaterial := "no (organization key not enabled at creation)"
 		if tr.SessionPrivateKeyEnc != nil {
@@ -110,7 +111,7 @@ var adminTransferInfoCmd = &cobra.Command{
 				case !r.KeyEncrypted:
 					keyStatus = "not encrypted for"
 				}
-				fmt.Fprintf(rw, "%s\t%s\n", label, keyStatus)
+				fmt.Fprintf(rw, "%s\t%s\n", ui.Escape(label), keyStatus)
 			}
 			_ = rw.Flush()
 		}
@@ -154,7 +155,7 @@ var adminTransferTrackingCmd = &cobra.Command{
 				if len(r.Events) > 0 {
 					last = r.Events[len(r.Events)-1].CreatedAt.Format("2006-01-02 15:04")
 				}
-				fmt.Fprintf(w, "%s\t%d\t%s\n", who, len(r.Events), last)
+				fmt.Fprintf(w, "%s\t%d\t%s\n", ui.Escape(who), len(r.Events), last)
 			}
 		}
 		printGroup(tr.Identified, "(identified)")
@@ -264,7 +265,7 @@ var adminTransferRekeyCmd = &cobra.Command{
 		}
 		fmt.Printf("Session key re-encrypted for %d key(s).\n", result.Reencrypted)
 		for _, s := range result.Skipped {
-			fmt.Fprintf(os.Stderr, "Skipped %s (no public key — passphrase access unaffected)\n", s)
+			fmt.Fprintf(os.Stderr, "Skipped %s (no public key — passphrase access unaffected)\n", ui.Escape(s))
 		}
 
 		return nil

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
@@ -33,7 +34,7 @@ Transfers are not exported: the admin API exposes no transfer file download.`,
 
 		bars := map[string]*progressbar.ProgressBar{}
 		logf := func(format string, a ...any) {
-			fmt.Fprintf(os.Stderr, format+"\n", a...)
+			fmt.Fprintln(os.Stderr, ui.EscapeLines(fmt.Sprintf(format, a...)))
 		}
 		result, err := service.AdminExportAll(cmd.Context(), client, orgKey,
 			service.AdminExportParams{OutputDir: args[0], CLIVersion: Version},
@@ -53,12 +54,12 @@ Transfers are not exported: the admin API exposes no transfer file download.`,
 // (the full list is in export.json, which the error points at).
 func reportExportResult(m service.AdminExportManifest, outputDir string) error {
 	for _, s := range m.DataroomsSkipped {
-		fmt.Fprintf(os.Stderr, "Skipped dataroom %s (%s): %s\n", s.ID, s.Title, s.Reason)
+		fmt.Fprintf(os.Stderr, "Skipped dataroom %s (%s): %s\n", s.ID, ui.Escape(s.Title), ui.Escape(s.Reason))
 	}
 	if len(m.Errors) > 0 {
 		if !jsonOutput {
 			for _, e := range m.Errors {
-				fmt.Fprintln(os.Stderr, "ERROR:", e)
+				fmt.Fprintln(os.Stderr, "ERROR:", ui.EscapeLines(e))
 			}
 		}
 

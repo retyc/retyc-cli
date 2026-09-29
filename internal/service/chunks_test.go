@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -659,5 +660,36 @@ func TestUploadChunks_SourceShorterThanDeclared(t *testing.T) {
 		identity.Recipient().String(), nil, func(context.Context, int, []byte) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "40 of its declared 100") {
 		t.Fatalf("err = %v, want a short-source error", err)
+	}
+}
+
+func TestLocalFileName(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"rapport.pdf", "rapport.pdf"},
+		{"../../etc/x\x1b[2K.txt", "x_[2K.txt"},
+		{"invoice\u202Efdp.exe", "invoice_fdp.exe"},
+	}
+	for _, tt := range tests {
+		if got := localFileName(tt.in); got != tt.want {
+			t.Errorf("localFileName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestLocalFileName_DirectoryNames(t *testing.T) {
+	for _, in := range []string{"", ".", "..", "/", "a/.."} {
+		if got := localFileName(in); got != "_" {
+			t.Errorf("localFileName(%q) = %q, want %q", in, got, "_")
+		}
+	}
+}
+
+// Names that differ remotely but map to the same local name must not stop a
+// multi-file download halfway: later duplicates get a suffix.
+func TestLocalFileNames_Collisions(t *testing.T) {
+	got := localFileNames([]string{"a_", "a\x1b", "report.pdf", "report.pdf", "x/report.pdf"})
+	want := []string{"a_", "a_ (2)", "report.pdf", "report (2).pdf", "report (3).pdf"}
+	if !slices.Equal(got, want) {
+		t.Errorf("localFileNames = %q, want %q", got, want)
 	}
 }

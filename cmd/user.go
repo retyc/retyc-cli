@@ -39,8 +39,8 @@ var userInfoCmd = &cobra.Command{
 		}
 
 		fmt.Printf("ID:            %s\n", u.ID)
-		fmt.Printf("Email:         %s\n", u.Email)
-		fmt.Printf("Full name:     %s\n", fullName)
+		fmt.Printf("Email:         %s\n", ui.Escape(u.Email))
+		fmt.Printf("Full name:     %s\n", ui.Escape(fullName))
 		fmt.Printf("Role:          %s\n", u.OrganizationRole)
 		fmt.Printf("Plan:          %s\n", u.OrganizationPlanID)
 		fmt.Printf("Public key:    %s\n", u.PublicKey)
