@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
 	"github.com/spf13/cobra"
 
+	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
 )
@@ -75,5 +78,34 @@ func TestApplyServiceConfig_IgnoresInvalidConfig(t *testing.T) {
 func defaultServiceConcurrency() config.ConcurrencyConfig {
 	return config.ConcurrencyConfig{
 		List: config.DefaultConcurrency, Upload: config.DefaultConcurrency, Download: config.DefaultConcurrency,
+	}
+}
+
+// A login that cannot come back without a new token exits with
+// exitAuthRequired, a missing or wrong key passphrase with exitConfig, so a
+// supervisor stops restarting the process; anything else, transient failures
+// included, keeps the generic exit code.
+func TestExitCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"no stored token", fmt.Errorf("not authenticated: %w", auth.ErrNoToken), exitAuthRequired},
+		{"revoked refresh token", fmt.Errorf("authentication expired: %w",
+			fmt.Errorf("refreshing token: %w", auth.ErrNoRefreshToken)), exitAuthRequired},
+		{"missing key passphrase", config.ErrNoKeyPassphrase, exitConfig},
+		{"no TTY for the key passphrase", fmt.Errorf("no TTY detected: %w", config.ErrNoKeyPassphrase), exitConfig},
+		{"wrong key passphrase", fmt.Errorf("key passphrase check failed: %w",
+			fmt.Errorf("%w: no identity matched", service.ErrWrongKeyPassphrase)), exitConfig},
+		{"unreachable identity provider", errors.New("fetching OIDC config: connection refused"), 1},
+		{"other failure", errors.New("WebDAV server: address already in use"), 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := exitCode(tt.err); got != tt.want {
+				t.Errorf("exitCode(%v) = %d, want %d", tt.err, got, tt.want)
+			}
+		})
 	}
 }

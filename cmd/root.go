@@ -9,6 +9,7 @@ import (
 	"runtime"
 
 	"github.com/retyc/retyc-cli/internal/api"
+	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/telemetry"
@@ -108,11 +109,37 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+// exitAuthRequired is the exit code of a command stopped by a login that
+// cannot recover without a new token: none stored, or a refresh token the
+// identity provider rejected (expired or revoked, invalid_grant). It is
+// sysexits.h EX_NOPERM and a stable contract: a supervisor restarting
+// `retyc webdav serve` stops on it instead of hammering the API and the
+// identity provider. A transient failure (network, 5xx) keeps exit code 1.
+const exitAuthRequired = 77
+
+// exitConfig is the exit code of a command stopped by a key passphrase that
+// is missing (RETYC_KEY_PASSPHRASE unset, no TTY to prompt) or wrong. It is
+// sysexits.h EX_CONFIG and, like exitAuthRequired, tells a supervisor that a
+// restart with the same environment will fail again.
+const exitConfig = 78
+
+// exitCode maps the error a command returned to the process exit code.
+func exitCode(err error) int {
+	switch {
+	case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrNoRefreshToken):
+		return exitAuthRequired
+	case errors.Is(err, config.ErrNoKeyPassphrase), errors.Is(err, service.ErrWrongKeyPassphrase):
+		return exitConfig
+	}
+
+	return 1
+}
+
 // Execute runs the root command and exits on error.
 func Execute() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
 		printError(err)
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 

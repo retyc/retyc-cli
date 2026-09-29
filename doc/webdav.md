@@ -252,6 +252,10 @@ dataroom title.
 - The server keeps your access token warm by refreshing it in the background.
 - If the **refresh token expires**, the server shuts down gracefully (draining any
   in-flight uploads) and exits with a message. Run `retyc auth login` and restart it.
+- A login that cannot recover, at startup or while serving (no stored token, refresh
+  token expired or revoked), exits with code **77**; a missing or wrong key passphrase
+  exits with **78**; any other failure exits with 1. A supervisor should stop restarting
+  on 77 and 78: the same credentials will fail again.
 - `Ctrl-C` (SIGINT) or SIGTERM triggers a graceful shutdown: in-flight uploads finish,
   temporary files are cleaned up, and a failed upload is discarded: the node it created,
   or only its new version when it overwrote an existing file (best-effort — deleting needs
