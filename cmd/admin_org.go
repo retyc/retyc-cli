@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/retyc/retyc-cli/internal/api"
+	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -52,9 +53,9 @@ var adminOrgInfoCmd = &cobra.Command{
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(w, "ID:\t%s\n", or.v.ID)
-		fmt.Fprintf(w, "Name:\t%s\n", or.v.Name)
+		fmt.Fprintf(w, "Name:\t%s\n", ui.Escape(or.v.Name))
 		fmt.Fprintf(w, "Kind:\t%s\n", or.v.Kind)
-		fmt.Fprintf(w, "Owner:\t%s\n", qr.v.OwnerEmail)
+		fmt.Fprintf(w, "Owner:\t%s\n", ui.Escape(qr.v.OwnerEmail))
 		plan := "(none)"
 		if or.v.CurrentPlanID != nil {
 			plan = *or.v.CurrentPlanID

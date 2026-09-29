@@ -1125,6 +1125,8 @@ func DownloadFromDataroom(
 		if len(matches) == 0 {
 			return nil, fmt.Errorf("no nodes match %s", src.Path)
 		}
+		files := make([]api.DataroomNodeItem, 0, len(matches))
+		names := make([]string, 0, len(matches))
 		for _, item := range matches {
 			if item.Node.TypeEnc == nil || item.Version == nil {
 				continue
@@ -1133,8 +1135,16 @@ func DownloadFromDataroom(
 			if decErr != nil {
 				name = item.Node.ID
 			}
+			files = append(files, item)
+			names = append(names, name)
+		}
+		// Map every name before downloading anything: two matches may share
+		// a local name once sanitized.
+		localNames := localFileNames(names)
+		for i, item := range files {
+			name, local := names[i], localNames[i]
 			if err := DownloadChunks(
-				ctx, outputDir, name,
+				ctx, outputDir, local,
 				item.Version.OriginalSize, item.Version.ChunkCount, sess.Identity, progress,
 				func(ctx context.Context, chunkID int) ([]byte, error) {
 					return client.DownloadDataroomChunk(ctx, item.Version.ID, chunkID)
@@ -1142,7 +1152,7 @@ func DownloadFromDataroom(
 			); err != nil {
 				return nil, fmt.Errorf("%s: %w", name, err)
 			}
-			downloaded = append(downloaded, filepath.Join(outputDir, filepath.Base(name)))
+			downloaded = append(downloaded, filepath.Join(outputDir, local))
 		}
 
 		return downloaded, nil
@@ -1177,7 +1187,7 @@ func DownloadFromDataroom(
 		return nil, err
 	}
 
-	downloaded = append(downloaded, filepath.Join(outputDir, filepath.Base(name)))
+	downloaded = append(downloaded, filepath.Join(outputDir, localFileName(name)))
 
 	return downloaded, nil
 }

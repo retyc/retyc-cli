@@ -51,7 +51,7 @@ var adminDataroomLsCmd = &cobra.Command{
 		fmt.Fprintln(w, "DATAROOM ID\tTITLE\tOWNER\tSTATUS\tCREATED")
 		for _, dr := range rooms {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-				dr.ID, dr.Title, dr.OwnerEmail, dr.Status, dr.CreatedAt.Format("2006-01-02"))
+				dr.ID, ui.Escape(dr.Title), ui.Escape(dr.OwnerEmail), dr.Status, dr.CreatedAt.Format("2006-01-02"))
 		}
 		_ = w.Flush()
 
@@ -114,8 +114,8 @@ var adminDataroomInfoCmd = &cobra.Command{
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(w, "ID:\t%s\n", dr.v.ID)
-		fmt.Fprintf(w, "Title:\t%s\n", dr.v.Title)
-		fmt.Fprintf(w, "Owner:\t%s\n", dr.v.OwnerEmail)
+		fmt.Fprintf(w, "Title:\t%s\n", ui.Escape(dr.v.Title))
+		fmt.Fprintf(w, "Owner:\t%s\n", ui.Escape(dr.v.OwnerEmail))
 		fmt.Fprintf(w, "Status:\t%s\n", dr.v.Status)
 		fmt.Fprintf(w, "Created:\t%s\n", dr.v.CreatedAt.Format("2006-01-02 15:04"))
 		fmt.Fprintf(w, "Organization key access:\t%s\n", orgKeyAccess)
@@ -134,7 +134,7 @@ var adminDataroomInfoCmd = &cobra.Command{
 			case u.PublicKey == nil:
 				keyStatus = "no key"
 			}
-			fmt.Fprintf(uw, "%s\t%s\t%s\t%s\n", u.UserID, u.Email, u.Role, keyStatus)
+			fmt.Fprintf(uw, "%s\t%s\t%s\t%s\n", u.UserID, ui.Escape(u.Email), u.Role, keyStatus)
 		}
 		_ = uw.Flush()
 
@@ -214,7 +214,7 @@ var adminDataroomActivityCmd = &cobra.Command{
 					}
 				}
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\n", m.CreatedAt.Format("2006-01-02 15:04"), user, event)
+			fmt.Fprintf(w, "%s\t%s\t%s\n", m.CreatedAt.Format("2006-01-02 15:04"), ui.Escape(user), ui.Escape(event))
 		}
 		_ = w.Flush()
 
@@ -255,9 +255,9 @@ var adminDataroomNodesCmd = &cobra.Command{
 		fmt.Fprintln(w, "TYPE\tPATH\tSIZE\tVERSION")
 		for _, n := range nodes {
 			if n.IsFolder {
-				fmt.Fprintf(w, "DIR\t%s\t\t\n", n.Path)
+				fmt.Fprintf(w, "DIR\t%s\t\t\n", ui.Escape(n.Path))
 			} else {
-				fmt.Fprintf(w, "FILE\t%s\t%s\tv%d\n", n.Path, ui.FormatSize(n.Size), n.VersionNumber)
+				fmt.Fprintf(w, "FILE\t%s\t%s\tv%d\n", ui.Escape(n.Path), ui.FormatSize(n.Size), n.VersionNumber)
 			}
 		}
 		_ = w.Flush()
@@ -295,10 +295,10 @@ var adminDataroomDownloadCmd = &cobra.Command{
 			return adminErrHint(err)
 		}
 		for _, p := range result.SkippedFolders {
-			fmt.Fprintf(os.Stderr, "Skipping folder %s (admin download does not recurse)\n", p)
+			fmt.Fprintf(os.Stderr, "Skipping folder %s (admin download does not recurse)\n", ui.Escape(p))
 		}
 		for _, p := range result.SkippedExisting {
-			fmt.Fprintf(os.Stderr, "Skipping %s (file already exists)\n", p)
+			fmt.Fprintf(os.Stderr, "Skipping %s (file already exists)\n", ui.Escape(p))
 		}
 		// The dataroom's folder structure is recreated under outputDir, so
 		// result.Downloaded holds paths relative to outputDir, not bare filenames.
@@ -411,7 +411,7 @@ var adminDataroomRekeyCmd = &cobra.Command{
 		}
 		fmt.Printf("Session key re-encrypted for %d key(s).\n", result.Reencrypted)
 		for _, s := range result.Skipped {
-			fmt.Fprintf(os.Stderr, "Skipped %s (no public key)\n", s)
+			fmt.Fprintf(os.Stderr, "Skipped %s (no public key)\n", ui.Escape(s))
 		}
 
 		return nil

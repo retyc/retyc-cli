@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -548,6 +549,50 @@ func TestReadFileHandle_BufferedErrorInvalidatesNodeCache(t *testing.T) {
 	}
 	if nodeCacheHas(fs, "retyc://dr1/") {
 		t.Error("listing cache entry still present after a failed chunk download")
+	}
+}
+
+// TestReadFileHandle_BufferedControlCharacterName: the buffered path downloads
+// into a temp dir and reopens the file. The service sanitizes on-disk names, so
+// reopening under the decrypted name would miss a file named with an ESC.
+func TestReadFileHandle_BufferedControlCharacterName(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	plain := []byte("hello, world")
+	chunk, err := crypto.EncryptBinaryForKey(plain, identity.Recipient().String())
+	if err != nil {
+		t.Fatalf("EncryptBinaryForKey: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(chunk)
+	}))
+	defer srv.Close()
+
+	fs := newWebdavTestFS(srv)
+	fs.sessions.Store("dr1", &service.DataroomSession{Identity: identity})
+	h := &readFileHandle{
+		ctx:        context.Background(),
+		wfs:        fs,
+		drID:       "dr1",
+		versionID:  "v1",
+		chunkCount: 1,
+		parentURI:  "retyc://dr1/",
+		info:       &webdavFileInfo{name: "log\x1b[2K.txt", size: int64(len(plain))},
+	}
+	defer func() { _ = h.Close() }()
+
+	// A non-zero Seek takes the buffered path (Range request).
+	if _, err := h.Seek(7, io.SeekStart); err != nil {
+		t.Fatalf("Seek() = %v, want the buffered download to succeed", err)
+	}
+	got, err := io.ReadAll(h)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(got, plain[7:]) {
+		t.Errorf("read %q, want %q", got, plain[7:])
 	}
 }
 

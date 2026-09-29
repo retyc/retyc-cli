@@ -60,7 +60,7 @@ var dataroomLsCmd = &cobra.Command{
 			for _, dr := range result.Items {
 				fmt.Fprintf(w, "%s\t%s\t%s\n",
 					dr.ID,
-					dr.Title,
+					ui.Escape(dr.Title),
 					dr.CreatedAt.Format("2006-01-02 15:04"),
 				)
 			}
@@ -99,9 +99,9 @@ var dataroomLsCmd = &cobra.Command{
 		fmt.Fprintln(w, "TYPE\tNAME\tSIZE")
 		for _, n := range nodes {
 			if n.Type == "dir" {
-				fmt.Fprintf(w, "DIR\t%s\t\n", n.Name)
+				fmt.Fprintf(w, "DIR\t%s\t\n", ui.Escape(n.Name))
 			} else {
-				fmt.Fprintf(w, "FILE\t%s\t%s\n", n.Name, ui.FormatSize(n.Size))
+				fmt.Fprintf(w, "FILE\t%s\t%s\n", ui.Escape(n.Name), ui.FormatSize(n.Size))
 			}
 		}
 		_ = w.Flush()
@@ -137,7 +137,7 @@ var dataroomCreateCmd = &cobra.Command{
 		}
 		fmt.Printf("Dataroom %s created.\n", result.ID)
 		if result.Title != "" {
-			fmt.Printf("Title: %s\n", result.Title)
+			fmt.Printf("Title: %s\n", ui.Escape(result.Title))
 		}
 
 		return nil
@@ -171,7 +171,7 @@ var dataroomInfoCmd = &cobra.Command{
 			})
 		}
 		fmt.Printf("ID:      %s\n", info.Dataroom.ID)
-		fmt.Printf("Title:   %s\n", info.Dataroom.Title)
+		fmt.Printf("Title:   %s\n", ui.Escape(info.Dataroom.Title))
 		fmt.Printf("Created: %s\n", info.Dataroom.CreatedAt.Format("2006-01-02 15:04"))
 
 		if info.Stats != nil {
@@ -183,7 +183,7 @@ var dataroomInfoCmd = &cobra.Command{
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "  EMAIL\tROLE\tUSER ID")
 			for _, u := range info.Users {
-				fmt.Fprintf(w, "  %s\t%s\t%s\n", u.UserEmail, u.Role, u.UserID)
+				fmt.Fprintf(w, "  %s\t%s\t%s\n", ui.Escape(u.UserEmail), u.Role, u.UserID)
 			}
 			_ = w.Flush()
 		}

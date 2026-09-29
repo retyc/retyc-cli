@@ -12,6 +12,7 @@ import (
 	"filippo.io/age"
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/ui"
 )
 
 // ErrOrgKeyNoAccess means the organization key cannot decrypt the session key:
@@ -64,7 +65,9 @@ type AdminNodeInfo struct {
 // build an on-disk or display path. The dataroom owner controls node names
 // (they are encrypted client-side, never validated by the server), so a
 // malicious name like "../evil.sh" or one embedding "/" must not be able to
-// escape the directory it is joined into. Both the displayed Path and the
+// escape the directory it is joined into, and control or format characters
+// (escape sequences, bidi overrides) must not reach the file system or the
+// terminal that later lists it. Both the displayed Path and the
 // on-disk write path use the sanitized name: the raw decrypted name is never
 // trusted for filesystem layout.
 func sanitizeNodeName(name string) string {
@@ -73,7 +76,7 @@ func sanitizeNodeName(name string) string {
 		return "_"
 	}
 
-	sanitized := strings.NewReplacer("/", "_", "\\", "_").Replace(name)
+	sanitized := strings.NewReplacer("/", "_", "\\", "_").Replace(ui.FileName(name))
 	// Replacing separators alone can still leave a literal ".." behind, e.g.
 	// "../evil.sh" becomes ".._evil.sh": strip it too so the sanitized name
 	// can never reconstitute a directory-traversal segment once joined.
