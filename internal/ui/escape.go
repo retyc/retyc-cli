@@ -12,8 +12,12 @@ import (
 // rewrite previous output lines, hide part of a listing or set the terminal
 // title, or bidirectional formatting characters that visually reorder a name
 // ("Trojan Source" spoofing). A rune is safe when unicode.IsGraphic accepts
-// it: this rejects C0/C1 controls, DEL and every format character (Cf: bidi
-// overrides and isolates, zero-width characters), and invalid UTF-8.
+// it: this rejects C0/C1 controls, DEL and format characters (Cf: bidi
+// marks, overrides and isolates, zero-width space), and invalid UTF-8.
+//
+// A few format characters are ordinary text, not markup, and are kept (see
+// textFormat): refusing them would mangle real names, and FileName would
+// write the mangled name to disk, irreversibly.
 
 // Escape makes s safe to print on a terminal. A safe string is returned
 // unchanged; any other is returned quoted by strconv.QuoteToGraphic, so the
@@ -43,7 +47,7 @@ func EscapeLines(s string) string {
 // is a path separator on Windows. Invalid UTF-8 becomes U+FFFD.
 func FileName(name string) string {
 	return strings.Map(func(r rune) rune {
-		if !unicode.IsGraphic(r) {
+		if !isSafe(r) {
 			return '_'
 		}
 
@@ -56,10 +60,32 @@ func isGraphic(s string) bool {
 	for _, r := range s {
 		// Ranging over invalid UTF-8 yields utf8.RuneError, which is graphic:
 		// check validity separately.
-		if !unicode.IsGraphic(r) {
+		if !isSafe(r) {
 			return false
 		}
 	}
 
 	return utf8.ValidString(s)
+}
+
+// isSafe reports whether r may be printed or written to a file name as is.
+func isSafe(r rune) bool {
+	return unicode.IsGraphic(r) || unicode.Is(textFormat, r)
+}
+
+// textFormat lists the format characters (Cf) that carry no layout or
+// terminal effect and that real names contain: the soft hyphen, the zero
+// width non-joiner (Persian, Urdu, Indic scripts) and joiner (Indic scripts,
+// composed emoji such as 👨‍💻), and the tag characters of subdivision flag
+// emoji. Bidi marks (U+200E, U+200F, U+061C) stay refused even though some
+// systems insert them in right-to-left names: they reorder what surrounds
+// them, which is the spoofing this file guards against.
+var textFormat = &unicode.RangeTable{
+	R16: []unicode.Range16{
+		{Lo: 0x00AD, Hi: 0x00AD, Stride: 1},
+		{Lo: 0x200C, Hi: 0x200D, Stride: 1},
+	},
+	R32: []unicode.Range32{
+		{Lo: 0xE0020, Hi: 0xE007F, Stride: 1},
+	},
 }

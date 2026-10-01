@@ -126,6 +126,12 @@ func parseMetricsLabels(items []string) (prometheus.Labels, error) {
 			return nil, fmt.Errorf(
 				"metrics label %q: invalid label name (letters, digits and _ only, not starting with a digit)", item)
 		}
+		if key == "le" || key == "quantile" || strings.HasPrefix(key, "__") {
+			// Histograms and summaries add le / quantile to their series, and
+			// Prometheus reserves "__": the registry would accept them, then
+			// every scrape would be rejected.
+			return nil, fmt.Errorf("metrics label %q: reserved label name", item)
+		}
 		if _, dup := labels[key]; dup {
 			return nil, fmt.Errorf("metrics label %q: key given twice", key)
 		}

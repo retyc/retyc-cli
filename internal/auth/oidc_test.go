@@ -594,4 +594,3 @@ func TestGetValidToken_NoToken(t *testing.T) {
 		t.Errorf("error = %v, want ErrNoToken", err)
 	}
 }
-

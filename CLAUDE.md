@@ -220,8 +220,9 @@ lose the proxy and CA settings.
 - `InitTLSRoots()` is called from `rootCmd.PersistentPreRunE`: the bundle is
   loaded and validated once at startup so a bad path fails immediately instead
   of mid-transfer. It returns a description of the roots, printed under `--debug`.
-  Commands annotated `annotationOffline` (`version`, `mcp manifest`) skip it —
-  they open no connection, and the release CI runs `retyc mcp manifest`.
+  Commands annotated `annotationOffline` (`version`, `mcp manifest`,
+  `config path`, `config show`) skip it — they open no connection, and the
+  release CI runs `retyc mcp manifest`.
   Beware: cobra runs only the closest `PersistentPreRun(E)` unless
   `cobra.EnableTraverseRunHooks` is set, so adding one to a subcommand would
   silently skip the CA loading.
@@ -516,8 +517,8 @@ environment value.
 `grpc` on `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. `Init` runs in
 `rootCmd.PersistentPreRunE`, `run()` closes the command span and flushes
 within 2 s; a failed init or export never changes the exit code.
-`annotationOffline` commands (`version`, `mcp manifest`) never initialise
-tracing, since `Init` runs in `PersistentPreRunE` after that early return.
+`annotationOffline` commands (`version`, `mcp manifest`, `config path`,
+`config show`) never initialise tracing, since `Init` runs in `PersistentPreRunE` after that early return.
 
 Span model:
 - one-shot command: span `retyc <command path>`, child of `TRACEPARENT`,
