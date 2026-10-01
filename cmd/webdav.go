@@ -1586,8 +1586,12 @@ func isLoopbackAddr(addr string) bool {
 func resolveWebdavAddr(flags *pflag.FlagSet) (string, error) {
 	_ = viper.BindPFlag("webdav.addr", flags.Lookup("addr"))
 	addr := viper.GetString("webdav.addr")
-	if _, port, err := net.SplitHostPort(addr); err != nil || port == "" {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
 		return "", fmt.Errorf("--addr %q: expected host:port, e.g. 127.0.0.1:8888", addr)
+	}
+	if _, err := net.LookupPort("tcp", port); err != nil {
+		return "", fmt.Errorf("--addr %q: invalid port: %w", addr, err)
 	}
 
 	return addr, nil
