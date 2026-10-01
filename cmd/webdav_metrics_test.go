@@ -467,6 +467,11 @@ func TestParseMetricsLabels(t *testing.T) {
 			t.Errorf("%q: expected an error", bad)
 		}
 	}
+	for _, reserved := range []string{"le=x", "quantile=x", "__name__=x"} {
+		if _, err := parseMetricsLabels([]string{reserved}); err == nil {
+			t.Errorf("%q: expected a reserved-name error", reserved)
+		}
+	}
 	if _, err := parseMetricsLabels([]string{"a=1", "a=2"}); err == nil {
 		t.Error("duplicate key: expected an error")
 	}
@@ -542,14 +547,14 @@ func TestResolveWebdavAddr_FlagOverridesEnv(t *testing.T) {
 
 	flags := pflag.NewFlagSet("serve", pflag.ContinueOnError)
 	flags.String("addr", "127.0.0.1:8888", "")
-	if got := resolveWebdavAddr(flags); got != "0.0.0.0:9000" {
-		t.Errorf("without flag: got %q, want env value 0.0.0.0:9000", got)
+	if got, err := resolveWebdavAddr(flags); err != nil || got != "0.0.0.0:9000" {
+		t.Errorf("without flag: got %q (%v), want env value 0.0.0.0:9000", got, err)
 	}
 	if err := flags.Set("addr", "127.0.0.1:9999"); err != nil {
 		t.Fatal(err)
 	}
-	if got := resolveWebdavAddr(flags); got != "127.0.0.1:9999" {
-		t.Errorf("with flag: got %q, want flag value 127.0.0.1:9999", got)
+	if got, err := resolveWebdavAddr(flags); err != nil || got != "127.0.0.1:9999" {
+		t.Errorf("with flag: got %q (%v), want flag value 127.0.0.1:9999", got, err)
 	}
 }
 
@@ -558,8 +563,25 @@ func TestResolveWebdavAddr_Default(t *testing.T) {
 	config.SetDefaults()
 	flags := pflag.NewFlagSet("serve", pflag.ContinueOnError)
 	flags.String("addr", "127.0.0.1:8888", "")
-	if got := resolveWebdavAddr(flags); got != "127.0.0.1:8888" {
-		t.Errorf("got %q, want 127.0.0.1:8888", got)
+	if got, err := resolveWebdavAddr(flags); err != nil || got != "127.0.0.1:8888" {
+		t.Errorf("got %q (%v), want 127.0.0.1:8888", got, err)
+	}
+}
+
+func TestResolveWebdavAddr_RejectsMissingPort(t *testing.T) {
+	for _, addr := range []string{"0.0.0.0", "localhost", "127.0.0.1:", ""} {
+		t.Run(addr, func(t *testing.T) {
+			isolateConfig(t)
+			config.SetDefaults()
+			flags := pflag.NewFlagSet("serve", pflag.ContinueOnError)
+			flags.String("addr", "127.0.0.1:8888", "")
+			if err := flags.Set("addr", addr); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := resolveWebdavAddr(flags); err == nil {
+				t.Errorf("--addr %q: expected an error", addr)
+			}
+		})
 	}
 }
 
