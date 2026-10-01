@@ -1581,11 +1581,16 @@ func isLoopbackAddr(addr string) bool {
 
 // resolveWebdavAddr returns the host:port to bind, with the usual precedence
 // (flag > env > config file > default); same binding strategy as
-// resolveMetricsAddr.
-func resolveWebdavAddr(flags *pflag.FlagSet) string {
+// resolveMetricsAddr. A value without a port ("0.0.0.0", the form --addr took
+// before it included the port) is an error.
+func resolveWebdavAddr(flags *pflag.FlagSet) (string, error) {
 	_ = viper.BindPFlag("webdav.addr", flags.Lookup("addr"))
+	addr := viper.GetString("webdav.addr")
+	if _, port, err := net.SplitHostPort(addr); err != nil || port == "" {
+		return "", fmt.Errorf("--addr %q: expected host:port, e.g. 127.0.0.1:8888", addr)
+	}
 
-	return viper.GetString("webdav.addr")
+	return addr, nil
 }
 
 // tokenKeepalive pings tokenSource every 60s to keep the access token warm.
@@ -1689,6 +1694,13 @@ Example:
 			}
 		}()
 
+		// Fail-fast: a malformed address would otherwise only surface once the
+		// token, the API and the key passphrase have all been checked.
+		addr, err := resolveWebdavAddr(cmd.Flags())
+		if err != nil {
+			return err
+		}
+
 		// Fail-fast: passphrase must be set before any crypto operation.
 		if config.KeyPassphrase() == "" {
 			return config.ErrNoKeyPassphrase
@@ -1712,8 +1724,6 @@ Example:
 		if err != nil {
 			return err
 		}
-
-		addr := resolveWebdavAddr(cmd.Flags())
 
 		fs := &webdavFS{
 			cfg:    cfg,
@@ -1776,7 +1786,7 @@ Example:
 		})
 
 		authEnabled, _ := cmd.Flags().GetBool("auth")
-		var rootHandler = instrumentWebdav(mux)
+		var rootHandler http.Handler = mux
 		if authEnabled {
 			password := config.WebdavPassword()
 			if password == "" {
@@ -1796,6 +1806,8 @@ Example:
 				"WARNING: binding to %s without authentication exposes all dataroom contents "+
 					"in cleartext to the network; consider --auth\n", addr)
 		}
+		// Outermost, so rejected credentials (401) are counted and traced too.
+		rootHandler = instrumentWebdav(rootHandler)
 
 		srv := &http.Server{ //nolint:gosec // G112: local-only server; Slowloris not a concern
 			Addr:              addr,
