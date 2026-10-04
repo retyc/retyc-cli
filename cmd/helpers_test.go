@@ -160,18 +160,27 @@ func TestIsOfflineToken_InvalidBase64(t *testing.T) {
 	}
 }
 
+// baseTransport unwraps the round trippers stacked by newHTTPClient down to
+// the *http.Transport built by api.BaseTransport.
+func baseTransport(t *testing.T, client *http.Client) *http.Transport {
+	t.Helper()
+	rt := client.Transport
+	for {
+		switch v := rt.(type) {
+		case *http.Transport:
+			return v
+		case *api.UserAgentTransport:
+			rt = v.Base
+		case interface{ Unwrap() http.RoundTripper }:
+			rt = v.Unwrap()
+		default:
+			t.Fatalf("cannot unwrap %T down to *http.Transport", rt)
+		}
+	}
+}
+
 func TestNewHTTPClient_UsesEnvironmentProxy(t *testing.T) {
-	client := newHTTPClient(false, false)
-
-	ua, ok := client.Transport.(*api.UserAgentTransport)
-	if !ok {
-		t.Fatalf("transport = %T, want *api.UserAgentTransport", client.Transport)
-	}
-
-	inner, ok := ua.Base.(*http.Transport)
-	if !ok {
-		t.Fatalf("UserAgentTransport.Base = %T, want *http.Transport", ua.Base)
-	}
+	inner := baseTransport(t, newHTTPClient(false, false))
 
 	if inner.Proxy == nil {
 		t.Error("Proxy = nil — the auth client would ignore HTTP_PROXY/HTTPS_PROXY/NO_PROXY")
@@ -209,15 +218,7 @@ func TestNewHTTPClient_UsesCustomRootCAs(t *testing.T) {
 		t.Fatalf("InitTLSRoots() error = %v", err)
 	}
 
-	ua, ok := newHTTPClient(false, false).Transport.(*api.UserAgentTransport)
-	if !ok {
-		t.Fatal("unexpected transport type")
-	}
-
-	inner, ok := ua.Base.(*http.Transport)
-	if !ok {
-		t.Fatalf("UserAgentTransport.Base = %T, want *http.Transport", ua.Base)
-	}
+	inner := baseTransport(t, newHTTPClient(false, false))
 
 	if inner.TLSClientConfig.RootCAs == nil {
 		t.Error("RootCAs = nil — newHTTPClient dropped the CAs loaded from SSL_CERT_FILE")

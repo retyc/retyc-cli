@@ -533,7 +533,11 @@ Span model:
   ignored); `mcp serve` opens one root `MCP <tool>` per call; `toolErr`
   records the failure on that span;
 - API calls: `telemetry.RoundTripper` (installed by `cmd.apiTransport()` on
-  every `api.New`), CLIENT span named by `metrics.NormalizeRoute`, `traceparent`
+  every `api.New`, and by `newHTTPClient` for the OIDC client: discovery,
+  token refresh, device flow — Keycloak routes are templates, the realm is
+  folded; a refresh made by `auth.RefreshingTokenSource` runs on
+  `context.Background()`, so each one, e.g. the `webdav serve` keepalive every
+  60 s, is a root trace of its own), CLIENT span named by `metrics.NormalizeRoute`, `traceparent`
   injected, route identifiers as named attributes (`retyc.dataroom.id`,
   `retyc.node.id`, `retyc.version.id`, `retyc.transfer.id`, `retyc.file.id`,
   `retyc.chunk.index`, ... keyed by the resource segment before the UUID,

@@ -92,3 +92,32 @@ func TestTracing_NeverExportsNames(t *testing.T) {
 	}
 	assertNoSentinel(t, spans)
 }
+
+// The OIDC client (discovery, token refresh, device flow) runs before the API
+// client exists: webdav serve init spent seconds there with no span at all.
+func TestNewHTTPClient_TracesRoundTrips(t *testing.T) {
+	isolateConfig(t)
+	exp := telemetrytest.Install(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		srv.URL+"/realms/"+sentinel+"/protocol/openid-connect/token", strings.NewReader(sentinel))
+	resp, err := newHTTPClient(false, false).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	spans := exp.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if want := "/realms/{id}/protocol/openid-connect/token"; spans[0].Name != want {
+		t.Errorf("span name = %q, want %q", spans[0].Name, want)
+	}
+	assertNoSentinel(t, spans)
+}

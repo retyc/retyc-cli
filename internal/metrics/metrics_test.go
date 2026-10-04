@@ -179,3 +179,18 @@ func TestNormalizeRoute_ByTemplatePosition(t *testing.T) {
 		}
 	}
 }
+
+// The OIDC client is traced too: the realm is folded, the endpoint kept.
+func TestNormalizeRoute_IdentityProvider(t *testing.T) {
+	tests := map[string]string{ //nolint:gosec // G101: route paths, not credentials
+		"/realms/SENTINEL-realm/.well-known/openid-configuration":    "/realms/{id}/.well-known/openid-configuration",
+		"/realms/SENTINEL-realm/protocol/openid-connect/token":       "/realms/{id}/protocol/openid-connect/token",
+		"/realms/SENTINEL-realm/protocol/openid-connect/auth/device": "/realms/{id}/protocol/openid-connect/auth/device",
+		"/realms/SENTINEL-realm/protocol/openid-connect/logout":      "/realms/{id}/protocol/openid-connect/logout",
+	}
+	for in, want := range tests {
+		if got := NormalizeRoute(in); got != want {
+			t.Errorf("NormalizeRoute(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

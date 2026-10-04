@@ -73,6 +73,9 @@ var resourceKeys = map[string]attribute.Key{
 // /…/download/{n} and /file/{id}/{n}.
 var chunkResources = map[string]bool{"chunk": true, "download": true, "file": true}
 
+// Unwrap returns the wrapped transport.
+func (rt *roundTripper) Unwrap() http.RoundTripper { return rt.base }
+
 // routeAttributes names the identifiers of an API path: a UUID gets the key of
 // the resource segment before it (retyc.dataroom.id for /dataroom/{id}/...),
 // a number is a chunk index, and a UUID under an unknown resource lands in
