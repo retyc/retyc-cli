@@ -1225,6 +1225,16 @@ func MkdirDataroomWithSession(
 		return "", err
 	}
 
+	return MkdirDataroomInto(ctx, client, dataroomID, parentID, name, sess)
+}
+
+// MkdirDataroomInto creates the folder name under parentID (nil for the
+// dataroom root) and returns its node ID, for callers that already know the
+// parent's ID — the WebDAV server reads it from its cached listings instead of
+// walking the path from the root.
+func MkdirDataroomInto(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string, name string, sess *DataroomSession,
+) (string, error) {
 	nameEnc, err := crypto.EncryptStringForKeys(name, []string{sess.PublicKey})
 	if err != nil {
 		return "", fmt.Errorf("encrypting folder name: %w", err)

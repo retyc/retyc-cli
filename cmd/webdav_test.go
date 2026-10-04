@@ -510,6 +510,23 @@ func nodeCacheHas(fs *webdavFS, uri string) bool {
 	return ok
 }
 
+// cachedDirID looks a folder up by name in the cached listing of uri.
+func cachedDirID(fs *webdavFS, uri, name string) (string, bool) {
+	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	entry, ok := fs.nodeCache[uri]
+	if !ok {
+		return "", false
+	}
+	for _, n := range entry.nodes {
+		if n.Name == name && n.Type == "dir" {
+			return n.ID, true
+		}
+	}
+
+	return "", false
+}
+
 func notFoundServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "node not found", http.StatusNotFound)
@@ -787,9 +804,11 @@ func TestWebdavFS_MutationsUseCachedSession(t *testing.T) {
 	if err := fs.Mkdir(ctx, "/dataroom/DR/newdir", 0o755); err != nil {
 		t.Fatalf("Mkdir: %v", err)
 	}
-	if nodeCacheHas(fs, "retyc://dr1/") {
-		t.Error("Mkdir did not invalidate the parent listing")
+	if id, ok := cachedDirID(fs, "retyc://dr1/", "newdir"); !ok || id != "n-new" {
+		t.Error("Mkdir did not add the new folder to the cached parent listing")
 	}
+	// The pre-warmed listing does not hold "x", which only the API serves.
+	fs.invalidateNodeCache("retyc://dr1/")
 	if err := fs.Rename(ctx, "/dataroom/DR/x", "/dataroom/DR/y"); err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
@@ -2202,5 +2221,197 @@ func TestInitUpload_FallsBackWhenCachedNodeIsGone(t *testing.T) {
 	// The listing that named a dead node must not be served to anyone else.
 	if nodeCacheHas(fs, "retyc://dr1/") {
 		t.Error("the stale listing was kept after its node turned out to be gone")
+	}
+}
+
+// — Mkdir resolves the parent from the cached listing ——————————————————————————
+
+// A folder under a file has no collection to land in: 409 Conflict (the
+// handler maps os.ErrNotExist), without any API call.
+func TestWebdavFS_MkdirUnderAFileIsConflict(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected API call %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}
+	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
+	})
+
+	if err := fs.Mkdir(context.Background(), "/dataroom/DR/doc.txt/d", 0o755); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Mkdir under a file: error = %v, want os.ErrNotExist", err)
+	}
+}
+
+// The cached listing can name a parent deleted elsewhere: the creation answers
+// 404 or 410, the client gets 409 Conflict and the stale listing is dropped.
+func TestWebdavFS_MkdirUnderDeletedParent(t *testing.T) {
+	for _, status := range goneStatuses {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			handler := func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "parent gone", status)
+			}
+			fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+				"retyc://dr1/": {{ID: "d-old", Name: "a", Type: "dir"}},
+			})
+
+			if err := fs.Mkdir(context.Background(), "/dataroom/DR/a/b", 0o755); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("Mkdir: error = %v, want os.ErrNotExist", err)
+			}
+			if nodeCacheHas(fs, "retyc://dr1/") {
+				t.Error("the listing naming the deleted parent was kept")
+			}
+		})
+	}
+}
+
+// The API also answers 409 for a parent_id naming a deleted folder (the
+// dangling reference fails a foreign key), not only for a name already taken.
+// The parent is re-resolved from a fresh listing: gone → 409 Conflict for the
+// client; re-created under another ID → one retry there; unchanged → the
+// conflict is genuine and returned as is (405 for the client).
+func TestWebdavFS_MkdirConflictRechecksParent(t *testing.T) {
+	cases := map[string]struct {
+		freshRoot map[string]string // root listing the API now serves
+		wantErr   error             // nil: created
+		wantCalls []string
+	}{
+		"parent gone": {
+			freshRoot: map[string]string{},
+			wantErr:   os.ErrNotExist,
+			wantCalls: []string{"POST /dataroom/dr1/node parent=d-old", "GET /dataroom/dr1/nodes parent="},
+		},
+		"parent re-created": {
+			freshRoot: map[string]string{"d-new": "a"},
+			wantCalls: []string{
+				"POST /dataroom/dr1/node parent=d-old",
+				"GET /dataroom/dr1/nodes parent=",
+				"POST /dataroom/dr1/node parent=d-new",
+			},
+		},
+		"name taken": {
+			freshRoot: map[string]string{"d-old": "a"},
+			wantErr:   api.ErrConflict,
+			wantCalls: []string{"POST /dataroom/dr1/node parent=d-old", "GET /dataroom/dr1/nodes parent="},
+		},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			var log callLog
+			var pub string
+			handler := func(w http.ResponseWriter, r *http.Request) {
+				var parent string
+				if r.Method == http.MethodPost {
+					var body struct {
+						ParentID *string `json:"parent_id"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					parent = parentLabel(body.ParentID)
+				} else {
+					parent = r.URL.Query().Get("parent_id")
+				}
+				log.add(r.Method + " " + r.URL.Path + " parent=" + parent)
+				switch {
+				case r.Method == http.MethodPost && parent == "d-old":
+					http.Error(w, "conflict", http.StatusConflict)
+				case r.Method == http.MethodPost && parent == "d-new":
+					fmt.Fprint(w, `{"id":"d-b","name_enc":"x"}`)
+				case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/nodes":
+					fmt.Fprint(w, nodesPageJSON(t, pub, tc.freshRoot))
+				default:
+					http.Error(w, "unexpected", http.StatusInternalServerError)
+				}
+			}
+			fs, identity := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+				"retyc://dr1/":  {{ID: "d-old", Name: "a", Type: "dir"}},
+				"retyc://dr1/a": {{ID: "f-ghost", Name: "ghost.txt", Type: "file"}},
+			})
+			pub = identity.Recipient().String()
+
+			err := fs.Mkdir(context.Background(), "/dataroom/DR/a/b", 0o755)
+			if tc.wantErr == nil && err != nil || tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Errorf("Mkdir: error = %v, want %v", err, tc.wantErr)
+			}
+			if calls := log.list(); !slices.Equal(calls, tc.wantCalls) {
+				t.Errorf("calls = %v, want %v", calls, tc.wantCalls)
+			}
+			if _, ghost := fs.cachedFileNodeID("dr1", "/a", "ghost.txt"); ghost && !errors.Is(tc.wantErr, api.ErrConflict) {
+				t.Error("the deleted parent's listing still serves its ghost children")
+			}
+		})
+	}
+}
+
+// The sequence davfs2 sends for `mkdir -p a/b && echo x > a/b/f` (traced on the
+// CSI): MKCOL a, MKCOL a/b, an empty PUT on create, then the PUT with content.
+// Every folder ID is known from the cache — the root listing, then the folders
+// just created — so each request is only its own writes: no listing to find a
+// parent, no CreateDataroomNode answering 409 on the overwrite.
+func TestWebdav_MkdirThenWriteUsesOnlyCachedParents(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+
+	var log callLog
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.add(r.Method + " " + r.URL.Path)
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/dr1/node":
+			var body struct {
+				ParentID *string `json:"parent_id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			next := map[string]string{"": "d-a", "d-a": "d-b", "d-b": "f-1"}
+			parent := ""
+			if body.ParentID != nil {
+				parent = *body.ParentID
+			}
+			fmt.Fprintf(w, `{"id":%q,"name_enc":"x"}`, next[parent])
+		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/f-1/version":
+			fmt.Fprintf(w, `{"id":"v-%d","created_at":"2026-10-04T10:00:00Z"}`, len(log.list()))
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/dataroom/node/version/"):
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	fs := newWebdavTestFS(srv)
+	fs.cache = newDataroomCache(func(context.Context) ([]dataroomCacheItem, error) {
+		return []dataroomCacheItem{{id: "dr1", title: "Room"}}, nil
+	})
+	fs.sessions.Store("dr1", &service.DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()})
+	ctx := context.Background()
+
+	for _, dir := range []string{"/dataroom/Room/a", "/dataroom/Room/a/b"} {
+		if err := fs.Mkdir(ctx, dir, 0o755); err != nil {
+			t.Fatalf("Mkdir(%s): %v", dir, err)
+		}
+	}
+	for _, body := range []string{"", "0123456789"} {
+		putCtx := withContentLength(withIsPut(ctx), int64(len(body)))
+		f, err := fs.OpenFile(putCtx, "/dataroom/Room/a/b/f", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+		if err != nil {
+			t.Fatalf("OpenFile (%d bytes): %v", len(body), err)
+		}
+		if _, err := f.Write([]byte(body)); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("Close (%d bytes): %v", len(body), err)
+		}
+	}
+
+	want := []string{
+		"POST /dataroom/dr1/node",                 // MKCOL a
+		"POST /dataroom/dr1/node",                 // MKCOL a/b
+		"POST /dataroom/dr1/node",                 // empty PUT: node f
+		"POST /dataroom/node/f-1/version",         // empty PUT: version
+		"POST /dataroom/node/f-1/version",         // PUT: new version
+		"POST /dataroom/node/version/v-5/chunk/0", // PUT: content
+	}
+	if calls := log.list(); !slices.Equal(calls, want) {
+		t.Errorf("API calls:\n  %s\nwant:\n  %s", strings.Join(calls, "\n  "), strings.Join(want, "\n  "))
 	}
 }

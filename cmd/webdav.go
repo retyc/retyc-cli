@@ -1278,13 +1278,85 @@ func (fs *webdavFS) Mkdir(ctx context.Context, name string, _ os.FileMode) error
 	if err != nil {
 		return fmt.Errorf("dataroom session: %w", err)
 	}
-	_, err = service.MkdirDataroomWithSession(ctx, fs.client, drID, subPath, sess)
-	if err == nil {
-		parentPath, _ := splitWebdavPath(subPath)
-		fs.invalidateNodeCache(dataroomURI(drID, parentPath))
+	parentPath, dirName := splitWebdavPath(subPath)
+	parentURI := dataroomURI(drID, parentPath)
+	parentID, err := fs.parentNodeID(ctx, drID, parentPath)
+	if errors.Is(err, os.ErrInvalid) {
+		// The parent is a file: not a collection, 409 Conflict (RFC 4918 §9.3.1).
+		return os.ErrNotExist
 	}
+	if err != nil {
+		return err
+	}
+	id, err := service.MkdirDataroomInto(ctx, fs.client, drID, parentID, dirName, sess)
+	if errors.Is(err, api.ErrConflict) && parentID != nil {
+		id, err = fs.mkdirAfterConflict(ctx, drID, parentPath, dirName, *parentID, sess, err)
+	}
+	if errors.Is(err, api.ErrNotFound) {
+		// The cached listing named a parent deleted elsewhere since.
+		grandParent, _ := splitWebdavPath(parentPath)
+		fs.invalidateNodeCache(dataroomURI(drID, grandParent))
+		fs.invalidateNodeSubtree(parentURI)
 
-	return err
+		return os.ErrNotExist
+	}
+	if err != nil {
+		return err
+	}
+	// Both listings the next requests need are known without asking the API:
+	// the parent's gains the new folder (so a nested MKCOL or a PUT inside it
+	// finds its ID), and the new folder's own is empty (so the first PUT in it
+	// needs no listing, and the following overwrite finds the file it created).
+	fs.upsertNodeCache(parentURI, service.DataroomNodeInfo{ID: id, Name: dirName, Type: "dir"})
+	fs.seedEmptyListing(dataroomURI(drID, subPath))
+
+	return nil
+}
+
+// seedEmptyListing caches an empty listing for a folder this server has just
+// created: it cannot have children yet. Any older entry under that URI (a
+// folder of the same name deleted earlier) is replaced, and the generation is
+// bumped so a listing already in flight is not stored over it.
+func (fs *webdavFS) seedEmptyListing(uri string) {
+	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	if fs.nodeGen == nil {
+		fs.nodeGen = make(map[string]uint64)
+	}
+	fs.nodeGen[uri]++
+	if fs.nodeCache == nil {
+		fs.nodeCache = make(map[string]*nodeCacheEntry)
+	}
+	fs.nodeCache[uri] = &nodeCacheEntry{nodes: []service.DataroomNodeInfo{}, fetchedAt: time.Now()}
+}
+
+// mkdirAfterConflict sorts out a 409 on folder creation. The API answers it
+// for a name already taken, and for a parent_id naming a folder deleted since
+// its listing was cached (the dangling reference fails a foreign key). The
+// parent is re-resolved from a fresh listing: gone, or now a file → 409
+// Conflict for the client (os.ErrNotExist); re-created under another ID → one
+// retry there; unchanged → the conflict is genuine and returned as is (405).
+func (fs *webdavFS) mkdirAfterConflict(
+	ctx context.Context, drID, parentPath, dirName, staleID string,
+	sess *service.DataroomSession, conflict error,
+) (string, error) {
+	grandParent, _ := splitWebdavPath(parentPath)
+	fs.invalidateNodeCache(dataroomURI(drID, grandParent))
+	freshID, err := fs.parentNodeID(ctx, drID, parentPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, os.ErrInvalid):
+		fs.invalidateNodeSubtree(dataroomURI(drID, parentPath))
+
+		return "", os.ErrNotExist
+	case err != nil:
+		return "", err
+	case freshID == nil || *freshID == staleID:
+		return "", conflict
+	}
+	// The listings cached under the path belong to the deleted folder.
+	fs.invalidateNodeSubtree(dataroomURI(drID, parentPath))
+
+	return service.MkdirDataroomInto(ctx, fs.client, drID, freshID, dirName, sess)
 }
 
 // RemoveAll implements webdav.FileSystem.
