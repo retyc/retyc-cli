@@ -2717,8 +2717,18 @@ func TestWriteFileHandle_BufferedPutUsesCachedListings(t *testing.T) {
 	if _, err := f.Write([]byte("0123456789")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
 	if err := f.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+	// The handler reads the ETag after Close from the info Stat returned
+	// before it: it must be the new version's, not the ModTime+Size default,
+	// or the client's next conditional GET downloads the file again.
+	if etag, err := fi.(webdav.ETager).ETag(context.Background()); err != nil || etag != `"v-2"` {
+		t.Errorf("ETag = (%q, %v), want the new version \"v-2\"", etag, err)
 	}
 
 	want := []string{"POST /dataroom/dr1/node/file"}

@@ -643,6 +643,10 @@ type writeFileHandle struct {
 	fileName     string
 	wfs          *webdavFS
 	isPut        bool // true = real PUT; false = LOCK-driven create
+	// info is what Stat reports. The WebDAV handler Stats the file before
+	// Close and reads the ETag after it: Close fills in the new version, so
+	// the PUT response carries its ETag rather than the ModTime+Size default.
+	info *webdavFileInfo
 }
 
 func (h *writeFileHandle) Close() error {
@@ -685,18 +689,24 @@ func (h *writeFileHandle) Close() error {
 	if err := w.Close(); err != nil {
 		return err
 	}
+	if fi, err := w.Stat(); err == nil {
+		if uploaded, ok := fi.(*webdavFileInfo); ok {
+			h.info.nodeID, h.info.versionID = uploaded.nodeID, uploaded.versionID
+		}
+	}
 
 	return copyErr
 }
 func (h *writeFileHandle) Read(_ []byte) (int, error) { return 0, os.ErrPermission }
 func (h *writeFileHandle) Write(p []byte) (int, error) {
 	n, err := h.file.Write(p)
+	h.info.size += int64(n)
 	metrics.WebdavBytes.WithLabelValues("upload").Add(float64(n))
 
 	return n, err
 }
 func (h *writeFileHandle) Seek(_ int64, _ int) (int64, error)   { return 0, os.ErrPermission }
-func (h *writeFileHandle) Stat() (os.FileInfo, error)           { return h.file.Stat() }
+func (h *writeFileHandle) Stat() (os.FileInfo, error)           { return h.info, nil }
 func (h *writeFileHandle) Readdir(_ int) ([]os.FileInfo, error) { return nil, os.ErrInvalid }
 
 // nodeCacheEntry caches the result of a ListNodes call for a given URI.
@@ -1274,6 +1284,7 @@ func (fs *webdavFS) openForWriteTempFile(
 		fileName:     fileName,
 		wfs:          fs,
 		isPut:        isPut,
+		info:         &webdavFileInfo{name: fileName, modTime: time.Now()},
 	}, nil
 }
 

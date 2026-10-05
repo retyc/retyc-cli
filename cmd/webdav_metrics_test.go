@@ -339,7 +339,7 @@ func TestWriteFileHandle_WriteCountsUploadBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &writeFileHandle{file: f}
+	h := &writeFileHandle{file: f, info: &webdavFileInfo{}}
 	if _, err := h.Write(make([]byte, 120)); err != nil {
 		t.Fatal(err)
 	}
