@@ -98,16 +98,27 @@ Notes and limitations:
   keypair) are resolved once per dataroom and kept for the life of the process, since
   a dataroom's keypair never changes and each resolution unlocks the user key with an
   scrypt costing ~256 MiB of working memory when no keyring caches it.
-  Mutations made through the server invalidate the relevant cache immediately, but
-  changes made elsewhere (web app, another client) may take up to a minute to appear.
+  Mutations made through the server update the cached listings in place (a new
+  folder is added to its parent and cached as empty, a deleted node is removed, a
+  moved one changes listing), so the request a client sends right after is
+  answered without an API call. Changes made elsewhere (web app, another client)
+  may take up to a minute to appear.
+  The dataroom list is cached for 60 s and refreshed in the background: an expired
+  list keeps being served while one refresh runs, and a failed refresh keeps it. A
+  dataroom name the expired list does not hold waits for the refresh, so a dataroom
+  created elsewhere is found on first access.
   A read that fails because the cached listing pointed at a deleted node drops that
   listing straight away, so the following request sees the current state (`404`)
-  rather than replaying the stale entry until the TTL expires. Likewise, a folder
-  is checked alongside its listing, so one deleted or re-created elsewhere is never
-  shown empty or with the children of the deleted folder, and a delete or move that
-  hits a node deleted elsewhere is retried once against a fresh listing. Concurrent
-  requests for the same folder share a single listing, and a listing that was in
-  flight when a mutation landed is discarded rather than cached.
+  rather than replaying the stale entry until the TTL expires. Likewise, listing a
+  folder deleted elsewhere answers `404`/`410` and is retried against a fresh
+  parent listing, so it is never shown empty or with the children of the deleted
+  folder (this relies on the API answering `404`/`410` to a listing whose
+  `parent_id` names a deleted folder; against an API that answers an empty page,
+  such a folder shows empty until its parent listing expires), and a delete or
+  move that hits a node deleted elsewhere is retried once against a fresh
+  listing. Concurrent requests for the same folder share a single
+  listing, and a listing that was in flight when a mutation landed is discarded
+  rather than cached.
 - Files expose the version ID as their `ETag` and the version's creation time as
   `Last-Modified`, so clients can detect a new version even when the size is
   unchanged. Folders have no timestamp in the API and report none.

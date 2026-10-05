@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -205,39 +206,109 @@ type dataroomCacheEntry struct {
 const dataroomCacheTTL = 60 * time.Second
 
 // dataroomCache is a thread-safe, TTL-based cache mapping dataroom display names to IDs.
+//
+// An expired list is served while a single background fetch replaces it
+// (stale-while-revalidate): every request resolves its dataroom here, so a
+// refresh made under the lock stalled the whole server for the /dataroom round
+// trip once per TTL. Only the very first resolution, and a lookup of a name
+// the expired list does not hold (a dataroom created since), wait for a fetch.
 type dataroomCache struct {
-	mu      sync.RWMutex
-	entry   *dataroomCacheEntry
-	fetchFn func(ctx context.Context) ([]dataroomCacheItem, error)
+	mu       sync.Mutex
+	entry    *dataroomCacheEntry
+	incoming *dataroomFetch // fetch in flight, nil when idle
+	fetchFn  func(ctx context.Context) ([]dataroomCacheItem, error)
+}
+
+// dataroomFetch is a fetch of the list shared by every caller that needs it
+// while it runs. entry and err are written once, before done is closed.
+type dataroomFetch struct {
+	done  chan struct{}
+	entry *dataroomCacheEntry
+	err   error
 }
 
 func newDataroomCache(fetchFn func(ctx context.Context) ([]dataroomCacheItem, error)) *dataroomCache {
 	return &dataroomCache{fetchFn: fetchFn}
 }
 
+func (e *dataroomCacheEntry) fresh() bool {
+	return e != nil && time.Since(e.fetchedAt) < dataroomCacheTTL
+}
+
+// resolve returns the cached list, expired or not, and starts a refresh when
+// it is expired. It waits only when nothing is cached yet.
 func (c *dataroomCache) resolve(ctx context.Context) (*dataroomCacheEntry, error) {
-	c.mu.RLock()
-	if c.entry != nil && time.Since(c.entry.fetchedAt) < dataroomCacheTTL {
-		e := c.entry
-		c.mu.RUnlock()
+	c.mu.Lock()
+	e := c.entry
+	if e.fresh() {
+		c.mu.Unlock()
 
 		return e, nil
 	}
-	c.mu.RUnlock()
+	f := c.fetchLocked(ctx)
+	c.mu.Unlock()
+	if e != nil {
+		return e, nil
+	}
 
+	return f.wait(ctx)
+}
+
+// refreshed returns a fresh list, waiting for the fetch if needed.
+func (c *dataroomCache) refreshed(ctx context.Context) (*dataroomCacheEntry, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	// Re-check after acquiring write lock (another goroutine may have refreshed).
-	if c.entry != nil && time.Since(c.entry.fetchedAt) < dataroomCacheTTL {
-		return c.entry, nil
-	}
+	if c.entry.fresh() {
+		e := c.entry
+		c.mu.Unlock()
 
-	metrics.WebdavDataroomCacheRefreshes.Inc()
-	items, err := c.fetchFn(ctx)
-	if err != nil {
-		return nil, err
+		return e, nil
 	}
+	f := c.fetchLocked(ctx)
+	c.mu.Unlock()
 
+	return f.wait(ctx)
+}
+
+func (f *dataroomFetch) wait(ctx context.Context) (*dataroomCacheEntry, error) {
+	select {
+	case <-f.done:
+		return f.entry, f.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// fetchLocked returns the fetch in flight, or starts one. The fetch outlives
+// the request that started it (it serves every waiter); a failed one leaves
+// the stale list in place, and the next request starts another. The caller
+// holds c.mu.
+func (c *dataroomCache) fetchLocked(ctx context.Context) *dataroomFetch {
+	if c.incoming != nil {
+		return c.incoming
+	}
+	f := &dataroomFetch{done: make(chan struct{})}
+	c.incoming = f
+	go func() {
+		metrics.WebdavDataroomCacheRefreshes.Inc()
+		items, err := c.fetchFn(context.WithoutCancel(ctx))
+		var e *dataroomCacheEntry
+		if err == nil {
+			e = newDataroomCacheEntry(items)
+		}
+		c.mu.Lock()
+		if err == nil {
+			c.entry = e
+		}
+		c.incoming = nil
+		c.mu.Unlock()
+		f.entry, f.err = e, err
+		close(f.done)
+	}()
+
+	return f
+}
+
+func newDataroomCacheEntry(items []dataroomCacheItem) *dataroomCacheEntry {
 	// Assign collision suffixes ("Docs (2)") deterministically by ID so a given
 	// dataroom always maps to the same display name across cache refreshes,
 	// regardless of the order the API returns items in. Without this a mounted
@@ -266,22 +337,28 @@ func (c *dataroomCache) resolve(ctx context.Context) (*dataroomCacheEntry, error
 	}
 	sort.Strings(names)
 
-	c.entry = &dataroomCacheEntry{
+	return &dataroomCacheEntry{
 		byName:    byName,
 		names:     names,
 		fetchedAt: time.Now(),
 	}
-
-	return c.entry, nil
 }
 
 // idForName returns the dataroom ID for the given display name, or os.ErrNotExist.
+// A name missing from an expired list waits for the refresh: it may be a
+// dataroom created since.
 func (c *dataroomCache) idForName(ctx context.Context, name string) (string, error) {
 	e, err := c.resolve(ctx)
 	if err != nil {
 		return "", err
 	}
 	id, ok := e.byName[name]
+	if !ok && !e.fresh() {
+		if e, err = c.refreshed(ctx); err != nil {
+			return "", err
+		}
+		id, ok = e.byName[name]
+	}
 	if !ok {
 		return "", os.ErrNotExist
 	}
@@ -539,7 +616,7 @@ type writeFileHandle struct {
 	tempFilePath string
 	drID         string
 	parentPath   string
-	parentURI    string // retyc://id/parent — key of the listing to invalidate
+	fileName     string
 	wfs          *webdavFS
 	isPut        bool // true = real PUT; false = LOCK-driven create
 }
@@ -562,22 +639,29 @@ func (h *writeFileHandle) Close() error {
 			return nil
 		}
 	}
-	ctx := context.WithoutCancel(h.ctx)
-	sess, err := h.wfs.getSession(ctx, h.drID)
+	defer func() { _ = os.RemoveAll(h.tempDir) }()
+	src, err := os.Open(h.tempFilePath)
 	if err != nil {
-		_ = os.RemoveAll(h.tempDir)
-
-		return fmt.Errorf("dataroom session: %w", err)
+		return err
 	}
-	err = service.UploadToDataroomWithSession(
-		ctx, h.wfs.client, h.drID, h.parentPath, []string{h.tempFilePath}, sess, nil,
-	)
-	_ = os.RemoveAll(h.tempDir)
-	if err == nil {
-		h.wfs.invalidateNodeCache(h.parentURI)
+	defer func() { _ = src.Close() }()
+	fi, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	// The size is known now: upload through the streaming path, which resolves
+	// the folder and an existing node from the cached listings, cleans up a
+	// failed upload and updates the listing in place.
+	w, err := h.wfs.openForWriteStream(context.WithoutCancel(h.ctx), h.drID, h.parentPath, h.fileName, fi.Size())
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(w, src)
+	if err := w.Close(); err != nil {
+		return err
 	}
 
-	return err
+	return copyErr
 }
 func (h *writeFileHandle) Read(_ []byte) (int, error) { return 0, os.ErrPermission }
 func (h *writeFileHandle) Write(p []byte) (int, error) {
@@ -756,6 +840,72 @@ func (fs *webdavFS) parentNodeID(ctx context.Context, drID, nodePath string) (*s
 func (fs *webdavFS) upsertNodeCache(uri string, node service.DataroomNodeInfo) {
 	fs.nodeMu.Lock()
 	defer fs.nodeMu.Unlock()
+	fs.upsertNodeCacheLocked(uri, node)
+}
+
+// removeFromNodeCache drops the child name from the cached listing of uri,
+// after this server deleted or moved it away: the PROPFIND a client sends
+// right after is then served from cache instead of re-listing the folder.
+// Same generation and copy rules as upsertNodeCache.
+func (fs *webdavFS) removeFromNodeCache(uri, name string) {
+	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	fs.removeFromNodeCacheLocked(uri, name)
+}
+
+// moveInNodeCache moves the child srcName of the cached listing srcURI to
+// dstName in the listing dstURI, after this server renamed it. The node keeps
+// every field but its name. When the source listing no longer names the node
+// (expired meanwhile), its fields are unknown: the destination listing is
+// dropped instead, so the next request re-lists it.
+func (fs *webdavFS) moveInNodeCache(srcURI, srcName, dstURI, dstName string) {
+	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	var moved *service.DataroomNodeInfo
+	if entry, ok := fs.nodeCache[srcURI]; ok {
+		for _, n := range entry.nodes {
+			if n.Name == srcName {
+				moved = &n
+
+				break
+			}
+		}
+	}
+	fs.removeFromNodeCacheLocked(srcURI, srcName)
+	if moved == nil {
+		delete(fs.nodeCache, dstURI)
+		fs.nodeGen[dstURI]++
+
+		return
+	}
+	moved.Name = dstName
+	fs.upsertNodeCacheLocked(dstURI, *moved)
+}
+
+func (fs *webdavFS) upsertNodeCacheLocked(uri string, node service.DataroomNodeInfo) {
+	fs.editNodeCacheLocked(uri, func(nodes []service.DataroomNodeInfo) []service.DataroomNodeInfo {
+		for i := range nodes {
+			if nodes[i].Name == node.Name {
+				nodes[i] = node
+
+				return nodes
+			}
+		}
+
+		return append(nodes, node)
+	})
+}
+
+func (fs *webdavFS) removeFromNodeCacheLocked(uri, name string) {
+	fs.editNodeCacheLocked(uri, func(nodes []service.DataroomNodeInfo) []service.DataroomNodeInfo {
+		return slices.DeleteFunc(nodes, func(n service.DataroomNodeInfo) bool { return n.Name == name })
+	})
+}
+
+// editNodeCacheLocked applies edit to a copy of the cached listing of uri and
+// bumps the URI's generation, whether or not a listing is cached (see
+// upsertNodeCache). The caller holds nodeMu.
+func (fs *webdavFS) editNodeCacheLocked(uri string, edit func([]service.DataroomNodeInfo) []service.DataroomNodeInfo) {
 	if fs.nodeGen == nil {
 		fs.nodeGen = make(map[string]uint64)
 	}
@@ -766,19 +916,7 @@ func (fs *webdavFS) upsertNodeCache(uri string, node service.DataroomNodeInfo) {
 	}
 	nodes := make([]service.DataroomNodeInfo, len(entry.nodes), len(entry.nodes)+1)
 	copy(nodes, entry.nodes)
-	replaced := false
-	for i := range nodes {
-		if nodes[i].Name == node.Name {
-			nodes[i] = node
-			replaced = true
-
-			break
-		}
-	}
-	if !replaced {
-		nodes = append(nodes, node)
-	}
-	fs.nodeCache[uri] = &nodeCacheEntry{nodes: nodes, fetchedAt: entry.fetchedAt}
+	fs.nodeCache[uri] = &nodeCacheEntry{nodes: edit(nodes), fetchedAt: entry.fetchedAt}
 }
 
 // cachedFileNodeID looks up a file by name in the cached listing of a folder,
@@ -906,10 +1044,10 @@ func (fs *webdavFS) listNodes(ctx context.Context, drID, nodePath string) ([]ser
 // matched literally: WebDAV paths are client names, never glob patterns.
 //
 // The parent listing can be up to nodeCacheTTL stale and name a folder deleted
-// elsewhere, which the listing itself does not reveal (see fetchNodesOnce): the
-// folder check then answers 404 or 410, and the listing is retried once against
-// a fresh parent listing. As for RemoveAll and Rename, a folder moved elsewhere
-// within that window is listed at its new location until the TTL expires.
+// elsewhere: listing its children then answers 404, or 410 while its purge is
+// pending, and the listing is retried once against a fresh parent listing. As
+// for RemoveAll and Rename, a folder moved elsewhere within that window is
+// listed at its new location until the TTL expires.
 func (fs *webdavFS) fetchNodes(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error) {
 	sess, err := fs.getSession(ctx, drID)
 	if err != nil {
@@ -930,14 +1068,6 @@ func (fs *webdavFS) fetchNodes(ctx context.Context, drID, nodePath string) ([]se
 }
 
 // fetchNodesOnce resolves the folder ID of nodePath and lists its children.
-//
-// The API lists children by a bare parent_id filter: for a folder deleted since
-// its ID was cached, it answers an empty page, or the children its asynchronous
-// purge has not reached yet — never 404. So the folder itself is fetched in
-// parallel with the listing, and a folder that is gone (404, or 410 while the
-// purge is pending) overrides the listing. The check costs one concurrent
-// request per listed folder and no latency; any other check failure is ignored,
-// the listing stands.
 func (fs *webdavFS) fetchNodesOnce(
 	ctx context.Context, drID, nodePath string, sess *service.DataroomSession,
 ) ([]service.DataroomNodeInfo, error) {
@@ -955,17 +1085,7 @@ func (fs *webdavFS) fetchNodesOnce(
 	}
 	trace.SpanFromContext(ctx).SetAttributes(telemetry.AttrNodeID.String(*folderID))
 
-	checked := make(chan error, 1)
-	go func() {
-		_, err := fs.client.GetDataroomNode(ctx, *folderID)
-		checked <- err
-	}()
-	nodes, err := service.ListNodesByIDWithSession(ctx, fs.client, drID, folderID, sess)
-	if checkErr := <-checked; errors.Is(checkErr, api.ErrNotFound) {
-		return nil, checkErr
-	}
-
-	return nodes, err
+	return service.ListNodesByIDWithSession(ctx, fs.client, drID, folderID, sess)
 }
 
 // nodesToFileInfos converts a slice of DataroomNodeInfo to []os.FileInfo.
@@ -1116,7 +1236,7 @@ func (fs *webdavFS) openForWriteTempFile(
 		tempFilePath: tempFilePath,
 		drID:         drID,
 		parentPath:   parentPath,
-		parentURI:    dataroomURI(drID, parentPath),
+		fileName:     fileName,
 		wfs:          fs,
 		isPut:        isPut,
 	}, nil
@@ -1382,7 +1502,7 @@ func (fs *webdavFS) RemoveAll(ctx context.Context, name string) error {
 		}
 	}
 	if err == nil {
-		fs.invalidateNodeCache(dataroomURI(drID, parentPath))
+		fs.removeFromNodeCache(dataroomURI(drID, parentPath), nodeName)
 		fs.invalidateNodeSubtree(dataroomURI(drID, subPath))
 	}
 
@@ -1461,9 +1581,8 @@ func (fs *webdavFS) Rename(ctx context.Context, oldName, newName string) error {
 		err = staleErr
 	}
 	if err == nil {
-		fs.invalidateNodeCache(dataroomURI(oldID, oldParent))
+		fs.moveInNodeCache(dataroomURI(oldID, oldParent), oldBase, dataroomURI(newID, newParent), newBase)
 		fs.invalidateNodeSubtree(dataroomURI(oldID, oldSub))
-		fs.invalidateNodeCache(dataroomURI(newID, newParent))
 		fs.invalidateNodeSubtree(dataroomURI(newID, newSub))
 	}
 
