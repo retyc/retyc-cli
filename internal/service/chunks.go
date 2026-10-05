@@ -97,15 +97,7 @@ readLoop:
 			break
 		}
 		if n > 0 {
-			// One short span per chunk under the caller's span: index and size
-			// only, never the file name.
-			_, encSpan := telemetry.Tracer().Start(ctx, "crypto.encrypt", trace.WithAttributes(
-				telemetry.AttrChunkIndex.Int(chunkID), telemetry.AttrChunkPlaintextBytes.Int(n)))
-			encStart := time.Now()
-			encrypted, encErr := crypto.EncryptBinaryForKey(buf[:n], sessionPubKey)
-			metrics.CryptoDuration.WithLabelValues("encrypt").Observe(time.Since(encStart).Seconds())
-			telemetry.RecordError(encSpan, encErr)
-			encSpan.End()
+			encrypted, encErr := encryptChunk(ctx, chunkID, buf[:n], sessionPubKey)
 			if encErr != nil {
 				setErr(fmt.Errorf("encrypting chunk %d: %w", chunkID, encErr))
 
@@ -155,6 +147,21 @@ readLoop:
 	}
 
 	return firstErr
+}
+
+// encryptChunk encrypts one chunk for the session key, under a short
+// crypto.encrypt span of the caller's span: index and size only, never the
+// file name.
+func encryptChunk(ctx context.Context, chunkID int, plain []byte, sessionPubKey string) ([]byte, error) {
+	_, span := telemetry.Tracer().Start(ctx, "crypto.encrypt", trace.WithAttributes(
+		telemetry.AttrChunkIndex.Int(chunkID), telemetry.AttrChunkPlaintextBytes.Int(len(plain))))
+	start := time.Now()
+	encrypted, err := crypto.EncryptBinaryForKey(plain, sessionPubKey)
+	metrics.CryptoDuration.WithLabelValues("encrypt").Observe(time.Since(start).Seconds())
+	telemetry.RecordError(span, err)
+	span.End()
+
+	return encrypted, err
 }
 
 // StreamDownloadChunks downloads chunkCount chunks concurrently via downloadFn,

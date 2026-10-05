@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -50,11 +51,13 @@ type DataroomUser struct {
 // Note: type_enc is a request-only field (NodeVersionCreateRequest); it is not
 // returned by the API and therefore not present in this response struct.
 type DataroomNodeVersion struct {
-	ID           string    `json:"id"`
-	NodeID       string    `json:"node_id"`
-	OriginalSize int64     `json:"original_size"`
-	ChunkCount   int       `json:"chunk_count"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           string `json:"id"`
+	NodeID       string `json:"node_id"`
+	OriginalSize int64  `json:"original_size"`
+	ChunkCount   int    `json:"chunk_count"`
+	// VersionNumber is 1 for the version that created the node.
+	VersionNumber int       `json:"version_number,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // DataroomNode is a node (file or directory) in a dataroom.
@@ -294,6 +297,35 @@ func (c *Client) CreateDataroomNodeVersion(
 	}
 	var result DataroomNodeVersion
 	if err := c.Post(ctx, "/dataroom/node/"+nodeID+"/version", bytes.NewReader(data), &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// CreateDataroomFileNode creates a file node, its version and its content in a
+// single request (POST /dataroom/{id}/node/file). chunk is the whole encrypted
+// content as one chunk, nil for an empty file, so the file must fit in one
+// chunk. parentID is nil for the dataroom root. With overwrite, a file already
+// holding the name gets the upload as its next version instead of a 409; a 409
+// then means a folder holds the name, or it was taken concurrently. The server
+// discards what a failed request created.
+func (c *Client) CreateDataroomFileNode(
+	ctx context.Context, dataroomID string, parentID *string,
+	nameEnc, nameHash, typeEnc string, originalSize int64, overwrite bool, chunk []byte,
+) (*DataroomNodeItem, error) {
+	fields := []formField{
+		{"name_enc", nameEnc},
+		{"name_hash", nameHash},
+		{"type_enc", typeEnc},
+		{"original_size", strconv.FormatInt(originalSize, 10)},
+		{"overwrite", strconv.FormatBool(overwrite)},
+	}
+	if parentID != nil {
+		fields = append(fields, formField{"parent_id", *parentID})
+	}
+	var result DataroomNodeItem
+	if err := c.postMultipart(ctx, "/dataroom/"+dataroomID+"/node/file", fields, chunk, &result); err != nil {
 		return nil, err
 	}
 

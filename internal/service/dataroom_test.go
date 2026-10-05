@@ -7,12 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
@@ -440,5 +444,164 @@ func TestInitStreamUploadInto_NameHeldByDeletedNode(t *testing.T) {
 	_, err = InitStreamUploadInto(context.Background(), newExportTestClient(srv), "dr1", nil, "doc.txt", 10, sess)
 	if !errors.Is(err, ErrNameBeingDeleted) {
 		t.Fatalf("err = %v, want ErrNameBeingDeleted", err)
+	}
+}
+
+// smallFileServer answers POST /dataroom/dr1/node/file with status, records the
+// decrypted form of every request in got, and fails on any other request.
+func smallFileServer(
+	t *testing.T, identity *age.HybridIdentity, status int, got *[]map[string]string,
+) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+		if r.Method != http.MethodPost || r.URL.Path != "/dataroom/dr1/node/file" {
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+
+			return
+		}
+		if err := r.ParseMultipartForm(10 << 20); err != nil { //nolint:gosec // G120: test server
+			t.Errorf("ParseMultipartForm: %v", err)
+		}
+		form := map[string]string{"parent_id": r.FormValue("parent_id"), "overwrite": r.FormValue("overwrite"),
+			"original_size": r.FormValue("original_size"), "name_hash": r.FormValue("name_hash")}
+		form["name"], _ = crypto.DecryptToString(r.FormValue("name_enc"), identity)
+		form["type"], _ = crypto.DecryptToString(r.FormValue("type_enc"), identity)
+		if f, _, err := r.FormFile("upload_file"); err == nil {
+			enc, _ := io.ReadAll(f)
+			plain, decErr := crypto.DecryptBinary(enc, identity)
+			if decErr != nil {
+				t.Errorf("upload_file does not decrypt: %v", decErr)
+			}
+			form["content"] = string(plain)
+		}
+		*got = append(*got, form)
+		if status != http.StatusCreated {
+			http.Error(w, "refused", status)
+
+			return
+		}
+		w.WriteHeader(status)
+		fmt.Fprint(w, `{"node":{"id":"n-1","name_enc":"x","type_enc":"x","parent_id":null},`+
+			`"node_version":{"id":"v-3","node_id":"n-1","original_size":5,"chunk_count":1,"version_number":3,`+
+			`"created_at":"2026-10-05T10:00:00Z"},"max_version_number":3,"capabilities":{}}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+// A file that fits in one chunk is sent in a single request, its name, type and
+// content encrypted for the session key, overwriting by default.
+func TestUploadSmallFile(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]string
+	srv := smallFileServer(t, identity, http.StatusCreated, &got)
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String(), NameSalt: "salt"}
+	parent := "d-1"
+
+	node, newNode, err := UploadSmallFile(context.Background(), newExportTestClient(srv), "dr1", &parent,
+		"notes.txt", []byte("hello"), sess)
+	if err != nil {
+		t.Fatalf("UploadSmallFile: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("requests = %d, want 1", len(got))
+	}
+	want := map[string]string{
+		"parent_id": "d-1", "overwrite": "true", "original_size": "5", "name_hash": nodeNameHash("notes.txt", "salt"),
+		"name": "notes.txt", "type": "text/plain; charset=utf-8", "content": "hello",
+	}
+	for k, v := range want {
+		if got[0][k] != v {
+			t.Errorf("%s = %q, want %q", k, got[0][k], v)
+		}
+	}
+	if node.ID != "n-1" || node.VersionID != "v-3" || node.Size != 5 || node.ChunkCount != 1 ||
+		node.Name != "notes.txt" || node.Type != "file" || node.ModTime().IsZero() {
+		t.Errorf("node = %+v", node)
+	}
+	if newNode {
+		t.Error("newNode is true for version 3 of an existing file")
+	}
+}
+
+// An empty file sends no content part and reports no chunk.
+func TestUploadSmallFile_Empty(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]string
+	srv := smallFileServer(t, identity, http.StatusCreated, &got)
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+
+	node, _, err := UploadSmallFile(context.Background(), newExportTestClient(srv), "dr1", nil, "empty", nil, sess)
+	if err != nil {
+		t.Fatalf("UploadSmallFile: %v", err)
+	}
+	if _, sent := got[0]["content"]; sent {
+		t.Error("upload_file sent for an empty file")
+	}
+	if got[0]["parent_id"] != "" || node.ChunkCount != 0 || node.Size != 0 {
+		t.Errorf("form = %v, node = %+v", got[0], node)
+	}
+}
+
+// The API answers 410 when the name is held by a node pending deletion: the
+// caller gets ErrNameBeingDeleted, which does not read as a missing parent.
+func TestUploadSmallFile_NameBeingDeleted(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]string
+	srv := smallFileServer(t, identity, http.StatusGone, &got)
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+
+	_, _, err = UploadSmallFile(context.Background(), newExportTestClient(srv), "dr1", nil, "doc.txt", []byte("x"), sess)
+	if !errors.Is(err, ErrNameBeingDeleted) || errors.Is(err, api.ErrNotFound) {
+		t.Errorf("err = %v, want ErrNameBeingDeleted and not api.ErrNotFound", err)
+	}
+}
+
+// A file above one chunk cannot go through the single request.
+func TestUploadSmallFile_RejectsMoreThanOneChunk(t *testing.T) {
+	sess := &DataroomSession{}
+	_, _, err := UploadSmallFile(context.Background(), nil, "dr1", nil, "big", make([]byte, UploadChunkSize+1), sess)
+	if err == nil {
+		t.Error("UploadSmallFile accepted a file larger than one chunk")
+	}
+}
+
+// dataroom cp (and the MCP upload tool) send a file that fits in one chunk in a
+// single request instead of node, version and chunk.
+func TestUploadToDataroom_SmallFileIsOneRequest(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]string
+	srv := smallFileServer(t, identity, http.StatusCreated, &got)
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+	path := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var progressed int
+	progress := func(_ string, n int, _ int64) { progressed += n }
+
+	if err := UploadToDataroomWithSession(context.Background(), newExportTestClient(srv), "dr1", "/",
+		[]string{path}, sess, progress); err != nil {
+		t.Fatalf("UploadToDataroomWithSession: %v", err)
+	}
+	if len(got) != 1 || got[0]["content"] != "hello" {
+		t.Errorf("requests = %v, want one carrying the content", got)
+	}
+	if progressed != 5 {
+		t.Errorf("progress reported %d bytes, want 5", progressed)
 	}
 }

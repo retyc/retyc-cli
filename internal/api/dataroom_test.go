@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -556,5 +558,74 @@ func TestGetDataroomNode_Directory(t *testing.T) {
 	}
 	if node.TypeEnc != nil {
 		t.Errorf("TypeEnc should be nil for directory node")
+	}
+}
+
+// A small file is created with its version and its single chunk in one
+// multipart request; an empty file sends no upload_file, a root file no
+// parent_id.
+func TestCreateDataroomFileNode(t *testing.T) {
+	parent := "d-1"
+	cases := map[string]struct {
+		parentID *string
+		chunk    []byte
+	}{
+		"in a folder":         {parentID: &parent, chunk: []byte("encrypted")},
+		"empty file, at root": {},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+				if r.Method != http.MethodPost || r.URL.Path != "/dataroom/dr-1/node/file" {
+					t.Errorf("request = %s %s, want POST /dataroom/dr-1/node/file", r.Method, r.URL.Path)
+				}
+				if err := r.ParseMultipartForm(10 << 20); err != nil { //nolint:gosec // G120: test server
+					t.Fatalf("ParseMultipartForm() error = %v", err)
+				}
+				want := map[string]string{
+					"name_enc": "N", "name_hash": "H", "type_enc": "T",
+					"original_size": "9", "overwrite": "true",
+				}
+				if tc.parentID != nil {
+					want["parent_id"] = *tc.parentID
+				}
+				for k, v := range want {
+					if got := r.FormValue(k); got != v {
+						t.Errorf("%s = %q, want %q", k, got, v)
+					}
+				}
+				if _, ok := r.MultipartForm.Value["parent_id"]; ok && tc.parentID == nil {
+					t.Error("parent_id sent for a root file")
+				}
+				f, _, err := r.FormFile("upload_file")
+				switch {
+				case tc.chunk == nil && err == nil:
+					t.Error("upload_file sent for an empty file")
+				case tc.chunk != nil && err != nil:
+					t.Errorf("FormFile(upload_file) error = %v", err)
+				case tc.chunk != nil:
+					var got bytes.Buffer
+					_, _ = got.ReadFrom(f)
+					if got.String() != string(tc.chunk) {
+						t.Errorf("upload_file = %q, want %q", got.String(), tc.chunk)
+					}
+				}
+				w.WriteHeader(http.StatusCreated)
+				fmt.Fprint(w, `{"node":{"id":"n-1","name_enc":"N","type_enc":"T","parent_id":null},`+
+					`"node_version":{"id":"v-1","node_id":"n-1","original_size":9,"chunk_count":1,`+
+					`"version_number":2,"created_at":"2026-10-05T10:00:00Z"},"max_version_number":2,"capabilities":{}}`)
+			}))
+			defer srv.Close()
+
+			item, err := newTestClient(srv).CreateDataroomFileNode(context.Background(), "dr-1", tc.parentID,
+				"N", "H", "T", 9, true, tc.chunk)
+			if err != nil {
+				t.Fatalf("CreateDataroomFileNode() error = %v", err)
+			}
+			if item.Node.ID != "n-1" || item.Version == nil || item.Version.ID != "v-1" || item.Version.VersionNumber != 2 {
+				t.Errorf("item = %+v / %+v, want node n-1, version v-1 number 2", item.Node, item.Version)
+			}
+		})
 	}
 }

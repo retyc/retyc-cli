@@ -354,6 +354,12 @@ Direction detected from which argument is a `retyc://` URI:
   Directories are uploaded recursively (BFS). SIGINT or a failed upload discards what the
   upload created (`service.DiscardFailedUpload`): the node if it was new, otherwise only the
   new version (`DeleteDataroomNodeVersion`) — best-effort, deleting needs `can_delete`.
+- A file that fits in one chunk (≤ `service.UploadChunkSize`, empty included) goes through
+  `service.UploadSmallFile` → `POST /dataroom/{id}/node/file` (operationId
+  `createDataroomFileNode`, via `api.Client.CreateDataroomFileNode`, multipart): node + version + the single encrypted chunk in one request, `overwrite=true`
+  so an existing file gets a new version, 410 → `ErrNameBeingDeleted`. The server drops a
+  failed request: no `DiscardFailedUpload`. WebDAV does the same (`smallWriteHandle`, body
+  kept in memory, sent on Close); larger files keep the path below.
 - Version creation announces `chunk_count_expected` = `service.ChunkCount(size)`; the API
   refuses any chunk index beyond it (422) and never overwrites a stored chunk, so
   `UploadChunks` fails when the source does not yield exactly the declared size.

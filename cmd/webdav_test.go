@@ -2528,11 +2528,30 @@ func TestWebdavFS_MkdirDropsListingsOfTheOldFolder(t *testing.T) {
 	}
 }
 
+// smallFileReply is the answer of POST /dataroom/{id}/node/file.
+func smallFileReply(nodeID, versionID string, number int) string {
+	return fmt.Sprintf(`{"node":{"id":%q,"name_enc":"x","type_enc":"x","parent_id":null},`+
+		`"node_version":{"id":%q,"node_id":%q,"original_size":0,"chunk_count":0,"version_number":%d,`+
+		`"created_at":"2026-10-05T10:00:00Z"},"max_version_number":%d,"capabilities":{}}`,
+		nodeID, versionID, nodeID, number, number)
+}
+
+// smallFileParent returns the parent_id of a POST /dataroom/{id}/node/file,
+// "" for the root.
+func smallFileParent(t *testing.T, r *http.Request) string {
+	t.Helper()
+	if err := r.ParseMultipartForm(10 << 20); err != nil { //nolint:gosec // G120: test server
+		t.Errorf("ParseMultipartForm: %v", err)
+	}
+
+	return r.FormValue("parent_id")
+}
+
 // The sequence davfs2 sends for `mkdir -p a/b && echo x > a/b/f` (traced on the
 // CSI): MKCOL a, MKCOL a/b, an empty PUT on create, then the PUT with content.
 // Every folder ID is known from the cache — the root listing, then the folders
-// just created — so each request is only its own writes: no listing to find a
-// parent, no CreateDataroomNode answering 409 on the overwrite.
+// just created — and each PUT fits in one chunk, so each request is a single
+// API call: no listing to find a parent, no node, version and chunk in turn.
 func TestWebdav_MkdirThenWriteUsesOnlyCachedParents(t *testing.T) {
 	identity, err := crypto.GenerateKeyPair()
 	if err != nil {
@@ -2554,10 +2573,13 @@ func TestWebdav_MkdirThenWriteUsesOnlyCachedParents(t *testing.T) {
 				parent = *body.ParentID
 			}
 			fmt.Fprintf(w, `{"id":%q,"name_enc":"x"}`, next[parent])
-		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/f-1/version":
-			fmt.Fprintf(w, `{"id":"v-%d","created_at":"2026-10-04T10:00:00Z"}`, len(log.list()))
-		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/dataroom/node/version/"):
-			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/dr1/node/file":
+			if parent := smallFileParent(t, r); parent != "d-b" {
+				t.Errorf("parent_id = %q, want d-b", parent)
+			}
+			n := len(log.list()) - 2 // 1 for the empty PUT, 2 for the next
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, smallFileReply("f-1", fmt.Sprintf("v-%d", n), n))
 		default:
 			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
 		}
@@ -2591,20 +2613,26 @@ func TestWebdav_MkdirThenWriteUsesOnlyCachedParents(t *testing.T) {
 	}
 
 	want := []string{
-		"POST /dataroom/dr1/node",                 // MKCOL a
-		"POST /dataroom/dr1/node",                 // MKCOL a/b
-		"POST /dataroom/dr1/node",                 // empty PUT: node f
-		"POST /dataroom/node/f-1/version",         // empty PUT: version
-		"POST /dataroom/node/f-1/version",         // PUT: new version
-		"POST /dataroom/node/version/v-5/chunk/0", // PUT: content
+		"POST /dataroom/dr1/node",      // MKCOL a
+		"POST /dataroom/dr1/node",      // MKCOL a/b
+		"POST /dataroom/dr1/node/file", // empty PUT
+		"POST /dataroom/dr1/node/file", // PUT with content: next version
 	}
 	if calls := log.list(); !slices.Equal(calls, want) {
 		t.Errorf("API calls:\n  %s\nwant:\n  %s", strings.Join(calls, "\n  "), strings.Join(want, "\n  "))
 	}
+	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	entry := fs.nodeCache["retyc://dr1/a/b"]
+	if entry == nil || len(entry.nodes) != 1 || entry.nodes[0].VersionID != "v-2" || entry.nodes[0].Size != 10 {
+		t.Errorf("listing of a/b = %+v, want f at version v-2, 10 bytes", entry)
+	}
 }
 
-// A buffered PUT whose upload fails cleans up what it created, like a streamed
-// one: the node when it was new, only the new version of an existing node.
+// A buffered PUT larger than one chunk whose upload fails cleans up what it
+// created, like a streamed one: the node when it was new, only the new version
+// of an existing node. (A file that fits in one chunk is created in a single
+// request, which the server discards on failure.)
 func TestWriteFileHandle_BufferedPutFailureCleansUp(t *testing.T) {
 	cases := map[string]struct {
 		listing []service.DataroomNodeInfo
@@ -2641,7 +2669,7 @@ func TestWriteFileHandle_BufferedPutFailureCleansUp(t *testing.T) {
 			if err != nil {
 				t.Fatalf("OpenFile: %v", err)
 			}
-			if _, err := f.Write([]byte("0123456789")); err != nil {
+			if _, err := f.Write(make([]byte, service.UploadChunkSize+1)); err != nil {
 				t.Fatalf("Write: %v", err)
 			}
 			if err := f.Close(); err == nil {
@@ -2658,18 +2686,21 @@ func TestWriteFileHandle_BufferedPutFailureCleansUp(t *testing.T) {
 // to a temp file and uploaded on Close. It must resolve the folder and the
 // existing node from the cached listings like a streamed PUT — not walk the
 // path from the root, hit a 409 and re-list — and update the listing in place.
+// A file that fits in one chunk is a single API call.
 func TestWriteFileHandle_BufferedPutUsesCachedListings(t *testing.T) {
 	var log callLog
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		log.add(r.Method + " " + r.URL.Path)
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/f-1/version":
-			fmt.Fprint(w, `{"id":"v-2","created_at":"2026-10-04T10:00:00Z"}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/version/v-2/chunk/0":
-			w.WriteHeader(http.StatusAccepted)
-		default:
+		if r.Method != http.MethodPost || r.URL.Path != "/dataroom/dr1/node/file" {
 			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+
+			return
 		}
+		if parent := smallFileParent(t, r); parent != "d-a" {
+			t.Errorf("parent_id = %q, want d-a", parent)
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, smallFileReply("f-1", "v-2", 2))
 	}
 	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
 		"retyc://dr1/":  {{ID: "d-a", Name: "a", Type: "dir"}},
@@ -2690,7 +2721,7 @@ func TestWriteFileHandle_BufferedPutUsesCachedListings(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	want := []string{"POST /dataroom/node/f-1/version", "POST /dataroom/node/version/v-2/chunk/0"}
+	want := []string{"POST /dataroom/dr1/node/file"}
 	if calls := log.list(); !slices.Equal(calls, want) {
 		t.Errorf("calls = %v, want %v", calls, want)
 	}
@@ -2704,5 +2735,104 @@ func TestWriteFileHandle_BufferedPutUsesCachedListings(t *testing.T) {
 	entry := fs.nodeCache["retyc://dr1/a"]
 	if entry == nil || len(entry.nodes) != 1 || entry.nodes[0].VersionID != "v-2" || entry.nodes[0].Size != 10 {
 		t.Errorf("listing after the upload = %+v, want doc.txt at version v-2, 10 bytes", entry)
+	}
+}
+
+// — PUT of a file that fits in one chunk ——————————————————————————————————————
+
+// The PUT response carries the new version's ETag, although the version only
+// exists once Close has sent the file: the handler reads the ETag after Close,
+// from the info Stat returned before it.
+func TestSmallPut_ETagAndListing(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dataroom/dr1/node/file" {
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, smallFileReply("f-9", "v-9", 1))
+	}
+	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{"retyc://dr1/": {}})
+	ctx := withContentLength(withIsPut(context.Background()), 5)
+
+	f, err := fs.OpenFile(ctx, "/dataroom/DR/doc.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.Write([]byte("hello")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	etag, err := fi.(webdav.ETager).ETag(context.Background())
+	if err != nil || etag != `"v-9"` {
+		t.Errorf("ETag = (%q, %v), want the new version \"v-9\"", etag, err)
+	}
+	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	nodes := fs.nodeCache["retyc://dr1/"].nodes
+	if len(nodes) != 1 || nodes[0].ID != "f-9" || nodes[0].VersionID != "v-9" || nodes[0].Size != 5 ||
+		nodes[0].ChunkCount != 1 {
+		t.Errorf("listing = %+v, want doc.txt as f-9 at v-9, 5 bytes in 1 chunk", nodes)
+	}
+}
+
+// A body shorter than its Content-Length is not sent: the version would not
+// hold what the client declared.
+func TestSmallPut_ShortBodyIsNotSent(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected API call %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}
+	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{"retyc://dr1/": {}})
+	ctx := withContentLength(withIsPut(context.Background()), 10)
+
+	f, err := fs.OpenFile(ctx, "/dataroom/DR/doc.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.Write([]byte("short")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := f.Close(); err == nil {
+		t.Error("Close succeeded with 5 of the 10 declared bytes")
+	}
+	if _, err := f.Write([]byte("0123456789")); err == nil {
+		t.Error("Write accepted bytes after Close")
+	}
+}
+
+// The cached listing can name a parent deleted elsewhere: the request answers
+// 404, and the stale listings are dropped so the next request re-resolves.
+func TestSmallPut_DeletedParentDropsListings(t *testing.T) {
+	handler := func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "parent not found", http.StatusNotFound)
+	}
+	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/":  {{ID: "d-old", Name: "a", Type: "dir"}},
+		"retyc://dr1/a": {},
+	})
+	ctx := withContentLength(withIsPut(context.Background()), 5)
+
+	f, err := fs.OpenFile(ctx, "/dataroom/DR/a/doc.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.Write([]byte("hello")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := f.Close(); err == nil {
+		t.Fatal("Close succeeded although the parent is gone")
+	}
+	for _, uri := range []string{"retyc://dr1/", "retyc://dr1/a"} {
+		if nodeCacheHas(fs, uri) {
+			t.Errorf("%s still cached after the parent turned out to be gone", uri)
+		}
 	}
 }

@@ -92,6 +92,10 @@ Notes and limitations:
   download the file and re-upload it instead.
 - **Uploading an existing name** creates a new **version** of that node rather than a
   duplicate.
+- **Small files are one request.** A file that fits in one 8 MB chunk (an empty one
+  included) is sent with its node and its version in a single API call
+  (`POST /dataroom/{id}/node/file`), kept in memory until the PUT completes; a larger
+  file is streamed chunk by chunk into a version created when the PUT starts.
 - **File names containing `/`** cannot be represented as a single path component and are
   skipped from listings (a warning is printed to stderr).
 - Listings are cached briefly (30 s); dataroom sessions (the decrypted session
@@ -244,7 +248,8 @@ are folded into `OTHER`.
 
 Chunk counts are the `retyc_cli_api_requests_total` series of the chunk routes
 (`/dataroom/node/version/{id}/chunk/{n}` for uploads,
-`/dataroom/node/{id}/download/{n}` for downloads).
+`/dataroom/node/{id}/download/{n}` for downloads); files that fit in one chunk are
+uploaded through `/dataroom/{id}/node/file` instead.
 
 ### Traces
 
@@ -273,7 +278,8 @@ dataroom title.
 - `Ctrl-C` (SIGINT) or SIGTERM triggers a graceful shutdown: in-flight uploads finish,
   temporary files are cleaned up, and a failed upload is discarded: the node it created,
   or only its new version when it overwrote an existing file (best-effort — deleting needs
-  a privileged role, so a contributor's failed version is reported, not removed).
+  a privileged role, so a contributor's failed version is reported, not removed). A file
+  sent in a single request leaves nothing to discard: the server drops a failed one.
 
 ## Security notes
 
