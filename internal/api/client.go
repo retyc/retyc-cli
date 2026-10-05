@@ -47,12 +47,6 @@ type Client struct {
 	missingChunkRetries []time.Duration
 }
 
-// New creates a Client that attaches a valid OAuth2 token to every request.
-// tokSource is called before each request; it must refresh the token when expired.
-// userAgent is sent as the User-Agent header on all requests.
-// When insecure is true, TLS certificate verification is skipped, which allows
-// connecting to servers using self-signed certificates.
-// When debug is true, raw API responses are printed to stderr.
 // Option customizes a Client at construction.
 type Option func(*clientOptions)
 
@@ -88,6 +82,12 @@ func WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) Option {
 	return func(o *clientOptions) { o.wrapTransport = wrap }
 }
 
+// New creates a Client that attaches a valid OAuth2 token to every request.
+// tokSource is called before each request; it must refresh the token when expired.
+// userAgent is sent as the User-Agent header on all requests.
+// When insecure is true, TLS certificate verification is skipped, which allows
+// connecting to servers using self-signed certificates.
+// When debug is true, raw API responses are printed to stderr.
 func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debug bool, opts ...Option) *Client {
 	o := clientOptions{missingChunkRetries: defaultMissingChunkRetries}
 	for _, opt := range opts {
