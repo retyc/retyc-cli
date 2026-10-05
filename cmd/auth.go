@@ -16,6 +16,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 )
@@ -210,6 +211,9 @@ func newHTTPClient(insecure, debug bool) *http.Client {
 	if debug {
 		transport = &debugTransport{wrapped: transport}
 	}
+	// One CLIENT span per OIDC round trip (discovery, token refresh, device
+	// flow), so the time spent authenticating shows up in the trace.
+	transport = telemetry.RoundTripper(transport)
 	transport = &api.UserAgentTransport{UserAgent: cliUserAgent(), Base: transport}
 
 	return &http.Client{

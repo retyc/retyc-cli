@@ -719,7 +719,7 @@ func TestWriteFileHandle_CloseUploadsUnderTheRequestSpan(t *testing.T) {
 	}
 	h := &writeFileHandle{
 		ctx: ctx, file: f, tempDir: tempDir, tempFilePath: tempFilePath,
-		drID: "dr1", parentURI: "retyc://dr1/", wfs: fs, isPut: true,
+		drID: "dr1", parentPath: "/", fileName: "f.txt", wfs: fs, isPut: true,
 	}
 	if err := h.Close(); err == nil {
 		t.Fatal("expected the session error to propagate")

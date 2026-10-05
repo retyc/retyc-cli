@@ -167,6 +167,12 @@ var routeTemplates = [][]string{
 	{"transfer", "{id}", "force"},
 	{"transfer", "{id}", "rekey"},
 	{"login", "config", "public"},
+	// Identity provider (Keycloak) routes, reached by the OIDC client: the
+	// realm is folded like an identifier.
+	{"realms", "{id}", ".well-known", "openid-configuration"},
+	{"realms", "{id}", "protocol", "openid-connect", "token"},
+	{"realms", "{id}", "protocol", "openid-connect", "auth", "device"},
+	{"realms", "{id}", "protocol", "openid-connect", "logout"},
 }
 
 // routeWords is the vocabulary of literal segments of routeTemplates. It is
