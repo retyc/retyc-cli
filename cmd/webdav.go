@@ -204,8 +204,6 @@ type dataroomCacheEntry struct {
 	fetchedAt time.Time
 }
 
-const dataroomCacheTTL = 60 * time.Second
-
 // detachedFetchTimeout bounds a fetch shared by several requests, which is
 // detached from the request that started it so that one client giving up
 // cannot fail the others. The API client has no overall timeout (an upload
@@ -227,11 +225,12 @@ func orDetachedFetchTimeout(d time.Duration) time.Duration {
 
 // dataroomCache is a thread-safe, TTL-based cache mapping dataroom display names to IDs.
 //
-// An expired list is served while a single background fetch replaces it
-// (stale-while-revalidate): every request resolves its dataroom here, so a
-// refresh made under the lock stalled the whole server for the /dataroom round
-// trip once per TTL. Only the very first resolution, and a lookup of a name
-// the expired list does not hold (a dataroom created since), wait for a fetch.
+// An expired list is served for up to maxStale more while a single background
+// fetch replaces it (stale-while-revalidate): every request resolves its
+// dataroom here, so a refresh made under the lock stalled the whole server for
+// the /dataroom round trip once per TTL. Only the very first resolution, a
+// list older than ttl+maxStale, and a lookup of a name the expired list does
+// not hold (a dataroom created since) wait for a fetch.
 type dataroomCache struct {
 	mu       sync.Mutex
 	entry    *dataroomCacheEntry
@@ -239,6 +238,9 @@ type dataroomCache struct {
 	fetchFn  func(ctx context.Context) ([]dataroomCacheItem, error)
 	// fetchTimeout bounds a fetch; zero means detachedFetchTimeout.
 	fetchTimeout time.Duration
+	// ttl and maxStale come from webdav.cache (see config.WebdavCacheConfig).
+	ttl      time.Duration
+	maxStale time.Duration
 }
 
 // dataroomFetch is a fetch of the list shared by every caller that needs it
@@ -249,27 +251,49 @@ type dataroomFetch struct {
 	err   error
 }
 
+// newDataroomCache returns a cache with the default webdav.cache settings;
+// webdav serve overrides ttl and maxStale from the configuration.
 func newDataroomCache(fetchFn func(ctx context.Context) ([]dataroomCacheItem, error)) *dataroomCache {
-	return &dataroomCache{fetchFn: fetchFn}
+	return &dataroomCache{
+		fetchFn:  fetchFn,
+		ttl:      config.DefaultWebdavCacheTTL,
+		maxStale: config.DefaultWebdavCacheMaxStale,
+	}
 }
 
-func (e *dataroomCacheEntry) fresh() bool {
-	return e != nil && time.Since(e.fetchedAt) < dataroomCacheTTL
+// cacheTTL returns the TTL, config.DefaultWebdavCacheTTL when unset (as
+// webdavFS.nodeTTL does).
+func (c *dataroomCache) cacheTTL() time.Duration {
+	if c.ttl > 0 {
+		return c.ttl
+	}
+
+	return config.DefaultWebdavCacheTTL
 }
 
-// resolve returns the cached list, expired or not, and starts a refresh when
-// it is expired. It waits only when nothing is cached yet.
+// fresh reports whether e is younger than the TTL.
+func (c *dataroomCache) fresh(e *dataroomCacheEntry) bool {
+	return e != nil && time.Since(e.fetchedAt) < c.cacheTTL()
+}
+
+// servable reports whether e may still be served while a refresh runs.
+func (c *dataroomCache) servable(e *dataroomCacheEntry) bool {
+	return e != nil && time.Since(e.fetchedAt) < c.cacheTTL()+c.maxStale
+}
+
+// resolve returns the cached list and starts a refresh when it is expired. It
+// waits only when nothing is cached yet, or the list is past ttl+maxStale.
 func (c *dataroomCache) resolve(ctx context.Context) (*dataroomCacheEntry, error) {
 	c.mu.Lock()
 	e := c.entry
-	if e.fresh() {
+	if c.fresh(e) {
 		c.mu.Unlock()
 
 		return e, nil
 	}
 	f := c.fetchLocked(ctx)
 	c.mu.Unlock()
-	if e != nil {
+	if c.servable(e) {
 		return e, nil
 	}
 
@@ -279,7 +303,7 @@ func (c *dataroomCache) resolve(ctx context.Context) (*dataroomCacheEntry, error
 // refreshed returns a fresh list, waiting for the fetch if needed.
 func (c *dataroomCache) refreshed(ctx context.Context) (*dataroomCacheEntry, error) {
 	c.mu.Lock()
-	if c.entry.fresh() {
+	if c.fresh(c.entry) {
 		e := c.entry
 		c.mu.Unlock()
 
@@ -377,7 +401,7 @@ func (c *dataroomCache) idForName(ctx context.Context, name string) (string, err
 		return "", err
 	}
 	id, ok := e.byName[name]
-	if !ok && !e.fresh() {
+	if !ok && !c.fresh(e) {
 		if e, err = c.refreshed(ctx); err != nil {
 			return "", err
 		}
@@ -552,7 +576,7 @@ func isClientGoneErr(err error) bool {
 // That listing is what supplied this handle's versionID, so a download failure
 // means it may describe a node that no longer exists — typically deleted from the
 // web app or another client, which never goes through invalidateNodeCache. Without
-// this, every read for the rest of nodeCacheTTL replays the dead version and dies
+// this, every read until the listing is refreshed replays the dead version and dies
 // mid-body: http.ServeContent has already committed 200 plus the stale
 // Content-Length by the time the first chunk is fetched, so the client sees a
 // truncated response and reports an I/O error. Dropping the entry makes the next
@@ -718,14 +742,24 @@ type nodeCacheEntry struct {
 // nodeFetch is an in-flight listing shared by every caller that misses the cache
 // for the same URI while it runs (single-flight). nodes/err are written once,
 // before done is closed.
+//
+// A background refresh of an expired listing queues for a refresh slot before
+// it starts. A request that misses the cache and joins it closes promoted
+// (through promote) so the fetch starts at once: a request never waits behind
+// the refresh queue, and a refresh holding a slot never waits for one held by
+// another refresh queued behind it.
 type nodeFetch struct {
-	done  chan struct{}
-	nodes []service.DataroomNodeInfo
-	err   error
+	done     chan struct{}
+	promoted chan struct{}
+	once     sync.Once
+	nodes    []service.DataroomNodeInfo
+	err      error
 }
 
-// nodeCacheTTL is longer than before because mutations now explicitly invalidate the cache.
-const nodeCacheTTL = 30 * time.Second
+// promote lets a queued background refresh start without a refresh slot.
+func (f *nodeFetch) promote() {
+	f.once.Do(func() { close(f.promoted) })
+}
 
 // webdavFS implements webdav.FileSystem over RETYC datarooms.
 type webdavFS struct {
@@ -744,11 +778,21 @@ type webdavFS struct {
 	// sessionFn resolves a dataroom session; nil means service.GetDataroomSession
 	// (tests inject a fake).
 	sessionFn func(ctx context.Context, drID string) (*service.DataroomSession, error)
+	// cacheTTL and cacheMaxStale come from webdav.cache (see
+	// config.WebdavCacheConfig). A zero cacheTTL means
+	// config.DefaultWebdavCacheTTL; a zero cacheMaxStale never serves an
+	// expired listing.
+	cacheTTL      time.Duration
+	cacheMaxStale time.Duration
 
 	nodeMu       sync.Mutex
 	nodeCache    map[string]*nodeCacheEntry
 	nodeGen      map[string]uint64     // bumped by every invalidation of that URI
 	nodeInflight map[string]*nodeFetch // listings currently running, by URI
+	// refreshSlots bounds the background refreshes running at once to
+	// api.concurrency.list: a client walking a tree served from expired
+	// listings would otherwise start one API listing per folder at once.
+	refreshSlots chan struct{}
 
 	// sessions holds one resolved session per dataroom for the life of the
 	// process (no TTL, single-flight, one scrypt at a time — see service.SessionCache).
@@ -840,23 +884,16 @@ func (fs *webdavFS) parentNodeID(ctx context.Context, drID, nodePath string) (*s
 		return nil, nil
 	}
 	grandParent, name := splitWebdavPath(nodePath)
-	nodes, err := fs.listNodes(ctx, drID, grandParent)
+	n, err := fs.findListedNode(ctx, drID, grandParent, name)
 	if err != nil {
 		return nil, err
 	}
-	for _, n := range nodes {
-		if n.Name != name {
-			continue
-		}
-		if n.Type != "dir" {
-			return nil, os.ErrInvalid
-		}
-		id := n.ID
-
-		return &id, nil
+	if n.Type != "dir" {
+		return nil, os.ErrInvalid
 	}
+	id := n.ID
 
-	return nil, os.ErrNotExist
+	return &id, nil
 }
 
 // upsertNodeCache refreshes a single node inside the cached listing of uri.
@@ -973,7 +1010,7 @@ func (fs *webdavFS) cachedFileNodeID(drID, parentPath, fileName string) (string,
 	fs.nodeMu.Lock()
 	defer fs.nodeMu.Unlock()
 	entry, ok := fs.nodeCache[uri]
-	if !ok || time.Since(entry.fetchedAt) >= nodeCacheTTL {
+	if !ok || time.Since(entry.fetchedAt) >= fs.nodeTTL() {
 		return "", false
 	}
 	for _, n := range entry.nodes {
@@ -993,7 +1030,7 @@ func (fs *webdavFS) cachedFileNodeID(drID, parentPath, fileName string) (string,
 // the uncached folder listing InitStreamUploadInto then runs to locate the node
 // again — two round-trips out of four on every overwrite.
 //
-// The listing may be up to nodeCacheTTL stale, so the node can have been deleted
+// The listing may be up to the cache TTL old, so the node can have been deleted
 // elsewhere in the meantime. The API answers 404 for exactly that case, or 410
 // while the node's purge is pending (both match api.ErrNotFound): drop the
 // stale listing and redo the upload through the full path, which recreates the
@@ -1017,66 +1054,198 @@ func (fs *webdavFS) initUpload(
 	return service.InitStreamUploadInto(ctx, fs.client, drID, parentID, fileName, size, sess)
 }
 
+// nodeTTL returns how long a cached listing is served without a refresh.
+func (fs *webdavFS) nodeTTL() time.Duration {
+	if fs.cacheTTL > 0 {
+		return fs.cacheTTL
+	}
+
+	return config.DefaultWebdavCacheTTL
+}
+
 // listNodes returns the decrypted children of drID at nodePath, using a TTL cache.
+//
+// A listing younger than the TTL is served as is. An expired one is still
+// served for cacheMaxStale more, while a background refresh replaces it
+// (stale-while-revalidate): a client walking a tree it has not touched for a
+// while — PrivateBin's purge lists every folder of its store — is answered from
+// memory instead of paying one API round trip per folder, in sequence.
 //
 // Cache misses are single-flighted: concurrent callers for the same URI (a file
 // manager fires PROPFINDs in parallel) share one API listing instead of each
 // running their own. The result is stored only if the URI was not invalidated
 // while the listing ran, so a mutation that lands mid-fetch wins.
 func (fs *webdavFS) listNodes(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error) {
-	uri := dataroomURI(drID, nodePath)
+	nodes, _, err := fs.listNodesStale(ctx, drID, nodePath)
 
+	return nodes, err
+}
+
+// findListedNode returns the child name of parentPath, or os.ErrNotExist.
+//
+// A name missing from an expired listing waits for its refresh before
+// answering, as dataroomCache.idForName does: it may be a node created
+// elsewhere since, and answering 404 from the old listing would turn staleness
+// into an error for up to ttl+max_stale. A name the listing holds is answered
+// at once, expired or not.
+func (fs *webdavFS) findListedNode(
+	ctx context.Context, drID, parentPath, name string,
+) (service.DataroomNodeInfo, error) {
+	nodes, stale, err := fs.listNodesStale(ctx, drID, parentPath)
+	for attempt := 0; err == nil; attempt++ {
+		for _, n := range nodes {
+			if n.Name == name {
+				return n, nil
+			}
+		}
+		if !stale || attempt > 0 {
+			return service.DataroomNodeInfo{}, os.ErrNotExist
+		}
+		nodes, err = fs.listNodesRefreshed(ctx, drID, parentPath)
+	}
+
+	return service.DataroomNodeInfo{}, err
+}
+
+// listNodesRefreshed returns a listing no older than the TTL, joining the
+// refresh in flight (and starting it at once if it is queued) when the cached
+// one has expired.
+func (fs *webdavFS) listNodesRefreshed(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error) {
+	uri := dataroomURI(drID, nodePath)
 	fs.nodeMu.Lock()
-	if e, ok := fs.nodeCache[uri]; ok && time.Since(e.fetchedAt) < nodeCacheTTL {
+	if e, ok := fs.nodeCache[uri]; ok && time.Since(e.fetchedAt) < fs.nodeTTL() {
 		fs.nodeMu.Unlock()
-		metrics.WebdavNodeCacheLookups.WithLabelValues("hit").Inc()
-		trace.SpanFromContext(ctx).AddEvent("cache.lookup", trace.WithAttributes(
-			telemetry.AttrCacheName.String("nodes"), telemetry.AttrCacheHit.Bool(true)))
 
 		return e.nodes, nil
 	}
-	metrics.WebdavNodeCacheLookups.WithLabelValues("miss").Inc()
-	trace.SpanFromContext(ctx).AddEvent("cache.lookup", trace.WithAttributes(
-		telemetry.AttrCacheName.String("nodes"), telemetry.AttrCacheHit.Bool(false)))
-	if f, ok := fs.nodeInflight[uri]; ok {
-		fs.nodeMu.Unlock()
-		select {
-		case <-f.done:
-			return f.nodes, f.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
+	f := fs.nodeFetchLocked(ctx, drID, nodePath, uri, false)
+	fs.nodeMu.Unlock()
+
+	return f.wait(ctx)
+}
+
+// wait returns the result of the fetch, or the context error if ctx ends first.
+func (f *nodeFetch) wait(ctx context.Context) ([]service.DataroomNodeInfo, error) {
+	select {
+	case <-f.done:
+		return f.nodes, f.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// listNodesStale is listNodes, also reporting whether the listing was served
+// expired (while a background refresh replaces it).
+func (fs *webdavFS) listNodesStale(
+	ctx context.Context, drID, nodePath string,
+) (nodes []service.DataroomNodeInfo, stale bool, err error) {
+	uri := dataroomURI(drID, nodePath)
+
+	fs.nodeMu.Lock()
+	if e, ok := fs.nodeCache[uri]; ok {
+		age := time.Since(e.fetchedAt)
+		if age < fs.nodeTTL() {
+			fs.nodeMu.Unlock()
+			recordNodeCacheLookup(ctx, "hit")
+
+			return e.nodes, false, nil
+		}
+		if age < fs.nodeTTL()+fs.cacheMaxStale {
+			fs.nodeFetchLocked(ctx, drID, nodePath, uri, true)
+			fs.nodeMu.Unlock()
+			recordNodeCacheLookup(ctx, "stale")
+
+			return e.nodes, true, nil
 		}
 	}
-	f := &nodeFetch{done: make(chan struct{})}
+	f := fs.nodeFetchLocked(ctx, drID, nodePath, uri, false)
+	fs.nodeMu.Unlock()
+	recordNodeCacheLookup(ctx, "miss")
+	nodes, err = f.wait(ctx)
+
+	return nodes, false, err
+}
+
+// recordNodeCacheLookup counts a listing cache lookup and records it on the
+// request span. result is hit, stale (expired, served while refreshed) or miss.
+func recordNodeCacheLookup(ctx context.Context, result string) {
+	metrics.WebdavNodeCacheLookups.WithLabelValues(result).Inc()
+	trace.SpanFromContext(ctx).AddEvent("cache.lookup", trace.WithAttributes(
+		telemetry.AttrCacheName.String("nodes"),
+		telemetry.AttrCacheHit.Bool(result != "miss"),
+		telemetry.AttrCacheStale.Bool(result == "stale")))
+}
+
+// nodeFetchLocked returns the listing of uri in flight, or starts one. A
+// background fetch (refresh of an expired listing) waits for a refresh slot
+// unless a request joins it; a request's fetch promotes any fetch it joins.
+// The caller holds nodeMu.
+//
+// The fetch is shared by every caller of this URI: it is detached from the
+// request that started it, so one aborted PROPFIND cannot fail the others. A
+// failed refresh leaves the expired listing in place, except when the folder
+// is gone: its listing is then dropped, so the next request answers 404
+// instead of replaying it until it is past cacheMaxStale.
+func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri string, background bool) *nodeFetch {
+	if f, ok := fs.nodeInflight[uri]; ok {
+		if !background {
+			f.promote()
+		}
+
+		return f
+	}
+	f := &nodeFetch{done: make(chan struct{}), promoted: make(chan struct{})}
+	if !background {
+		f.promote()
+	}
 	if fs.nodeInflight == nil {
 		fs.nodeInflight = make(map[string]*nodeFetch)
 	}
 	fs.nodeInflight[uri] = f
-	gen := fs.nodeGen[uri]
-	fs.nodeMu.Unlock()
+	if fs.refreshSlots == nil {
+		fs.refreshSlots = make(chan struct{}, service.Concurrency().List)
+	}
+	slots := fs.refreshSlots
 
 	fetch := fs.listFn
 	if fetch == nil {
 		fetch = fs.fetchNodes
 	}
-	// Shared by every concurrent caller of this URI: detach it from the
-	// leader's request so one aborted PROPFIND cannot fail the others.
-	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), orDetachedFetchTimeout(fs.fetchTimeout))
-	f.nodes, f.err = fetch(fctx, drID, nodePath)
-	cancel()
-
-	fs.nodeMu.Lock()
-	delete(fs.nodeInflight, uri)
-	if f.err == nil && fs.nodeGen[uri] == gen {
-		if fs.nodeCache == nil {
-			fs.nodeCache = make(map[string]*nodeCacheEntry)
+	detached := context.WithoutCancel(ctx)
+	go func() {
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		case <-f.promoted:
 		}
-		fs.nodeCache[uri] = &nodeCacheEntry{nodes: f.nodes, fetchedAt: time.Now()}
-	}
-	fs.nodeMu.Unlock()
-	close(f.done)
+		// The generation is read when the fetch starts, not when it was
+		// queued: a mutation made through this server before that is in the
+		// API's answer, so only one landing during the fetch must discard it.
+		fs.nodeMu.Lock()
+		gen := fs.nodeGen[uri]
+		fs.nodeMu.Unlock()
+		fctx, cancel := context.WithTimeout(detached, orDetachedFetchTimeout(fs.fetchTimeout))
+		f.nodes, f.err = fetch(fctx, drID, nodePath)
+		cancel()
 
-	return f.nodes, f.err
+		fs.nodeMu.Lock()
+		delete(fs.nodeInflight, uri)
+		if fs.nodeGen[uri] == gen {
+			switch {
+			case f.err == nil:
+				if fs.nodeCache == nil {
+					fs.nodeCache = make(map[string]*nodeCacheEntry)
+				}
+				fs.nodeCache[uri] = &nodeCacheEntry{nodes: f.nodes, fetchedAt: time.Now()}
+			case errors.Is(f.err, os.ErrNotExist):
+				delete(fs.nodeCache, uri)
+			}
+		}
+		fs.nodeMu.Unlock()
+		close(f.done)
+	}()
+
+	return f
 }
 
 // fetchNodes is the real listing behind listNodes: cached session + one API
@@ -1088,11 +1257,11 @@ func (fs *webdavFS) listNodes(ctx context.Context, drID, nodePath string) ([]ser
 // while a concurrent PROPFIND is fetching the very same listings). Names are
 // matched literally: WebDAV paths are client names, never glob patterns.
 //
-// The parent listing can be up to nodeCacheTTL stale and name a folder deleted
+// The parent listing can be expired (see listNodes) and name a folder deleted
 // elsewhere: listing its children then answers 404, or 410 while its purge is
 // pending, and the listing is retried once against a fresh parent listing. As
 // for RemoveAll and Rename, a folder moved elsewhere within that window is
-// listed at its new location until the TTL expires.
+// listed at its new location until the parent listing is refreshed.
 func (fs *webdavFS) fetchNodes(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error) {
 	sess, err := fs.getSession(ctx, drID)
 	if err != nil {
@@ -1681,25 +1850,19 @@ func (fs *webdavFS) RemoveAll(ctx context.Context, name string) error {
 // listed (the handler Stats only the destination of a MOVE). The mutation is
 // then the only round trip, whereas service.resolvePath would list the API once
 // per path level first; a miss costs one listing, never more. The cost of
-// trusting a listing up to nodeCacheTTL old is accepted: a node moved elsewhere
+// trusting a cached, possibly expired listing is accepted: a node moved elsewhere
 // by another client within that window is deleted or renamed at its new
 // location. A node deleted elsewhere makes the mutation answer 404, or 410
 // while its purge is pending (both match api.ErrNotFound), which callers retry
 // against a fresh listing.
 func (fs *webdavFS) listedNodeID(ctx context.Context, drID, parentPath, name string) (string, error) {
-	nodes, err := fs.listNodes(ctx, drID, parentPath)
+	n, err := fs.findListedNode(ctx, drID, parentPath, name)
 	if err != nil {
 		return "", err
 	}
-	for _, n := range nodes {
-		if n.Name == name {
-			trace.SpanFromContext(ctx).SetAttributes(telemetry.AttrNodeID.String(n.ID))
+	trace.SpanFromContext(ctx).SetAttributes(telemetry.AttrNodeID.String(n.ID))
 
-			return n.ID, nil
-		}
-	}
-
-	return "", os.ErrNotExist
+	return n.ID, nil
 }
 
 // deleteListedNode deletes the child name of parentPath (see listedNodeID).
@@ -1837,26 +2000,21 @@ func (fs *webdavFS) Stat(ctx context.Context, name string) (os.FileInfo, error) 
 	}
 
 	parentPath, nodeName := splitWebdavPath(subPath)
-	nodes, err := fs.listNodes(ctx, drID, parentPath)
+	n, err := fs.findListedNode(ctx, drID, parentPath, nodeName)
 	if err != nil {
 		return nil, err
 	}
-	for _, n := range nodes {
-		if n.Name == nodeName {
-			return &webdavFileInfo{
-				name:        n.Name,
-				size:        n.Size,
-				isDir:       n.Type == "dir",
-				modTime:     n.ModTime(),
-				nodeID:      n.ID,
-				versionID:   n.VersionID,
-				chunkCount:  n.ChunkCount,
-				contentType: n.MIMEType,
-			}, nil
-		}
-	}
 
-	return nil, os.ErrNotExist
+	return &webdavFileInfo{
+		name:        n.Name,
+		size:        n.Size,
+		isDir:       n.Type == "dir",
+		modTime:     n.ModTime(),
+		nodeID:      n.ID,
+		versionID:   n.VersionID,
+		chunkCount:  n.ChunkCount,
+		contentType: n.MIMEType,
+	}, nil
 }
 
 // contentTypeForPath resolves the Content-Type for a GET/HEAD target, preferring
@@ -2095,7 +2253,10 @@ Example:
 			}),
 			passphraseReader: webdavPassphraseReader,
 			identity:         identity,
+			cacheTTL:         cfg.Webdav.Cache.TTL,
+			cacheMaxStale:    cfg.Webdav.Cache.MaxStale,
 		}
+		fs.cache.ttl, fs.cache.maxStale = cfg.Webdav.Cache.TTL, cfg.Webdav.Cache.MaxStale
 
 		handler := &webdav.Handler{
 			FileSystem: fs,

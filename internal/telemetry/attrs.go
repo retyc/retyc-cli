@@ -36,6 +36,9 @@ const (
 	AttrKeySource            = attribute.Key("retyc.key.source") // passphrase | keyring
 	AttrCacheName            = attribute.Key("retyc.cache.name")
 	AttrCacheHit             = attribute.Key("retyc.cache.hit")
+	// AttrCacheStale marks a hit on an expired entry, served while a
+	// background refresh replaces it.
+	AttrCacheStale = attribute.Key("retyc.cache.stale")
 	AttrNodeCount            = attribute.Key("retyc.node.count")
 	AttrPathDepth            = attribute.Key("retyc.path.depth")
 	AttrMCPTool              = attribute.Key("retyc.mcp.tool")
