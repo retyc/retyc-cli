@@ -451,7 +451,7 @@ func TestIsLoopbackAddr(t *testing.T) {
 func ageDataroomCache(c *dataroomCache) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entry.fetchedAt = time.Now().Add(-2 * dataroomCacheTTL)
+	c.entry.fetchedAt = time.Now().Add(-2 * c.ttl)
 }
 
 // An expired list is served at once while a single background refresh
@@ -679,7 +679,7 @@ func notFoundServer() *httptest.Server {
 // TestReadFileHandle_StreamErrorInvalidatesNodeCache covers the streaming read path:
 // a failed chunk download must drop the parent listing from the cache so the next
 // request re-lists and answers 404, instead of replaying the dead version for the
-// rest of nodeCacheTTL.
+// rest of the TTL.
 func TestReadFileHandle_StreamErrorInvalidatesNodeCache(t *testing.T) {
 	srv := notFoundServer()
 	defer srv.Close()
@@ -1517,7 +1517,7 @@ func TestWebdavFS_RemoveAllUsesCachedListing(t *testing.T) {
 	}
 }
 
-// The cached listing can be up to nodeCacheTTL stale: when the node it names
+// The cached listing can be up to the TTL old: when the node it names
 // is gone (deleted, or replaced by a new node of the same name elsewhere), the
 // DELETE answers 404 or 410 and must be retried against a fresh listing.
 func TestWebdavFS_RemoveAllRetriesOnStaleListing(t *testing.T) {
@@ -2259,7 +2259,7 @@ func TestCachedFileNodeID(t *testing.T) {
 	}
 	fs := &webdavFS{nodeCache: map[string]*nodeCacheEntry{
 		"retyc://dr1/":        {nodes: fresh, fetchedAt: time.Now()},
-		"retyc://dr1/expired": {nodes: fresh, fetchedAt: time.Now().Add(-2 * nodeCacheTTL)},
+		"retyc://dr1/expired": {nodes: fresh, fetchedAt: time.Now().Add(-2 * (&webdavFS{}).nodeTTL())},
 	}}
 
 	if id, ok := fs.cachedFileNodeID("dr1", "/", "doc.txt"); !ok || id != "f-1" {
@@ -2334,7 +2334,7 @@ func TestInitUpload_OverwriteSkipsConflictAndRelisting(t *testing.T) {
 	}
 }
 
-// The cached listing can be up to nodeCacheTTL stale: if the node was deleted
+// The cached listing can be up to the TTL old: if the node was deleted
 // elsewhere, the shortcut gets a 404 and the upload must still succeed through
 // the full path, which recreates the node.
 func TestInitUpload_FallsBackWhenCachedNodeIsGone(t *testing.T) {
@@ -2844,5 +2844,444 @@ func TestSmallPut_DeletedParentDropsListings(t *testing.T) {
 		if nodeCacheHas(fs, uri) {
 			t.Errorf("%s still cached after the parent turned out to be gone", uri)
 		}
+	}
+}
+
+// — listNodes: stale-while-revalidate ——————————————————————————————————————————
+
+// ageNodeCache makes the cached listing of uri the given age.
+func ageNodeCache(fs *webdavFS, uri string, age time.Duration) {
+	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	fs.nodeCache[uri].fetchedAt = time.Now().Add(-age)
+}
+
+// versionedListFn returns a listFn answering one node whose ID is the call
+// number ("n1", "n2", ...), so a test tells a refreshed listing from the old one.
+// Calls after the first block on gate.
+func versionedListFn(gate <-chan struct{}) (
+	func(context.Context, string, string) ([]service.DataroomNodeInfo, error), *atomic.Int32,
+) {
+	var calls atomic.Int32
+
+	return func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
+		n := calls.Add(1)
+		if n > 1 {
+			<-gate
+		}
+
+		return []service.DataroomNodeInfo{{ID: fmt.Sprintf("n%d", n), Name: "a", Type: "file"}}, nil
+	}, &calls
+}
+
+// waitNodeID polls listNodes until it answers wantID.
+func waitNodeID(t *testing.T, fs *webdavFS, path, wantID string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		nodes, err := fs.listNodes(context.Background(), "dr1", path)
+		if err == nil && len(nodes) == 1 && nodes[0].ID == wantID {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("listing of %s never became %s (last: %+v, %v)", path, wantID, nodes, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// An expired listing within max stale is served at once, without waiting for
+// the API, while a single background refresh replaces it: a client walking a
+// tree after a pause (PrivateBin's purge) is answered from memory.
+func TestListNodes_StaleServedWhileRefreshing(t *testing.T) {
+	gate := make(chan struct{})
+	listFn, calls := versionedListFn(gate)
+	fs := &webdavFS{listFn: listFn, cacheTTL: time.Minute, cacheMaxStale: 5 * time.Minute}
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
+		t.Fatal(err)
+	}
+	ageNodeCache(fs, "retyc://dr1/", 2*time.Minute)
+
+	for range 10 {
+		nodes, err := fs.listNodes(ctx, "dr1", "/")
+		if err != nil || len(nodes) != 1 || nodes[0].ID != "n1" {
+			t.Fatalf("listNodes during the refresh = (%+v, %v), want the stale n1 at once", nodes, err)
+		}
+	}
+	close(gate)
+	waitNodeID(t, fs, "/", "n2")
+	if got := calls.Load(); got != 2 {
+		t.Errorf("listing fetched %d times, want 2 (initial + one shared refresh)", got)
+	}
+}
+
+// Past TTL + max stale, the listing is too old to serve: the request waits.
+func TestListNodes_PastMaxStaleWaits(t *testing.T) {
+	gate := make(chan struct{})
+	close(gate)
+	listFn, _ := versionedListFn(gate)
+	fs := &webdavFS{listFn: listFn, cacheTTL: time.Minute, cacheMaxStale: 5 * time.Minute}
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
+		t.Fatal(err)
+	}
+	ageNodeCache(fs, "retyc://dr1/", 7*time.Minute)
+
+	nodes, err := fs.listNodes(ctx, "dr1", "/")
+	if err != nil || len(nodes) != 1 || nodes[0].ID != "n2" {
+		t.Errorf("listNodes = (%+v, %v), want the fresh n2", nodes, err)
+	}
+}
+
+// max stale 0 never serves an expired listing.
+func TestListNodes_MaxStaleZeroWaits(t *testing.T) {
+	gate := make(chan struct{})
+	close(gate)
+	listFn, _ := versionedListFn(gate)
+	fs := &webdavFS{listFn: listFn, cacheTTL: time.Minute}
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
+		t.Fatal(err)
+	}
+	ageNodeCache(fs, "retyc://dr1/", 2*time.Minute)
+
+	nodes, err := fs.listNodes(ctx, "dr1", "/")
+	if err != nil || len(nodes) != 1 || nodes[0].ID != "n2" {
+		t.Errorf("listNodes = (%+v, %v), want the fresh n2", nodes, err)
+	}
+}
+
+// A refresh that finds the folder gone drops the expired listing: the next
+// request answers 404 instead of replaying it until it is past max stale.
+func TestListNodes_RefreshOfDeletedFolderDropsListing(t *testing.T) {
+	var calls atomic.Int32
+	fs := &webdavFS{
+		listFn: func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
+			if calls.Add(1) > 1 {
+				return nil, os.ErrNotExist
+			}
+
+			return []service.DataroomNodeInfo{{ID: "n1", Name: "a", Type: "file"}}, nil
+		},
+		cacheTTL: time.Minute, cacheMaxStale: 5 * time.Minute,
+	}
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/gone"); err != nil {
+		t.Fatal(err)
+	}
+	ageNodeCache(fs, "retyc://dr1/gone", 2*time.Minute)
+	if _, err := fs.listNodes(ctx, "dr1", "/gone"); err != nil {
+		t.Fatalf("stale listNodes: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, err := fs.listNodes(ctx, "dr1", "/gone")
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("listNodes = %v, want os.ErrNotExist once the refresh found the folder gone", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A failed refresh keeps the expired listing: a transient API error must not
+// turn a folder into a miss that every request then waits for.
+func TestListNodes_FailedRefreshKeepsListing(t *testing.T) {
+	var calls atomic.Int32
+	fs := &webdavFS{
+		listFn: func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
+			if calls.Add(1) > 1 {
+				return nil, errors.New("api down")
+			}
+
+			return []service.DataroomNodeInfo{{ID: "n1", Name: "a", Type: "file"}}, nil
+		},
+		cacheTTL: time.Minute, cacheMaxStale: 5 * time.Minute,
+	}
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
+		t.Fatal(err)
+	}
+	ageNodeCache(fs, "retyc://dr1/", 2*time.Minute)
+	for range 3 {
+		nodes, err := fs.listNodes(ctx, "dr1", "/")
+		if err != nil || len(nodes) != 1 || nodes[0].ID != "n1" {
+			t.Fatalf("listNodes = (%+v, %v), want the expired n1 kept", nodes, err)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			fs.nodeMu.Lock()
+			_, running := fs.nodeInflight["retyc://dr1/"]
+			fs.nodeMu.Unlock()
+			if !running {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the refresh never finished")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+// A mutation landing while a refresh runs wins: the refreshed listing,
+// answered before the mutation, is not stored over it.
+func TestListNodes_RefreshDiscardedAfterMutation(t *testing.T) {
+	gate := make(chan struct{})
+	listFn, calls := versionedListFn(gate)
+	fs := &webdavFS{listFn: listFn, cacheTTL: time.Minute, cacheMaxStale: 5 * time.Minute}
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
+		t.Fatal(err)
+	}
+	ageNodeCache(fs, "retyc://dr1/", 2*time.Minute)
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil { // starts the refresh (call 2)
+		t.Fatal(err)
+	}
+	// The mutation must land once the refresh is fetching: one landing before
+	// it starts is in the API's answer, and the refresh is then kept.
+	for deadline := time.Now().Add(2 * time.Second); calls.Load() < 2; {
+		if time.Now().After(deadline) {
+			t.Fatal("the refresh never started")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	fs.upsertNodeCache("retyc://dr1/", service.DataroomNodeInfo{ID: "up", Name: "b", Type: "file"})
+	close(gate)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		fs.nodeMu.Lock()
+		_, running := fs.nodeInflight["retyc://dr1/"]
+		fs.nodeMu.Unlock()
+		if !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the refresh never finished")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	fs.nodeMu.Lock()
+	nodes := fs.nodeCache["retyc://dr1/"].nodes
+	fs.nodeMu.Unlock()
+	if len(nodes) != 2 || nodes[0].ID != "n1" || nodes[1].ID != "up" {
+		t.Errorf("cache = %+v, want the upserted listing [n1 up], not the refresh", nodes)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("listing fetched %d times, want 2", got)
+	}
+}
+
+// Background refreshes run at most api.concurrency.list at a time, and a
+// request that misses a folder whose refresh is still queued starts it at
+// once instead of waiting behind the queue.
+func TestListNodes_RefreshesBoundedAndPromoted(t *testing.T) {
+	gate := make(chan struct{})
+	var running, peak atomic.Int32
+	fs := &webdavFS{
+		listFn: func(_ context.Context, _, path string) ([]service.DataroomNodeInfo, error) {
+			if path == "/urgent" {
+				return []service.DataroomNodeInfo{{ID: "urgent", Name: "a", Type: "file"}}, nil
+			}
+			n := running.Add(1)
+			defer running.Add(-1)
+			for {
+				p := peak.Load()
+				if n <= p || peak.CompareAndSwap(p, n) {
+					break
+				}
+			}
+			<-gate
+
+			return []service.DataroomNodeInfo{{ID: "fresh", Name: "a", Type: "file"}}, nil
+		},
+		cacheTTL: time.Minute, cacheMaxStale: 5 * time.Minute,
+	}
+	ctx := context.Background()
+	limit := int32(service.Concurrency().List) //nolint:gosec // G115: bounded by config.MaxConcurrency
+
+	stale := []service.DataroomNodeInfo{{ID: "old", Name: "a", Type: "file"}}
+	expired := time.Now().Add(-2 * time.Minute)
+	fs.nodeCache = map[string]*nodeCacheEntry{}
+	const folders = 20
+	for i := range folders {
+		fs.nodeCache[dataroomURI("dr1", fmt.Sprintf("/d%d", i))] = &nodeCacheEntry{nodes: stale, fetchedAt: expired}
+	}
+	// A folder whose expired listing a mutation dropped while its refresh is
+	// queued: the next request misses it and joins the queued refresh.
+	fs.nodeCache["retyc://dr1/urgent"] = &nodeCacheEntry{nodes: stale, fetchedAt: expired}
+
+	for i := range folders {
+		if nodes, err := fs.listNodes(ctx, "dr1", fmt.Sprintf("/d%d", i)); err != nil || nodes[0].ID != "old" {
+			t.Fatalf("listNodes /d%d = (%+v, %v), want the stale listing at once", i, nodes, err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for running.Load() < limit {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d refreshes running, want %d", running.Load(), limit)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := fs.listNodes(ctx, "dr1", "/urgent"); err != nil { // queued behind the full slots
+		t.Fatal(err)
+	}
+	fs.invalidateNodeCache("retyc://dr1/urgent")
+
+	done := make(chan []service.DataroomNodeInfo, 1)
+	go func() {
+		nodes, _ := fs.listNodes(ctx, "dr1", "/urgent")
+		done <- nodes
+	}()
+	select {
+	case nodes := <-done:
+		if len(nodes) != 1 || nodes[0].ID != "urgent" {
+			t.Errorf("urgent listing = %+v", nodes)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a request waited behind the background refresh queue")
+	}
+
+	close(gate)
+	for i := range folders {
+		waitNodeID(t, fs, fmt.Sprintf("/d%d", i), "fresh")
+	}
+	if got := peak.Load(); got > limit {
+		t.Errorf("%d refreshes ran at once, want at most %d", got, limit)
+	}
+}
+
+// The dataroom list honours max stale too: past TTL + max stale, a lookup
+// waits for the refresh instead of trusting a list that old.
+func TestDataroomCache_PastMaxStaleWaits(t *testing.T) {
+	var calls atomic.Int32
+	cache := newDataroomCache(func(context.Context) ([]dataroomCacheItem, error) {
+		n := calls.Add(1)
+
+		return []dataroomCacheItem{{id: fmt.Sprintf("id-%d", n), title: "Alpha"}}, nil
+	})
+	cache.ttl, cache.maxStale = time.Minute, 5*time.Minute
+	ctx := context.Background()
+	if _, err := cache.idForName(ctx, "Alpha"); err != nil {
+		t.Fatal(err)
+	}
+	cache.mu.Lock()
+	cache.entry.fetchedAt = time.Now().Add(-7 * time.Minute)
+	cache.mu.Unlock()
+
+	if id, err := cache.idForName(ctx, "Alpha"); err != nil || id != "id-2" {
+		t.Errorf("idForName = (%q, %v), want the fresh id-2", id, err)
+	}
+}
+
+// A name missing from an expired listing may be a node created elsewhere
+// since: the lookup waits for the refresh instead of answering 404 from the
+// old listing for up to ttl+max_stale. A name the listing holds is answered
+// at once.
+func TestFindListedNode_StaleMissWaitsForRefresh(t *testing.T) {
+	var calls atomic.Int32
+	fs := &webdavFS{
+		listFn: func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
+			nodes := []service.DataroomNodeInfo{{ID: "old", Name: "a", Type: "file"}}
+			if calls.Add(1) > 1 {
+				nodes = append(nodes, service.DataroomNodeInfo{ID: "new", Name: "b", Type: "file"})
+			}
+
+			return nodes, nil
+		},
+		cacheTTL: time.Minute, cacheMaxStale: 5 * time.Minute,
+	}
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
+		t.Fatal(err)
+	}
+	ageNodeCache(fs, "retyc://dr1/", 2*time.Minute)
+
+	n, err := fs.findListedNode(ctx, "dr1", "/", "b")
+	if err != nil || n.ID != "new" {
+		t.Fatalf("findListedNode(b) = (%+v, %v), want the node created since", n, err)
+	}
+	if _, err := fs.findListedNode(ctx, "dr1", "/", "absent"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("findListedNode(absent) = %v, want os.ErrNotExist", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("listing fetched %d times, want 2 (the refreshed listing is fresh)", got)
+	}
+}
+
+// A name the expired listing holds is answered from it, without waiting.
+func TestFindListedNode_StaleHitDoesNotWait(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	listFn, _ := versionedListFn(gate)
+	fs := &webdavFS{listFn: listFn, cacheTTL: time.Minute, cacheMaxStale: 5 * time.Minute}
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
+		t.Fatal(err)
+	}
+	ageNodeCache(fs, "retyc://dr1/", 2*time.Minute)
+
+	n, err := fs.findListedNode(ctx, "dr1", "/", "a")
+	if err != nil || n.ID != "n1" {
+		t.Errorf("findListedNode(a) = (%+v, %v), want the stale n1 at once", n, err)
+	}
+}
+
+// A refresh queued behind the slots must not be discarded because of a
+// mutation made before it started: its answer already includes it.
+func TestListNodes_QueuedRefreshKeepsMutationBeforeStart(t *testing.T) {
+	fs := &webdavFS{
+		listFn: func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
+			return []service.DataroomNodeInfo{{ID: "fresh", Name: "a", Type: "file"}}, nil
+		},
+		cacheTTL: time.Minute, cacheMaxStale: 5 * time.Minute,
+	}
+	fs.refreshSlots = make(chan struct{}, 1)
+	fs.refreshSlots <- struct{}{} // every slot taken: the refresh queues
+	fs.nodeCache = map[string]*nodeCacheEntry{
+		"retyc://dr1/": {nodes: []service.DataroomNodeInfo{{ID: "old", Name: "a", Type: "file"}},
+			fetchedAt: time.Now().Add(-2 * time.Minute)},
+	}
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil { // queues the refresh
+		t.Fatal(err)
+	}
+	fs.upsertNodeCache("retyc://dr1/", service.DataroomNodeInfo{ID: "up", Name: "b", Type: "file"})
+	<-fs.refreshSlots // the refresh starts now, after the mutation
+
+	waitNodeID(t, fs, "/", "fresh")
+}
+
+// With max stale 0 the dataroom list is not served expired either.
+func TestDataroomCache_MaxStaleZeroWaits(t *testing.T) {
+	var calls atomic.Int32
+	cache := newDataroomCache(func(context.Context) ([]dataroomCacheItem, error) {
+		n := calls.Add(1)
+
+		return []dataroomCacheItem{{id: fmt.Sprintf("id-%d", n), title: "Alpha"}}, nil
+	})
+	cache.maxStale = 0
+	ctx := context.Background()
+	if _, err := cache.idForName(ctx, "Alpha"); err != nil {
+		t.Fatal(err)
+	}
+	ageDataroomCache(cache)
+
+	if id, err := cache.idForName(ctx, "Alpha"); err != nil || id != "id-2" {
+		t.Errorf("idForName = (%q, %v), want the fresh id-2", id, err)
 	}
 }

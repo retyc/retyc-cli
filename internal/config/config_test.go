@@ -543,3 +543,71 @@ func TestAPIUnsafeWrite_EnvBinding(t *testing.T) {
 		t.Error("API.UnsafeWrite = false, want true from env")
 	}
 }
+
+func TestWebdavCache_Defaults(t *testing.T) {
+	resetViper(t)
+	SetDefaults()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Webdav.Cache.TTL != time.Minute {
+		t.Errorf("Webdav.Cache.TTL = %s, want 1m", cfg.Webdav.Cache.TTL)
+	}
+	if cfg.Webdav.Cache.MaxStale != 5*time.Minute {
+		t.Errorf("Webdav.Cache.MaxStale = %s, want 5m", cfg.Webdav.Cache.MaxStale)
+	}
+}
+
+// Durations come as strings from the environment (and from config.yaml).
+func TestWebdavCache_FromEnv(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_WEBDAV_CACHE_TTL", "90s")
+	t.Setenv("RETYC_WEBDAV_CACHE_MAX_STALE", "0")
+	SetDefaults()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Webdav.Cache.TTL != 90*time.Second {
+		t.Errorf("Webdav.Cache.TTL = %s, want 1m30s", cfg.Webdav.Cache.TTL)
+	}
+	if cfg.Webdav.Cache.MaxStale != 0 {
+		t.Errorf("Webdav.Cache.MaxStale = %s, want 0 (stale serving disabled)", cfg.Webdav.Cache.MaxStale)
+	}
+}
+
+func TestWebdavCache_Invalid(t *testing.T) {
+	for _, c := range []struct{ name, value string }{
+		{"RETYC_WEBDAV_CACHE_TTL", "0"},
+		{"RETYC_WEBDAV_CACHE_TTL", "-1s"},
+		{"RETYC_WEBDAV_CACHE_MAX_STALE", "-1s"},
+		{"RETYC_WEBDAV_CACHE_TTL", "soon"},
+		{"RETYC_WEBDAV_CACHE_TTL", "500ms"},
+		{"RETYC_WEBDAV_CACHE_MAX_STALE", "10ms"},
+	} {
+		t.Run(c.name+"="+c.value, func(t *testing.T) {
+			resetViper(t)
+			t.Setenv(c.name, c.value)
+			SetDefaults()
+
+			if _, err := Load(); err == nil {
+				t.Errorf("Load() accepted %s=%s", c.name, c.value)
+			}
+		})
+	}
+}
+
+// A bare number in config.yaml decodes as nanoseconds: "ttl: 60" must be
+// rejected, not silently turn the cache off.
+func TestWebdavCache_BareNumberRejected(t *testing.T) {
+	resetViper(t)
+	SetDefaults()
+	viper.Set("webdav.cache.ttl", 60)
+
+	if _, err := Load(); err == nil {
+		t.Error("Load() accepted webdav.cache.ttl: 60 (60ns)")
+	}
+}

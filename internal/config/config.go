@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 	"golang.org/x/oauth2"
@@ -88,10 +89,23 @@ type WebdavMetricsConfig struct {
 	Labels  []string `yaml:"labels" mapstructure:"labels"`
 }
 
+// WebdavCacheConfig controls the folder listing and dataroom list caches of
+// `webdav serve`. A listing younger than TTL is served as is. Once expired, it
+// is still served for MaxStale more while a single background fetch replaces
+// it, so a client walking a tree it has not touched for a while is answered
+// from memory instead of waiting for one API round trip per folder. Past
+// TTL+MaxStale the request waits for a fresh listing. MaxStale 0 disables
+// stale serving: an expired listing waits for its refresh.
+type WebdavCacheConfig struct {
+	TTL      time.Duration `yaml:"ttl" mapstructure:"ttl"`
+	MaxStale time.Duration `yaml:"max_stale" mapstructure:"max_stale"`
+}
+
 // WebdavConfig holds the `webdav serve` settings. Addr is the host:port the
 // server binds; loopback by default since the tree is served in cleartext.
 type WebdavConfig struct {
 	Addr    string              `yaml:"addr" mapstructure:"addr"`
+	Cache   WebdavCacheConfig   `yaml:"cache" mapstructure:"cache"`
 	Metrics WebdavMetricsConfig `yaml:"metrics" mapstructure:"metrics"`
 }
 
@@ -106,6 +120,12 @@ type Config struct {
 // defaultWebdavAddr is the bind address of `webdav serve`: local only, the
 // WebDAV tree is served in cleartext.
 const defaultWebdavAddr = "127.0.0.1:8888"
+
+// Defaults of the `webdav serve` caches (see WebdavCacheConfig).
+const (
+	DefaultWebdavCacheTTL      = time.Minute
+	DefaultWebdavCacheMaxStale = 5 * time.Minute
+)
 
 // envPrefix is the prefix of every environment variable that maps to a
 // configuration key: the key "a.b" is read from RETYC_A_B.
@@ -137,6 +157,8 @@ func SetDefaults() {
 	viper.SetDefault("admin.api_key", "")
 	viper.SetDefault("admin.private_key_file", "")
 	viper.SetDefault("webdav.addr", defaultWebdavAddr)
+	viper.SetDefault("webdav.cache.ttl", DefaultWebdavCacheTTL)
+	viper.SetDefault("webdav.cache.max_stale", DefaultWebdavCacheMaxStale)
 	// Empty means no metrics/probes listener (see cmd/webdav_metrics.go).
 	viper.SetDefault("webdav.metrics.addr", "")
 	viper.SetDefault("webdav.metrics.runtime", true)
@@ -172,6 +194,18 @@ func Load() (*Config, error) {
 		if c.value < 1 || c.value > MaxConcurrency {
 			return nil, fmt.Errorf("%s must be between 1 and %d, got %d", c.key, MaxConcurrency, c.value)
 		}
+	}
+
+	// A bare number in config.yaml decodes as nanoseconds (only strings go
+	// through the duration parser), so "ttl: 60" would silently disable the
+	// cache: anything under a second is taken for a missing unit.
+	if cfg.Webdav.Cache.TTL < time.Second {
+		return nil, fmt.Errorf("webdav.cache.ttl must be at least 1s, with a unit (e.g. 60s), got %s",
+			cfg.Webdav.Cache.TTL)
+	}
+	if cfg.Webdav.Cache.MaxStale != 0 && cfg.Webdav.Cache.MaxStale < time.Second {
+		return nil, fmt.Errorf("webdav.cache.max_stale must be 0 or at least 1s, with a unit (e.g. 5m), got %s",
+			cfg.Webdav.Cache.MaxStale)
 	}
 
 	return &cfg, nil

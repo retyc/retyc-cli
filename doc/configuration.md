@@ -176,6 +176,8 @@ file version is incomplete or corrupted".
 | Organization private key file | `admin.private_key_file` | `RETYC_ADMIN_PRIVATE_KEY_FILE` | — |
 | Admin API endpoint | `admin.base_url` | `RETYC_ADMIN_BASE_URL` | API endpoint + `/v1` |
 | WebDAV bind address | `webdav.addr` | `RETYC_WEBDAV_ADDR` | `127.0.0.1:8888` |
+| WebDAV listing cache lifetime (duration with a unit: `90s`, `2m`) | `webdav.cache.ttl` | `RETYC_WEBDAV_CACHE_TTL` | `1m`, see [WebDAV](webdav.md#caching) |
+| WebDAV expired listings served while refreshed (duration with a unit) | `webdav.cache.max_stale` | `RETYC_WEBDAV_CACHE_MAX_STALE` | `5m` (`0` disables) |
 | WebDAV metrics and probes listener | `webdav.metrics.addr` | `RETYC_WEBDAV_METRICS_ADDR` | — (disabled), see [WebDAV](webdav.md#metrics-probes-and-traces) |
 | WebDAV runtime metrics (`go_*`, `process_*`) | `webdav.metrics.runtime` | `RETYC_WEBDAV_METRICS_RUNTIME` | `true` |
 | WebDAV constant metric labels | `webdav.metrics.labels` (list of `key=value`) | `RETYC_WEBDAV_METRICS_LABELS` (space-separated) | — |

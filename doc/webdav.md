@@ -99,19 +99,16 @@ Notes and limitations:
   file is streamed chunk by chunk into a version created when the PUT starts.
 - **File names containing `/`** cannot be represented as a single path component and are
   skipped from listings (a warning is printed to stderr).
-- Listings are cached briefly (30 s); dataroom sessions (the decrypted session
+- Folder listings and the dataroom list are cached (see [Caching](#caching));
+  dataroom sessions (the decrypted session
   keypair) are resolved once per dataroom and kept for the life of the process, since
   a dataroom's keypair never changes and each resolution unlocks the user key with an
   scrypt costing ~256 MiB of working memory when no keyring caches it.
   Mutations made through the server update the cached listings in place (a new
   folder is added to its parent and cached as empty, a deleted node is removed, a
   moved one changes listing), so the request a client sends right after is
-  answered without an API call. Changes made elsewhere (web app, another client)
-  may take up to a minute to appear.
-  The dataroom list is cached for 60 s and refreshed in the background: an expired
-  list keeps being served while one refresh runs, and a failed refresh keeps it. A
-  dataroom name the expired list does not hold waits for the refresh, so a dataroom
-  created elsewhere is found on first access.
+  answered without an API call. A dataroom name the expired list does not hold
+  waits for the refresh, so a dataroom created elsewhere is found on first access.
   A read that fails because the cached listing pointed at a deleted node drops that
   listing straight away, so the following request sees the current state (`404`)
   rather than replaying the stale entry until the TTL expires. Likewise, listing a
@@ -130,6 +127,47 @@ Notes and limitations:
 - Files expose the version ID as their `ETag` and the version's creation time as
   `Last-Modified`, so clients can detect a new version even when the size is
   unchanged. Folders have no timestamp in the API and report none.
+
+## Caching
+
+Every WebDAV request needs the listing of its folder, and every listing is an API
+round trip. Folder listings and the dataroom list are therefore cached:
+
+| Age of the cached listing | Behaviour |
+|---|---|
+| under `webdav.cache.ttl` (default `1m`) | served from memory |
+| up to `webdav.cache.max_stale` more (default `5m`) | served from memory **while one background refresh replaces it** |
+| older | the request waits for a fresh listing |
+
+The second row matters to clients that walk a whole tree after a pause: PrivateBin,
+for instance, lists every folder of its store when it purges expired pastes, one
+folder after the other. Without it, each folder of the walk waits for its own
+API round trip; with it, the walk is answered from memory and the listings are
+refreshed behind it. Background refreshes run at most `api.concurrency.list` at a
+time; a request that needs a listing a refresh is still queued for starts it at
+once. A failed refresh keeps the expired listing, except for a folder deleted
+elsewhere, which is dropped so the next request answers `404`.
+
+Mutations made through the server keep the cache exact. Changes made elsewhere
+(web app, another client, another `webdav serve`) appear once the listing is
+refreshed: after `webdav.cache.ttl` at best, after `ttl + max_stale` at worst, and
+always one request late for an expired listing (that request still gets the
+previous one: an old size, version or `ETag`, a node deleted since). A name the
+expired listing does not hold is the exception: the request waits for the refresh
+instead of answering `404`, so a file created elsewhere is found on first access.
+Set `webdav.cache.max_stale` to `0` (`RETYC_WEBDAV_CACHE_MAX_STALE=0`) to never
+serve an expired listing.
+
+Both settings are durations and need a unit (`90s`, `2m`): a bare number in
+`config.yaml` would be read as nanoseconds, so anything under a second is
+rejected at startup.
+
+```yaml
+webdav:
+  cache:
+    ttl: 1m
+    max_stale: 5m
+```
 
 ## Authentication (`--auth`)
 
@@ -238,7 +276,7 @@ are folded into `OTHER`.
 | `retyc_cli_webdav_request_duration_seconds` | histogram | `method` | WebDAV request latency |
 | `retyc_cli_webdav_inflight_requests` | gauge | | Requests being served right now |
 | `retyc_cli_webdav_bytes_total` | counter | `direction` (`upload`, `download`) | Plaintext bytes moved through the server |
-| `retyc_cli_webdav_node_cache_lookups_total` | counter | `result` (`hit`, `miss`) | Folder listing cache efficiency |
+| `retyc_cli_webdav_node_cache_lookups_total` | counter | `result` (`hit`, `stale`, `miss`) | Folder listing cache efficiency (`stale`: expired listing served while refreshed) |
 | `retyc_cli_webdav_dataroom_cache_refreshes_total` | counter | | Refreshes of the dataroom list (one API call each) |
 | `retyc_cli_api_requests_total` | counter | `method`, `route`, `status` | Calls to the Retyc API (`status="error"` = no response) |
 | `retyc_cli_api_request_duration_seconds` | histogram | `method`, `route` | API round-trip latency, the dominant cost of every WebDAV operation |
@@ -260,7 +298,9 @@ startup span (`retyc webdav serve init`: login check, key unlock as a
 `crypto.unlock_key` child span, bind),
 parented to `TRACEPARENT` when set, then one new trace per request, named
 `WEBDAV <method>`, with the API calls, the per-chunk `crypto.encrypt` /
-`crypto.decrypt` spans and the cache events it caused. Upload calls carry
+`crypto.decrypt` spans and the cache events it caused (`cache.lookup`, with
+`retyc.cache.stale=true` for an expired listing served while refreshed; the
+refresh itself shows as a later API call of that trace). Upload calls carry
 `retyc.upload.unsafe_write`, telling whether the API was asked to store the chunk
 in the background; a chunk download retried on a 404 shows as successive calls of
 the same route. Requests are

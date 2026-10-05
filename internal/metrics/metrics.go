@@ -50,10 +50,11 @@ var (
 		Help: "Plaintext bytes served (download) or received (upload) by the WebDAV server.",
 	}, []string{"direction"})
 
-	// WebdavNodeCacheLookups counts node listing cache hits and misses.
+	// WebdavNodeCacheLookups counts node listing cache lookups: hit, stale
+	// (expired listing served while a background refresh replaces it) or miss.
 	WebdavNodeCacheLookups = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "retyc_cli_webdav_node_cache_lookups_total",
-		Help: "Node listing cache lookups, by result (hit, miss).",
+		Help: "Node listing cache lookups, by result (hit, stale, miss).",
 	}, []string{"result"})
 
 	// WebdavDataroomCacheRefreshes counts refreshes of the dataroom title cache.

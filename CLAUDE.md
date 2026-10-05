@@ -495,6 +495,18 @@ default `127.0.0.1:8888`); there is no separate port flag. Like the
 called from `RunE`, never in `init()`. `isLoopbackAddr` takes the same
 `host:port` form.
 
+Caches (`webdav.cache.ttl`, default 1m; `webdav.cache.max_stale`, default 5m):
+folder listings (`webdavFS.listNodes`) and the dataroom list (`dataroomCache`)
+are served fresh under the TTL, then served expired for `max_stale` more while
+one background refresh replaces them (stale-while-revalidate), then waited for.
+Background node refreshes queue on `refreshSlots` (`api.concurrency.list`); a
+request missing a URI whose refresh is queued promotes it (`nodeFetch.promote`)
+so it never waits behind the queue; the refresh reads `nodeGen` when it
+starts, not when it is queued. Name lookups (`Stat`, `parentNodeID`,
+`listedNodeID`) go through `findListedNode`: a name missing from an expired
+listing waits for the refresh instead of answering 404. `cachedFileNodeID`
+trusts fresh listings only. A `webdavFS` literal (tests) has `cacheMaxStale` 0: no stale serving.
+
 ## Metrics (`webdav serve --metrics-addr`)
 
 `internal/metrics` declares every metric as a package-level collector, observed
