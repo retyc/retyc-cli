@@ -144,14 +144,33 @@ func (c *Client) Put(ctx context.Context, path string, body io.Reader, dst any) 
 
 // PostMultipartChunk uploads binary data as multipart/form-data with field "upload_file".
 func (c *Client) PostMultipartChunk(ctx context.Context, path string, data []byte) error {
+	return c.postMultipart(ctx, path, nil, data, nil)
+}
+
+// formField is one text field of a multipart request.
+type formField struct {
+	name, value string
+}
+
+// postMultipart sends fields, then data as the upload_file part when it is
+// non-nil, as multipart/form-data, and decodes the response into dst (nil
+// discards it).
+func (c *Client) postMultipart(ctx context.Context, path string, fields []formField, data []byte, dst any) error {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
-	part, err := mw.CreateFormFile("upload_file", "chunk.age")
-	if err != nil {
-		return fmt.Errorf("creating multipart field: %w", err)
+	for _, f := range fields {
+		if err := mw.WriteField(f.name, f.value); err != nil {
+			return fmt.Errorf("writing multipart field %s: %w", f.name, err)
+		}
 	}
-	if _, err := part.Write(data); err != nil {
-		return fmt.Errorf("writing chunk data: %w", err)
+	if data != nil {
+		part, err := mw.CreateFormFile("upload_file", "chunk.age")
+		if err != nil {
+			return fmt.Errorf("creating multipart field: %w", err)
+		}
+		if _, err := part.Write(data); err != nil {
+			return fmt.Errorf("writing chunk data: %w", err)
+		}
 	}
 	if err := mw.Close(); err != nil {
 		return fmt.Errorf("closing multipart writer: %w", err)
@@ -161,8 +180,11 @@ func (c *Client) PostMultipartChunk(ctx context.Context, path string, data []byt
 		return err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if dst != nil {
+		req.Header.Set("Accept", "application/json")
+	}
 
-	return c.do(req, nil)
+	return c.do(req, dst)
 }
 
 // Patch performs an authenticated PATCH request with a JSON body and decodes the response.

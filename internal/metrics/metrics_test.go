@@ -72,6 +72,7 @@ func TestNormalizeRoute(t *testing.T) {
 		"/dataroom/": "/dataroom/",
 		"/dataroom/019d3de3-cba2-76d0-962d-7817e9858661/nodes":                "/dataroom/{id}/nodes",
 		"/dataroom/node/version/019d3de3-cba2-76d0-962d-7817e9858661/chunk/3": "/dataroom/node/version/{id}/chunk/{n}",
+		"/dataroom/019d3de3-cba2-76d0-962d-7817e9858661/node/file":            "/dataroom/{id}/node/file",
 		"/file/019d3de3-cba2-76d0-962d-7817e9858661/12":                       "/file/{id}/{n}",
 		"/user/me/key/active": "/user/me/key/active",
 		"/share/019D3DE3-CBA2-76D0-962D-7817E9858661/details": "/share/{id}/details",
@@ -162,6 +163,7 @@ func TestNormalizeRoute_ByTemplatePosition(t *testing.T) {
 	tests := map[string]string{
 		"/dataroom/users/nodes":                           "/dataroom/{id}/nodes",
 		"/dataroom/dataroom/node":                         "/dataroom/{id}/node",
+		"/dataroom/file/node/file":                        "/dataroom/{id}/node/file",
 		"/organization/member/users":                      "/organization/member/{id}",
 		"/v1/organization/member/dataroom/enable":         "/v1/organization/member/{id}/enable",
 		"/share/details/details":                          "/share/{id}/details",

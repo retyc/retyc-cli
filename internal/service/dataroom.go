@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"os"
 	"path"
@@ -674,6 +675,69 @@ func AddVersionToNode(
 	}, nil
 }
 
+// UploadSmallFile uploads a file that fits in one chunk (len(data) at most
+// UploadChunkSize, nil or empty for an empty file) in a single request: the
+// node, its version and the content together, instead of three round trips
+// that each wait for the previous one's ID. A file already holding the name
+// gets the upload as its next version. parentID is nil for the dataroom root.
+//
+// It returns the node as a listing would report it, and whether this upload
+// created it. The server discards what a failed request created, so there is
+// nothing for the caller to clean up.
+func UploadSmallFile(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
+	fileName string, data []byte, sess *DataroomSession,
+) (node DataroomNodeInfo, newNode bool, err error) {
+	if len(data) > UploadChunkSize {
+		return DataroomNodeInfo{}, false, fmt.Errorf(
+			"%d bytes do not fit in a single %d-byte chunk", len(data), UploadChunkSize)
+	}
+	mimeType := mime.TypeByExtension(filepath.Ext(fileName))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	nameEnc, err := crypto.EncryptStringForKeys(fileName, []string{sess.PublicKey})
+	if err != nil {
+		return DataroomNodeInfo{}, false, fmt.Errorf("encrypting filename: %w", err)
+	}
+	typeEnc, err := crypto.EncryptStringForKeys(mimeType, []string{sess.PublicKey})
+	if err != nil {
+		return DataroomNodeInfo{}, false, fmt.Errorf("encrypting MIME type: %w", err)
+	}
+	var chunk []byte
+	if len(data) > 0 {
+		if chunk, err = encryptChunk(ctx, 0, data, sess.PublicKey); err != nil {
+			return DataroomNodeInfo{}, false, fmt.Errorf("encrypting chunk 0: %w", err)
+		}
+	}
+
+	item, err := client.CreateDataroomFileNode(ctx, dataroomID, parentID,
+		nameEnc, nodeNameHash(fileName, sess.NameSalt), typeEnc, int64(len(data)), true, chunk)
+	switch {
+	case errors.Is(err, api.ErrGone):
+		// 410: the name is held by a node pending deletion — not a missing
+		// parent, which is a plain 404.
+		return DataroomNodeInfo{}, false, fmt.Errorf("%q: %w", fileName, ErrNameBeingDeleted)
+	case isConflict(err):
+		return DataroomNodeInfo{}, false, fmt.Errorf(
+			"cannot upload file %q: a folder holds the name, or it was taken concurrently: %w", fileName, err)
+	case err != nil:
+		return DataroomNodeInfo{}, false, fmt.Errorf("creating file: %w", err)
+	case item.Version == nil:
+		return DataroomNodeInfo{}, false, fmt.Errorf("creating file %q: the API returned no version", fileName)
+	}
+
+	return DataroomNodeInfo{
+		ID:         item.Node.ID,
+		Name:       fileName,
+		Type:       "file",
+		MIMEType:   mimeType,
+		Size:       int64(len(data)),
+		VersionID:  item.Version.ID,
+		ChunkCount: ChunkCount(int64(len(data))),
+	}.WithModTime(item.Version.CreatedAt), item.Version.VersionNumber <= 1, nil
+}
+
 // InitStreamUploadInto is InitStreamUpload with the parent directory already
 // resolved to its node ID (nil for the dataroom root).
 //
@@ -776,6 +840,11 @@ func uploadDataroomFile(
 	if displayName == "" {
 		displayName = name
 	}
+	if info.Size() <= UploadChunkSize {
+		return uploadSmallDataroomFile(ctx, client, dataroomID, f, info.Size(), parentID,
+			&DataroomSession{Identity: sessionIdentity, PublicKey: sessionPubKey, NameSalt: nameSalt},
+			name, displayName, progress)
+	}
 	mimeType := mime.TypeByExtension(filepath.Ext(filePath))
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
@@ -842,6 +911,35 @@ func uploadDataroomFile(
 	}
 
 	return uploadErr
+}
+
+// uploadSmallDataroomFile sends a local file that fits in one chunk through
+// UploadSmallFile. The file must yield exactly size bytes, as for UploadChunks.
+func uploadSmallDataroomFile(
+	ctx context.Context, client *api.Client, dataroomID string, f io.Reader, size int64,
+	parentID *string, sess *DataroomSession, name, displayName string, progress ProgressFn,
+) error {
+	data, err := io.ReadAll(io.LimitReader(f, size+1))
+	switch {
+	case err != nil:
+		return fmt.Errorf("reading file: %w", err)
+	case int64(len(data)) > size:
+		return fmt.Errorf("source is larger than its declared %d bytes", size)
+	case int64(len(data)) < size:
+		return fmt.Errorf("source ended after %d of its declared %d bytes", len(data), size)
+	}
+	_, newNode, err := UploadSmallFile(ctx, client, dataroomID, parentID, name, data, sess)
+	if err != nil {
+		return err
+	}
+	if !newNode {
+		fmt.Fprintf(os.Stderr, "  %s: added as a new version\n", displayName)
+	}
+	if progress != nil && size > 0 {
+		progress(displayName, int(size), size)
+	}
+
+	return nil
 }
 
 type dirQueueEntry struct {

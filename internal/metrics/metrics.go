@@ -128,6 +128,7 @@ var routeTemplates = [][]string{
 	{"dataroom", "{id}"},
 	{"dataroom", "{id}", "nodes"},
 	{"dataroom", "{id}", "node"},
+	{"dataroom", "{id}", "node", "file"},
 	{"dataroom", "{id}", "messages"},
 	{"dataroom", "{id}", "stats"},
 	{"dataroom", "{id}", "users"},

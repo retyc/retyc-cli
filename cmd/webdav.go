@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -642,6 +643,10 @@ type writeFileHandle struct {
 	fileName     string
 	wfs          *webdavFS
 	isPut        bool // true = real PUT; false = LOCK-driven create
+	// info is what Stat reports. The WebDAV handler Stats the file before
+	// Close and reads the ETag after it: Close fills in the new version, so
+	// the PUT response carries its ETag rather than the ModTime+Size default.
+	info *webdavFileInfo
 }
 
 func (h *writeFileHandle) Close() error {
@@ -672,22 +677,22 @@ func (h *writeFileHandle) Close() error {
 	if err != nil {
 		return err
 	}
-	// The size is known now: upload through the streaming path, which resolves
-	// the folder and an existing node from the cached listings, cleans up a
-	// failed upload and updates the listing in place.
-	w, err := h.wfs.openForWriteStream(context.WithoutCancel(h.ctx), h.drID, h.parentPath, h.fileName, fi.Size())
+	// The size is known now: upload through the path of a PUT with a
+	// Content-Length, which resolves the folder and an existing node from the
+	// cached listings, cleans up a failed upload and updates the listing in
+	// place.
+	w, err := h.wfs.openUpload(context.WithoutCancel(h.ctx), h.drID, h.parentPath, h.fileName, fi.Size())
 	if err != nil {
 		return err
 	}
-	sw, ok := w.(*streamWriteHandle)
-	if !ok {
-		_ = w.Close()
-
-		return fmt.Errorf("unexpected upload handle %T", w)
-	}
-	_, copyErr := io.Copy(writerFunc(sw.write), src)
-	if err := sw.Close(); err != nil {
+	_, copyErr := io.Copy(writerFunc(w.write), src)
+	if err := w.Close(); err != nil {
 		return err
+	}
+	if fi, err := w.Stat(); err == nil {
+		if uploaded, ok := fi.(*webdavFileInfo); ok {
+			h.info.nodeID, h.info.versionID = uploaded.nodeID, uploaded.versionID
+		}
 	}
 
 	return copyErr
@@ -695,12 +700,13 @@ func (h *writeFileHandle) Close() error {
 func (h *writeFileHandle) Read(_ []byte) (int, error) { return 0, os.ErrPermission }
 func (h *writeFileHandle) Write(p []byte) (int, error) {
 	n, err := h.file.Write(p)
+	h.info.size += int64(n)
 	metrics.WebdavBytes.WithLabelValues("upload").Add(float64(n))
 
 	return n, err
 }
 func (h *writeFileHandle) Seek(_ int64, _ int) (int64, error)   { return 0, os.ErrPermission }
-func (h *writeFileHandle) Stat() (os.FileInfo, error)           { return h.file.Stat() }
+func (h *writeFileHandle) Stat() (os.FileInfo, error)           { return h.info, nil }
 func (h *writeFileHandle) Readdir(_ int) ([]os.FileInfo, error) { return nil, os.ErrInvalid }
 
 // nodeCacheEntry caches the result of a ListNodes call for a given URI.
@@ -1278,6 +1284,7 @@ func (fs *webdavFS) openForWriteTempFile(
 		fileName:     fileName,
 		wfs:          fs,
 		isPut:        isPut,
+		info:         &webdavFileInfo{name: fileName, modTime: time.Now()},
 	}, nil
 }
 
@@ -1372,9 +1379,21 @@ func (h *streamWriteHandle) Read(_ []byte) (int, error)           { return 0, os
 func (h *streamWriteHandle) Seek(_ int64, _ int) (int64, error)   { return 0, os.ErrPermission }
 func (h *streamWriteHandle) Readdir(_ int) ([]os.FileInfo, error) { return nil, os.ErrInvalid }
 
-func (fs *webdavFS) openForWriteStream(
+// uploadHandle is a webdav.File that uploads what is written to it. write
+// feeds it without observing the WebDAV ingress metric: the buffered PUT
+// replays through it bytes writeFileHandle.Write has already counted.
+type uploadHandle interface {
+	webdav.File
+	write(p []byte) (int, error)
+}
+
+// openUpload opens the upload of size bytes to parentPath/fileName. A file
+// that fits in one chunk is kept in memory and sent on Close in a single
+// request (smallWriteHandle); a larger one is streamed chunk by chunk into a
+// version created now (streamWriteHandle).
+func (fs *webdavFS) openUpload(
 	ctx context.Context, drID, parentPath, fileName string, size int64,
-) (webdav.File, error) {
+) (uploadHandle, error) {
 	sess, err := fs.getSession(ctx, drID)
 	if err != nil {
 		return nil, fmt.Errorf("dataroom session: %w", err)
@@ -1385,6 +1404,95 @@ func (fs *webdavFS) openForWriteStream(
 		return nil, fmt.Errorf("resolving parent path: %w", err)
 	}
 
+	if size <= service.UploadChunkSize {
+		return &smallWriteHandle{
+			ctx: ctx, wfs: fs, drID: drID, parentPath: parentPath, parentID: parentID, sess: sess,
+			info: &webdavFileInfo{name: fileName, size: size},
+		}, nil
+	}
+
+	h, err := fs.openForWriteStream(ctx, drID, parentPath, fileName, parentID, size, sess)
+	if err != nil {
+		return nil, err // a nil *streamWriteHandle would be a non-nil uploadHandle
+	}
+
+	return h, nil
+}
+
+// smallWriteHandle is a webdav.File for a PUT that fits in one chunk: the body
+// is kept in memory and sent on Close with service.UploadSmallFile, node,
+// version and content in a single request — one round trip instead of three.
+type smallWriteHandle struct {
+	ctx        context.Context
+	wfs        *webdavFS
+	drID       string
+	parentPath string
+	parentID   *string
+	sess       *service.DataroomSession
+	buf        bytes.Buffer
+	closed     bool
+	// info.versionID is set on Close: the WebDAV handler Stats the file before
+	// Close but reads the ETag after it, so the PUT response carries the new
+	// version's ETag.
+	info *webdavFileInfo
+}
+
+func (h *smallWriteHandle) Write(p []byte) (int, error) {
+	n, err := h.write(p)
+	metrics.WebdavBytes.WithLabelValues("upload").Add(float64(n))
+
+	return n, err
+}
+
+// write buffers p, refusing anything beyond the declared size: the request
+// would announce a size its content does not have.
+func (h *smallWriteHandle) write(p []byte) (int, error) {
+	if h.closed {
+		return 0, os.ErrClosed
+	}
+	if int64(h.buf.Len()+len(p)) > h.info.size {
+		return 0, fmt.Errorf("source is larger than its declared %d bytes", h.info.size)
+	}
+
+	return h.buf.Write(p)
+}
+
+func (h *smallWriteHandle) Close() error {
+	if h.closed {
+		return os.ErrClosed
+	}
+	h.closed = true
+	if got := int64(h.buf.Len()); got != h.info.size {
+		return fmt.Errorf("incomplete upload: wrote %d of %d bytes", got, h.info.size)
+	}
+	node, _, err := service.UploadSmallFile(context.WithoutCancel(h.ctx), h.wfs.client,
+		h.drID, h.parentID, h.info.name, h.buf.Bytes(), h.sess)
+	if errors.Is(err, api.ErrNotFound) {
+		// The cached listing named a parent deleted elsewhere since.
+		grandParent, _ := splitWebdavPath(h.parentPath)
+		h.wfs.invalidateNodeCache(dataroomURI(h.drID, grandParent))
+		h.wfs.invalidateNodeSubtree(dataroomURI(h.drID, h.parentPath))
+	}
+	if err != nil {
+		return err
+	}
+	h.info.nodeID, h.info.versionID = node.ID, node.VersionID
+	h.wfs.upsertNodeCache(dataroomURI(h.drID, h.parentPath), node)
+
+	return nil
+}
+
+func (h *smallWriteHandle) Stat() (os.FileInfo, error)           { return h.info, nil }
+func (h *smallWriteHandle) Read(_ []byte) (int, error)           { return 0, os.ErrPermission }
+func (h *smallWriteHandle) Seek(_ int64, _ int) (int64, error)   { return 0, os.ErrPermission }
+func (h *smallWriteHandle) Readdir(_ int) ([]os.FileInfo, error) { return nil, os.ErrInvalid }
+
+// openForWriteStream creates the version a file larger than one chunk is
+// streamed into, chunk by chunk as the client sends it.
+func (fs *webdavFS) openForWriteStream(
+	ctx context.Context, drID, parentPath, fileName string, parentID *string, size int64,
+	sess *service.DataroomSession,
+) (*streamWriteHandle, error) {
 	init, err := fs.initUpload(ctx, drID, parentPath, fileName, parentID, size, sess)
 	if err != nil {
 		return nil, err
@@ -1430,7 +1538,7 @@ func (fs *webdavFS) openForWrite(ctx context.Context, drID, subPath string) (web
 		return nil, os.ErrPermission
 	}
 	if size := contentLengthFromCtx(ctx); size >= 0 {
-		return fs.openForWriteStream(ctx, drID, parentPath, fileName, size)
+		return fs.openUpload(ctx, drID, parentPath, fileName, size)
 	}
 
 	return fs.openForWriteTempFile(ctx, drID, parentPath, fileName, isPutFromCtx(ctx))
