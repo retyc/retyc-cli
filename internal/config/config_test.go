@@ -518,3 +518,28 @@ func TestAPIConcurrency_AcceptsTheBounds(t *testing.T) {
 		t.Errorf("API.Concurrency = %+v, want list 1 and upload %d", cfg.API.Concurrency, MaxConcurrency)
 	}
 }
+
+func TestAPIUnsafeWrite_DefaultFalse(t *testing.T) {
+	resetViper(t)
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.API.UnsafeWrite {
+		t.Error("API.UnsafeWrite should be false by default: an upload must be stored before it is acknowledged")
+	}
+}
+
+func TestAPIUnsafeWrite_EnvBinding(t *testing.T) {
+	resetViper(t)
+	t.Setenv("RETYC_API_UNSAFE_WRITE", "true")
+	SetDefaults()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.API.UnsafeWrite {
+		t.Error("API.UnsafeWrite = false, want true from env")
+	}
+}

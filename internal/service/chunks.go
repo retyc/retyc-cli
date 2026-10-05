@@ -296,11 +296,6 @@ func StreamDownloadChunks(
 	return nil
 }
 
-// DownloadChunks downloads chunkCount chunks concurrently via downloadFn, decrypts each
-// with identity, and writes them in order to outputDir/name. A .part suffix is used
-// during the download; on success the file is atomically renamed to its final name. On
-// any error the .part file is removed, so retries always start from a clean state.
-// progress is called (if non-nil) after each chunk is written to disk.
 // ErrFileExists is returned by DownloadChunks when the destination file is
 // already present: nothing is overwritten.
 var ErrFileExists = errors.New("file already exists")
@@ -335,6 +330,11 @@ func localFileNames(names []string) []string {
 	return local
 }
 
+// DownloadChunks downloads chunkCount chunks concurrently via downloadFn, decrypts each
+// with identity, and writes them in order to outputDir/name. A .part suffix is used
+// during the download; on success the file is atomically renamed to its final name. On
+// any error the .part file is removed, so retries always start from a clean state.
+// progress is called (if non-nil) after each chunk is written to disk.
 func DownloadChunks(
 	ctx context.Context,
 	outputDir string,

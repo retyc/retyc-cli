@@ -151,7 +151,7 @@ func (c *Client) AdminRemoveDataroomUser(ctx context.Context, dataroomID, userID
 // AdminDownloadNodeChunk downloads one encrypted chunk of the latest version of
 // a file node. Chunks are numbered from 0 to chunk_count-1.
 func (c *Client) AdminDownloadNodeChunk(ctx context.Context, nodeID string, chunkID int) ([]byte, error) {
-	return c.GetBytes(ctx, fmt.Sprintf("/dataroom/node/%s/download/%d", nodeID, chunkID))
+	return c.getChunk(ctx, fmt.Sprintf("/dataroom/node/%s/download/%d", nodeID, chunkID))
 }
 
 // AdminRekeyDataroom pushes the session key re-encrypted by the caller for all

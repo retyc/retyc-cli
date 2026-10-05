@@ -17,3 +17,10 @@ var ErrNotFound = errors.New("not found")
 // the node is gone either way, so callers that handle a missing node need no
 // separate check.
 var ErrGone = errors.New("gone")
+
+// ErrChunkMissing is returned by a chunk download that still answers 404 after
+// its retries, on a version the listing announces complete: the chunk was
+// counted but never reached the object store (an unsafe_write upload whose
+// background store failed), so the version cannot be downloaded. It also
+// matches ErrNotFound.
+var ErrChunkMissing = errors.New("chunk missing on the server: the file version is incomplete or corrupted")

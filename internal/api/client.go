@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -39,19 +40,39 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	debug      bool
+	// unsafeWrite is sent as unsafe_write on every chunk upload.
+	unsafeWrite bool
+	// missingChunkRetries are the pauses before each new attempt at a chunk
+	// download answering 404 (see getChunk).
+	missingChunkRetries []time.Duration
 }
 
-// New creates a Client that attaches a valid OAuth2 token to every request.
-// tokSource is called before each request; it must refresh the token when expired.
-// userAgent is sent as the User-Agent header on all requests.
-// When insecure is true, TLS certificate verification is skipped, which allows
-// connecting to servers using self-signed certificates.
-// When debug is true, raw API responses are printed to stderr.
 // Option customizes a Client at construction.
 type Option func(*clientOptions)
 
 type clientOptions struct {
-	wrapTransport func(http.RoundTripper) http.RoundTripper
+	wrapTransport       func(http.RoundTripper) http.RoundTripper
+	unsafeWrite         bool
+	missingChunkRetries []time.Duration
+}
+
+// defaultMissingChunkRetries cover the window, about 450 ms, in which a chunk
+// stored in the background is counted but not yet in the object store.
+var defaultMissingChunkRetries = []time.Duration{300 * time.Millisecond, 600 * time.Millisecond}
+
+// WithUnsafeWrite sets the unsafe_write parameter of every chunk upload. When
+// true, the server answers before the chunk reaches the object store and stores
+// it in the background, where a failure cannot be reported: the version stays
+// incomplete although the upload succeeded. The parameter is always sent, false
+// by default: the server's own default is true.
+func WithUnsafeWrite(unsafe bool) Option {
+	return func(o *clientOptions) { o.unsafeWrite = unsafe }
+}
+
+// WithMissingChunkRetries replaces the pauses before each new attempt at a
+// chunk download answering 404; none disables the retries. For tests.
+func WithMissingChunkRetries(delays ...time.Duration) Option {
+	return func(o *clientOptions) { o.missingChunkRetries = delays }
 }
 
 // WrapTransport wraps the outermost RoundTripper of the client, so wrap sees
@@ -61,8 +82,14 @@ func WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) Option {
 	return func(o *clientOptions) { o.wrapTransport = wrap }
 }
 
+// New creates a Client that attaches a valid OAuth2 token to every request.
+// tokSource is called before each request; it must refresh the token when expired.
+// userAgent is sent as the User-Agent header on all requests.
+// When insecure is true, TLS certificate verification is skipped, which allows
+// connecting to servers using self-signed certificates.
+// When debug is true, raw API responses are printed to stderr.
 func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debug bool, opts ...Option) *Client {
-	var o clientOptions
+	o := clientOptions{missingChunkRetries: defaultMissingChunkRetries}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -93,8 +120,10 @@ func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debu
 	}
 
 	return &Client{
-		baseURL: baseURL,
-		debug:   debug,
+		baseURL:             baseURL,
+		debug:               debug,
+		unsafeWrite:         o.unsafeWrite,
+		missingChunkRetries: o.missingChunkRetries,
 		// No client-level Timeout: that field caps the entire round-trip
 		// (including body upload), which would kill large chunk uploads on
 		// slow connections. Transport-level timeouts above protect against
@@ -209,6 +238,34 @@ func (c *Client) Delete(ctx context.Context, path string) error {
 	}
 
 	return c.do(req, nil)
+}
+
+// getChunk downloads an encrypted chunk. A chunk uploaded with unsafe_write is
+// counted before it reaches the object store, so a version announced complete
+// can answer 404 for it a moment: a 404 is retried after each pause of
+// missingChunkRetries. A chunk still missing then is reported as
+// ErrChunkMissing (which also matches ErrNotFound): the version is incomplete
+// for good, e.g. its background store failed or its worker was killed. A 410
+// (node pending deletion) or any other error is not retried.
+func (c *Client) getChunk(ctx context.Context, path string) ([]byte, error) {
+	data, err := c.GetBytes(ctx, path)
+	missing := func() bool { return errors.Is(err, ErrNotFound) && !errors.Is(err, ErrGone) }
+	for _, delay := range c.missingChunkRetries {
+		if !missing() {
+			break
+		}
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		data, err = c.GetBytes(ctx, path)
+	}
+	if missing() {
+		return nil, fmt.Errorf("%w: %w", ErrChunkMissing, err)
+	}
+
+	return data, err
 }
 
 // GetBytes performs an authenticated GET and returns the raw response body.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -625,6 +626,94 @@ func TestCreateDataroomFileNode(t *testing.T) {
 			}
 			if item.Node.ID != "n-1" || item.Version == nil || item.Version.ID != "v-1" || item.Version.VersionNumber != 2 {
 				t.Errorf("item = %+v / %+v, want node n-1, version v-1 number 2", item.Node, item.Version)
+			}
+		})
+	}
+}
+
+// Both upload routes carry unsafe_write explicitly, false unless the client
+// was built with WithUnsafeWrite(true): the server's own default is true, so
+// leaving the parameter out would not be the safe choice it looks like.
+func TestUploadRoutes_SendUnsafeWrite(t *testing.T) {
+	for _, unsafe := range []bool{false, true} {
+		var got []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got = append(got, r.URL.Path+" unsafe_write="+r.URL.Query().Get("unsafe_write"))
+			if strings.HasSuffix(r.URL.Path, "/node/file") {
+				w.WriteHeader(http.StatusCreated)
+				fmt.Fprint(w, `{"node":{"id":"n"},"node_version":{"id":"v"}}`)
+
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+		}))
+		c := New(srv.URL, "retyc-test/1.0", staticTokenSource(), false, false, WithUnsafeWrite(unsafe))
+		ctx := context.Background()
+		if _, err := c.CreateDataroomFileNode(ctx, "dr", nil, "N", "H", "T", 1, true, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.UploadDataroomChunk(ctx, "v", 0, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		want := fmt.Sprintf("unsafe_write=%t", unsafe)
+		if len(got) != 2 || !strings.HasSuffix(got[0], want) || !strings.HasSuffix(got[1], want) {
+			t.Errorf("WithUnsafeWrite(%t): requests = %v, want both with %s", unsafe, got, want)
+		}
+	}
+}
+
+// A chunk stored in the background (unsafe_write) is counted before it reaches
+// the object store: within that window, a version announced complete answers
+// 404 for it. The download retries a 404 after a short pause, and reports a
+// chunk still missing as ErrChunkMissing — a 410 (node pending deletion) or
+// another error is not retried.
+func TestDownloadChunk_RetriesMissingChunk(t *testing.T) {
+	cases := map[string]struct {
+		statuses []int // answer per attempt, the last one repeated
+		wantErr  error // nil: the data comes back
+		attempts int
+	}{
+		"found on retry":   {statuses: []int{404, 404, 200}, attempts: 3},
+		"still missing":    {statuses: []int{404}, wantErr: ErrChunkMissing, attempts: 3},
+		"pending deletion": {statuses: []int{410}, wantErr: ErrGone, attempts: 1},
+		"server error":     {statuses: []int{500}, attempts: 1},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			var attempts int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				status := tc.statuses[min(attempts, len(tc.statuses)-1)]
+				attempts++
+				if status != http.StatusOK {
+					http.Error(w, "nope", status)
+
+					return
+				}
+				_, _ = w.Write([]byte("chunk"))
+			}))
+			defer srv.Close()
+			c := New(srv.URL, "retyc-test/1.0", staticTokenSource(), false, false,
+				WithMissingChunkRetries(time.Millisecond, time.Millisecond))
+
+			for _, get := range []func() ([]byte, error){
+				func() ([]byte, error) { return c.DownloadDataroomChunk(context.Background(), "v", 0) },
+				func() ([]byte, error) { return c.AdminDownloadNodeChunk(context.Background(), "n", 0) },
+			} {
+				attempts = 0
+				data, err := get()
+				switch {
+				case tc.wantErr != nil && !errors.Is(err, tc.wantErr):
+					t.Errorf("err = %v, want %v", err, tc.wantErr)
+				case tc.wantErr == nil && tc.statuses[len(tc.statuses)-1] == 200 && (err != nil || string(data) != "chunk"):
+					t.Errorf("got (%q, %v), want the chunk", data, err)
+				}
+				if errors.Is(tc.wantErr, ErrChunkMissing) && !errors.Is(err, ErrNotFound) {
+					t.Error("a missing chunk no longer matches ErrNotFound")
+				}
+				if attempts != tc.attempts {
+					t.Errorf("attempts = %d, want %d", attempts, tc.attempts)
+				}
 			}
 		})
 	}

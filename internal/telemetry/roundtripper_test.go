@@ -179,3 +179,50 @@ func TestRoundTripper_UserTypedIDNeverReachesTheSpan(t *testing.T) {
 		}
 	}
 }
+
+// An upload span says whether the API was asked to store the chunk in the
+// background (unsafe_write): the one query parameter a span records, and only
+// as a boolean — anything else in the query never reaches it.
+func TestRoundTripper_RecordsUnsafeWrite(t *testing.T) {
+	cases := map[string]struct {
+		query string
+		want  *bool
+	}{
+		"unsafe":    {query: "?unsafe_write=true", want: new(true)},
+		"safe":      {query: "?unsafe_write=false", want: new(false)},
+		"absent":    {query: ""},
+		"not bool":  {query: "?unsafe_write=SECRET"},
+		"other key": {query: "?name=SECRET&unsafe_write=true", want: new(true)},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			exp := telemetrytest.Install(t)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer srv.Close()
+			client := &http.Client{Transport: RoundTripper(http.DefaultTransport)}
+			req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost,
+				srv.URL+"/dataroom/node/version/019d3de3-cba2-76d0-962d-7817e9858661/chunk/0"+tc.query, nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+
+			s := exp.GetSpans()[0]
+			v, ok := attr(s, string(AttrUnsafeWrite))
+			switch {
+			case tc.want == nil && ok:
+				t.Errorf("%s = %v, want absent", AttrUnsafeWrite, v.String())
+			case tc.want != nil && (!ok || v.AsBool() != *tc.want):
+				t.Errorf("%s = %v (present %v), want %v", AttrUnsafeWrite, v.String(), ok, *tc.want)
+			}
+			for _, kv := range s.Attributes {
+				if strings.Contains(kv.Value.String(), "SECRET") {
+					t.Errorf("attribute %s leaks the query: %s", kv.Key, kv.Value.String())
+				}
+			}
+		})
+	}
+}

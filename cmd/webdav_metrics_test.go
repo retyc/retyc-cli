@@ -728,3 +728,40 @@ func TestWriteFileHandle_CloseUploadsUnderTheRequestSpan(t *testing.T) {
 		t.Error("the upload context lost the request span")
 	}
 }
+
+func TestResolveUnsafeWrite(t *testing.T) {
+	cases := map[string]struct {
+		env  string // "" = unset
+		flag string // "" = not passed
+		want bool
+	}{
+		"default":            {want: false},
+		"env without flag":   {env: "true", want: true},
+		"flag overrides env": {env: "true", flag: "false", want: false},
+		"flag without env":   {flag: "true", want: true},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			isolateConfig(t)
+			if tc.env != "" {
+				t.Setenv("RETYC_API_UNSAFE_WRITE", tc.env)
+			}
+			config.SetDefaults()
+			flags := pflag.NewFlagSet("serve", pflag.ContinueOnError)
+			flags.Bool("unsafe-write", false, "")
+			if tc.flag != "" {
+				if err := flags.Set("unsafe-write", tc.flag); err != nil {
+					t.Fatal(err)
+				}
+			}
+			bindUnsafeWrite(flags)
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.API.UnsafeWrite != tc.want {
+				t.Errorf("API.UnsafeWrite = %v, want %v", cfg.API.UnsafeWrite, tc.want)
+			}
+		})
+	}
+}

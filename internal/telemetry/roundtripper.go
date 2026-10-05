@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -33,6 +34,7 @@ func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		attribute.String("url.template", route),
 		attribute.String("server.address", req.URL.Host),
 	}, routeAttributes(req.URL.Path)...)
+	attrs = append(attrs, unsafeWriteAttribute(req.URL)...)
 	ctx, span := Tracer().Start(req.Context(), route,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attrs...))
@@ -53,6 +55,21 @@ func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return resp, nil
+}
+
+// unsafeWriteAttribute records the unsafe_write parameter of an upload, the
+// only query parameter a span carries, and only when it parses as a boolean:
+// the query is otherwise never recorded.
+func unsafeWriteAttribute(u *url.URL) []attribute.KeyValue {
+	if u.RawQuery == "" {
+		return nil
+	}
+	v, err := strconv.ParseBool(u.Query().Get("unsafe_write"))
+	if err != nil {
+		return nil
+	}
+
+	return []attribute.KeyValue{AttrUnsafeWrite.Bool(v)}
 }
 
 // resourceKeys maps the path segment that precedes an identifier to the
