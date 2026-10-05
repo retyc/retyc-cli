@@ -38,6 +38,7 @@ retyc webdav serve [flags]
 |----------------|-------|-------------|--------------------------------------------------------------------|
 | `--addr`       |       | `127.0.0.1:8888` | `host:port` to bind (`127.0.0.1` = local only; also `webdav.addr` / `RETYC_WEBDAV_ADDR`) |
 | `--auth`       |       | `false`     | Require HTTP Basic authentication                                  |
+| `--unsafe-write` |     | `false`     | Let the API acknowledge uploads before storing them (also `api.unsafe_write` / `RETYC_API_UNSAFE_WRITE`): faster, but a failed background store goes unreported, see [configuration](configuration.md#acknowledge-uploads-before-they-are-stored) |
 | `--metrics-addr` |     | *(empty)*   | Expose Prometheus metrics and health probes on this address (see [below](#metrics-probes-and-traces)) |
 | `--metrics-runtime` |  | `true`      | Include the Go runtime and process metrics on `/metrics` (`--metrics-runtime=false` to drop them) |
 | `--metrics-label` |    | *(none)*    | Constant label `key=value` added to every series; repeatable |
@@ -259,7 +260,10 @@ startup span (`retyc webdav serve init`: login check, key unlock as a
 `crypto.unlock_key` child span, bind),
 parented to `TRACEPARENT` when set, then one new trace per request, named
 `WEBDAV <method>`, with the API calls, the per-chunk `crypto.encrypt` /
-`crypto.decrypt` spans and the cache events it caused. Requests are
+`crypto.decrypt` spans and the cache events it caused. Upload calls carry
+`retyc.upload.unsafe_write`, telling whether the API was asked to store the chunk
+in the background; a chunk download retried on a 404 shows as successive calls of
+the same route. Requests are
 never parented to the startup span, so a caller's trace closes once the server
 is up. WebDAV clients issue many `PROPFIND`s: set
 `OTEL_TRACES_SAMPLER=parentbased_traceidratio` and `OTEL_TRACES_SAMPLER_ARG`

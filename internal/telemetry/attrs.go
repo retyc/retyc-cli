@@ -39,7 +39,10 @@ const (
 	AttrNodeCount            = attribute.Key("retyc.node.count")
 	AttrPathDepth            = attribute.Key("retyc.path.depth")
 	AttrMCPTool              = attribute.Key("retyc.mcp.tool")
-	AttrErrorType            = attribute.Key("error.type")
+	// AttrUnsafeWrite is the unsafe_write parameter of an upload: true when the
+	// API answers before storing the chunk (see unsafeWriteAttribute).
+	AttrUnsafeWrite = attribute.Key("retyc.upload.unsafe_write")
+	AttrErrorType   = attribute.Key("error.type")
 )
 
 // ErrorType returns the Go type of the innermost error under the fmt.Errorf

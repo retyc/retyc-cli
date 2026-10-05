@@ -34,6 +34,10 @@ type OIDCConfig struct {
 type APIConfig struct {
 	BaseURL     string            `yaml:"base_url" mapstructure:"base_url"`
 	Concurrency ConcurrencyConfig `yaml:"concurrency" mapstructure:"concurrency"`
+	// UnsafeWrite lets the API acknowledge an uploaded chunk before it reaches
+	// the object store (unsafe_write): faster, but a failure of the background
+	// store goes unreported and leaves the version incomplete.
+	UnsafeWrite bool `yaml:"unsafe_write" mapstructure:"unsafe_write"`
 }
 
 // DefaultConcurrency is the default of every api.concurrency.* key.
@@ -123,6 +127,7 @@ func SetDefaults() {
 	viper.SetDefault("api.concurrency.list", DefaultConcurrency)
 	viper.SetDefault("api.concurrency.upload", DefaultConcurrency)
 	viper.SetDefault("api.concurrency.download", DefaultConcurrency)
+	viper.SetDefault("api.unsafe_write", false)
 	// Dev builds only (see cmd/insecure_dev.go). Registered unconditionally so
 	// that the key appears in viper.AllKeys() and stays documented.
 	viper.SetDefault("insecure", false)

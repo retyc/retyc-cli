@@ -1934,6 +1934,13 @@ func isLoopbackAddr(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// bindUnsafeWrite binds --unsafe-write to api.unsafe_write, which config.Load
+// then reads: call it before. Like the other flags, bound in RunE, never in
+// init().
+func bindUnsafeWrite(flags *pflag.FlagSet) {
+	_ = viper.BindPFlag("api.unsafe_write", flags.Lookup("unsafe-write"))
+}
+
 // resolveWebdavAddr returns the host:port to bind, with the usual precedence
 // (flag > env > config file > default); same binding strategy as
 // resolveMetricsAddr.
@@ -2049,6 +2056,7 @@ Example:
 			return config.ErrNoKeyPassphrase
 		}
 
+		bindUnsafeWrite(cmd.Flags())
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
@@ -2058,7 +2066,7 @@ Example:
 			return err
 		}
 		client := api.New(cfg.API.BaseURL, cliUserAgent(), tokSrc, insecure, debug,
-			apiTransport())
+			apiTransport(), api.WithUnsafeWrite(cfg.API.UnsafeWrite))
 
 		// Fail-fast before binding the port: auth + API reachability, then the
 		// key passphrase itself (a wrong one would otherwise only surface on the
@@ -2264,6 +2272,8 @@ var _ webdav.File = (*streamWriteHandle)(nil)
 
 func init() {
 	webdavServeCmd.Flags().String("addr", "127.0.0.1:8888", "host:port to bind")
+	webdavServeCmd.Flags().Bool("unsafe-write", false,
+		"let the API acknowledge uploads before they are stored (faster; a failed background store is not reported)")
 	webdavServeCmd.Flags().Bool("auth", false,
 		"require HTTP Basic auth (password from RETYC_WEBDAV_PASSWORD or generated)")
 	webdavServeCmd.Flags().String("metrics-addr", "",

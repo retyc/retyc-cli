@@ -360,6 +360,14 @@ Direction detected from which argument is a `retyc://` URI:
   so an existing file gets a new version, 410 → `ErrNameBeingDeleted`. The server drops a
   failed request: no `DiscardFailedUpload`. WebDAV does the same (`smallWriteHandle`, body
   kept in memory, sent on Close); larger files keep the path below.
+- `api.unsafe_write` (default false, `--unsafe-write` on `webdav serve`) is sent as the
+  `unsafe_write` query parameter of **both** upload routes, always explicitly (the server's
+  default is true): `api.WithUnsafeWrite`, passed by `newAPIClient` and `webdav serve`.
+  When true the API answers before the chunk reaches S3 and a failed background store is
+  never reported, so a version can be listed complete with a chunk missing. Chunk downloads
+  (`api.Client.getChunk`, user and admin routes) retry a 404 after 300 ms then 600 ms (the
+  store window is ~450 ms), then return `api.ErrChunkMissing` (also matches `ErrNotFound`);
+  a 410 is not retried.
 - Version creation announces `chunk_count_expected` = `service.ChunkCount(size)`; the API
   refuses any chunk index beyond it (422) and never overwrites a stored chunk, so
   `UploadChunks` fails when the source does not yield exactly the declared size.
@@ -547,7 +555,9 @@ Span model:
   injected, route identifiers as named attributes (`retyc.dataroom.id`,
   `retyc.node.id`, `retyc.version.id`, `retyc.transfer.id`, `retyc.file.id`,
   `retyc.chunk.index`, ... keyed by the resource segment before the UUID,
-  `retyc.path.params` as the fallback); `metrics.NormalizeRoute` matches the
+  `retyc.path.params` as the fallback; the upload routes also carry
+`retyc.upload.unsafe_write`, read from the `unsafe_write` query parameter — the only
+query parameter a span records, and only when it parses as a boolean); `metrics.NormalizeRoute` matches the
   path against `routeTemplates` position by position and folds every `{id}` /
   `{n}` position whatever its value (an identifier equal to a route word is
   folded too); a path matching no template falls back to the vocabulary

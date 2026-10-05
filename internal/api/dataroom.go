@@ -325,7 +325,8 @@ func (c *Client) CreateDataroomFileNode(
 		fields = append(fields, formField{"parent_id", *parentID})
 	}
 	var result DataroomNodeItem
-	if err := c.postMultipart(ctx, "/dataroom/"+dataroomID+"/node/file", fields, chunk, &result); err != nil {
+	path := "/dataroom/" + dataroomID + "/node/file?unsafe_write=" + strconv.FormatBool(c.unsafeWrite)
+	if err := c.postMultipart(ctx, path, fields, chunk, &result); err != nil {
 		return nil, err
 	}
 
@@ -334,7 +335,7 @@ func (c *Client) CreateDataroomFileNode(
 
 // UploadDataroomChunk uploads a single encrypted chunk for a node version.
 func (c *Client) UploadDataroomChunk(ctx context.Context, versionID string, chunkID int, data []byte) error {
-	path := fmt.Sprintf("/dataroom/node/version/%s/chunk/%d", versionID, chunkID)
+	path := fmt.Sprintf("/dataroom/node/version/%s/chunk/%d?unsafe_write=%t", versionID, chunkID, c.unsafeWrite)
 
 	return c.PostMultipartChunk(ctx, path, data)
 }
@@ -343,5 +344,5 @@ func (c *Client) UploadDataroomChunk(ctx context.Context, versionID string, chun
 func (c *Client) DownloadDataroomChunk(ctx context.Context, versionID string, chunkID int) ([]byte, error) {
 	path := fmt.Sprintf("/dataroom/node/version/%s/chunk/%d", versionID, chunkID)
 
-	return c.GetBytes(ctx, path)
+	return c.getChunk(ctx, path)
 }

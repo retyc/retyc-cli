@@ -114,7 +114,8 @@ func newAPIClient(ctx context.Context) (*config.Config, *api.Client, error) {
 		return nil, nil, err
 	}
 
-	return cfg, api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug, apiTransport()), nil
+	return cfg, api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug,
+		apiTransport(), api.WithUnsafeWrite(cfg.API.UnsafeWrite)), nil
 }
 
 // apiTransport returns the client option every api.New call site uses:

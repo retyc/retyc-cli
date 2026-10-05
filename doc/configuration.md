@@ -131,6 +131,34 @@ multiply the bandwidth of a transfer, and it puts more load on the server.
 A download holds up to twice `download` decrypted chunks in memory
 (8 MB each).
 
+### Acknowledge uploads before they are stored
+
+By default every upload is acknowledged once the API has stored it. With
+`unsafe_write`, the API answers as soon as it has received a chunk and stores
+it in the object store in the background, which removes that store from every
+upload's latency — on small files, most of it:
+
+```yaml
+# config.yaml
+api:
+  unsafe_write: true
+```
+
+or `RETYC_API_UNSAFE_WRITE=true`, or `retyc webdav serve --unsafe-write`.
+
+The cost is durability: a background store that fails (the object store
+unreachable, the API worker killed) is never reported. The upload has
+succeeded, the file is listed with its full size, and yet one of its chunks is
+missing, so the file can no longer be downloaded. Keep the default for archives
+and anything uploaded once (`dataroom cp`, the MCP server); consider it for an
+interactive WebDAV mount, where latency matters and a file is usually still at
+hand. The API ignores the setting above its own size limit, or when too many
+chunks are already being stored in the background.
+
+A download meeting such a chunk retries it twice within a second (it may still
+be on its way to the store), then fails with "chunk missing on the server: the
+file version is incomplete or corrupted".
+
 ## Reference
 
 ### Settings
@@ -141,6 +169,7 @@ A download holds up to twice `download` decrypted chunks in memory
 | Listing pages fetched at once | `api.concurrency.list` | `RETYC_API_CONCURRENCY_LIST` | `4`, see [below](#tune-parallel-requests) |
 | Chunks uploaded at once per file | `api.concurrency.upload` | `RETYC_API_CONCURRENCY_UPLOAD` | `4` |
 | Chunks downloaded at once per file | `api.concurrency.download` | `RETYC_API_CONCURRENCY_DOWNLOAD` | `4` |
+| Acknowledge uploads before they are stored | `api.unsafe_write` | `RETYC_API_UNSAFE_WRITE` | `false`, see [below](#acknowledge-uploads-before-they-are-stored) |
 | Key cache | `keyring.enabled` | `RETYC_KEYRING_ENABLED` | `true` (Linux only) |
 | Key cache lifetime, seconds | `keyring.ttl` | `RETYC_KEYRING_TTL` | `60` |
 | Organization API key | `admin.api_key` | `RETYC_ADMIN_API_KEY` | — |

@@ -597,7 +597,7 @@ func newWebdavTestFS(srv *httptest.Server) *webdavFS {
 		AccessToken: "test-token",
 		TokenType:   "Bearer",
 		Expiry:      time.Now().Add(time.Hour),
-	}), false, false)
+	}), false, false, api.WithMissingChunkRetries()) // a 404 fails at once
 
 	fs := &webdavFS{
 		client: client,
