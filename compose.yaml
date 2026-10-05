@@ -2,6 +2,7 @@
 
 services:
   retyc-cli:
+    image: ghcr.io/retyc/retyc-cli:${TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
