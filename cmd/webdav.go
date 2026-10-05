@@ -205,6 +205,25 @@ type dataroomCacheEntry struct {
 
 const dataroomCacheTTL = 60 * time.Second
 
+// detachedFetchTimeout bounds a fetch shared by several requests, which is
+// detached from the request that started it so that one client giving up
+// cannot fail the others. The API client has no overall timeout (an upload
+// can take as long as it needs): without this bound, an API that sends its
+// headers then stalls would keep the fetch in flight forever, and every later
+// request needing it would wait on it. Tests shorten it per instance
+// (dataroomCache.fetchTimeout, webdavFS.fetchTimeout), never globally: a
+// background fetch of another test may still be reading it.
+const detachedFetchTimeout = 2 * time.Minute
+
+// orDetachedFetchTimeout returns d, or detachedFetchTimeout when d is zero.
+func orDetachedFetchTimeout(d time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+
+	return detachedFetchTimeout
+}
+
 // dataroomCache is a thread-safe, TTL-based cache mapping dataroom display names to IDs.
 //
 // An expired list is served while a single background fetch replaces it
@@ -217,6 +236,8 @@ type dataroomCache struct {
 	entry    *dataroomCacheEntry
 	incoming *dataroomFetch // fetch in flight, nil when idle
 	fetchFn  func(ctx context.Context) ([]dataroomCacheItem, error)
+	// fetchTimeout bounds a fetch; zero means detachedFetchTimeout.
+	fetchTimeout time.Duration
 }
 
 // dataroomFetch is a fetch of the list shared by every caller that needs it
@@ -290,7 +311,9 @@ func (c *dataroomCache) fetchLocked(ctx context.Context) *dataroomFetch {
 	c.incoming = f
 	go func() {
 		metrics.WebdavDataroomCacheRefreshes.Inc()
-		items, err := c.fetchFn(context.WithoutCancel(ctx))
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), orDetachedFetchTimeout(c.fetchTimeout))
+		items, err := c.fetchFn(fctx)
+		cancel()
 		var e *dataroomCacheEntry
 		if err == nil {
 			e = newDataroomCacheEntry(items)
@@ -656,8 +679,14 @@ func (h *writeFileHandle) Close() error {
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(w, src)
-	if err := w.Close(); err != nil {
+	sw, ok := w.(*streamWriteHandle)
+	if !ok {
+		_ = w.Close()
+
+		return fmt.Errorf("unexpected upload handle %T", w)
+	}
+	_, copyErr := io.Copy(writerFunc(sw.write), src)
+	if err := sw.Close(); err != nil {
 		return err
 	}
 
@@ -704,6 +733,8 @@ type webdavFS struct {
 	identity *age.HybridIdentity
 	// listFn performs the actual listing; nil means fetchNodes (tests inject a fake).
 	listFn func(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error)
+	// fetchTimeout bounds a shared listing; zero means detachedFetchTimeout.
+	fetchTimeout time.Duration
 	// sessionFn resolves a dataroom session; nil means service.GetDataroomSession
 	// (tests inject a fake).
 	sessionFn func(ctx context.Context, drID string) (*service.DataroomSession, error)
@@ -744,8 +775,15 @@ func (fs *webdavFS) invalidateNodeCache(uri string) {
 // would otherwise serve the ghost children of the deleted tree. Harmless for
 // a file (nothing is cached below it).
 func (fs *webdavFS) invalidateNodeSubtree(uri string) {
-	prefix := strings.TrimSuffix(uri, "/") + "/"
 	fs.nodeMu.Lock()
+	defer fs.nodeMu.Unlock()
+	fs.invalidateNodeSubtreeLocked(uri)
+}
+
+// invalidateNodeSubtreeLocked is invalidateNodeSubtree for a caller that
+// holds nodeMu.
+func (fs *webdavFS) invalidateNodeSubtreeLocked(uri string) {
+	prefix := strings.TrimSuffix(uri, "/") + "/"
 	if fs.nodeGen == nil {
 		fs.nodeGen = make(map[string]uint64)
 	}
@@ -762,7 +800,6 @@ func (fs *webdavFS) invalidateNodeSubtree(uri string) {
 			fs.nodeGen[inflight]++
 		}
 	}
-	fs.nodeMu.Unlock()
 }
 
 // getSession returns the session for drID, resolved on first access and cached
@@ -1018,7 +1055,9 @@ func (fs *webdavFS) listNodes(ctx context.Context, drID, nodePath string) ([]ser
 	}
 	// Shared by every concurrent caller of this URI: detach it from the
 	// leader's request so one aborted PROPFIND cannot fail the others.
-	f.nodes, f.err = fetch(context.WithoutCancel(ctx), drID, nodePath)
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), orDetachedFetchTimeout(fs.fetchTimeout))
+	f.nodes, f.err = fetch(fctx, drID, nodePath)
+	cancel()
 
 	fs.nodeMu.Lock()
 	delete(fs.nodeInflight, uri)
@@ -1259,12 +1298,25 @@ type streamWriteHandle struct {
 }
 
 func (h *streamWriteHandle) Write(p []byte) (int, error) {
-	n, err := h.pipeW.Write(p)
-	h.written += int64(n)
+	n, err := h.write(p)
 	metrics.WebdavBytes.WithLabelValues("upload").Add(float64(n))
 
 	return n, err
 }
+
+// write feeds the upload without observing the ingress metric: the buffered
+// PUT replays through it bytes writeFileHandle.Write has already counted.
+func (h *streamWriteHandle) write(p []byte) (int, error) {
+	n, err := h.pipeW.Write(p)
+	h.written += int64(n)
+
+	return n, err
+}
+
+// writerFunc adapts a function to io.Writer.
+type writerFunc func(p []byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error)        { return f(p) }
 func (h *streamWriteHandle) Stat() (os.FileInfo, error) { return h.info, nil }
 func (h *streamWriteHandle) Close() error {
 	_ = h.pipeW.Close()
@@ -1427,27 +1479,31 @@ func (fs *webdavFS) Mkdir(ctx context.Context, name string, _ os.FileMode) error
 	// the parent's gains the new folder (so a nested MKCOL or a PUT inside it
 	// finds its ID), and the new folder's own is empty (so the first PUT in it
 	// needs no listing, and the following overwrite finds the file it created).
-	fs.upsertNodeCache(parentURI, service.DataroomNodeInfo{ID: id, Name: dirName, Type: "dir"})
-	fs.seedEmptyListing(dataroomURI(drID, subPath))
+	fs.cacheNewFolder(parentURI, dataroomURI(drID, subPath),
+		service.DataroomNodeInfo{ID: id, Name: dirName, Type: "dir"})
 
 	return nil
 }
 
-// seedEmptyListing caches an empty listing for a folder this server has just
-// created: it cannot have children yet. Any older entry under that URI (a
-// folder of the same name deleted earlier) is replaced, and the generation is
-// bumped so a listing already in flight is not stored over it.
-func (fs *webdavFS) seedEmptyListing(uri string) {
+// cacheNewFolder records a folder this server has just created: an empty
+// listing for the folder itself (it cannot have children yet), then the folder
+// in its parent's listing. Both happen under one lock, the folder's own
+// listing first: once a request can find the folder in the cache, a child it
+// creates there lands in that listing instead of being hidden by a seed
+// arriving after it.
+//
+// Any older listing at or below uri (a folder of the same name deleted
+// elsewhere, and its sub-folders) is dropped, and its generation bumped so a
+// listing already in flight is not stored over it.
+func (fs *webdavFS) cacheNewFolder(parentURI, uri string, folder service.DataroomNodeInfo) {
 	fs.nodeMu.Lock()
 	defer fs.nodeMu.Unlock()
-	if fs.nodeGen == nil {
-		fs.nodeGen = make(map[string]uint64)
-	}
-	fs.nodeGen[uri]++
+	fs.invalidateNodeSubtreeLocked(uri)
 	if fs.nodeCache == nil {
 		fs.nodeCache = make(map[string]*nodeCacheEntry)
 	}
 	fs.nodeCache[uri] = &nodeCacheEntry{nodes: []service.DataroomNodeInfo{}, fetchedAt: time.Now()}
+	fs.upsertNodeCacheLocked(parentURI, folder)
 }
 
 // mkdirAfterConflict sorts out a 409 on folder creation. The API answers it

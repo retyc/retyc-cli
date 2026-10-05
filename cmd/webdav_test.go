@@ -19,11 +19,13 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"golang.org/x/net/webdav"
 	"golang.org/x/oauth2"
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/service"
 )
 
@@ -540,6 +542,31 @@ func TestDataroomCache_RefreshErrorKeepsStaleEntry(t *testing.T) {
 	}
 	if id, err := cache.idForName(ctx, "Alpha"); err != nil || id != "id-1" {
 		t.Errorf("idForName(Alpha) after a failed refresh = (%q, %v), want the stale id-1", id, err)
+	}
+}
+
+// A fetch that never completes (an API that sends its headers then stalls)
+// must time out: otherwise it stays in flight forever and no later lookup can
+// start another refresh.
+func TestDataroomCache_StalledFetchTimesOut(t *testing.T) {
+	var calls atomic.Int32
+	cache := newDataroomCache(func(ctx context.Context) ([]dataroomCacheItem, error) {
+		if calls.Add(1) == 1 {
+			<-ctx.Done()
+
+			return nil, ctx.Err()
+		}
+
+		return []dataroomCacheItem{{id: "id-1", title: "Alpha"}}, nil
+	})
+	cache.fetchTimeout = 20 * time.Millisecond
+	ctx := context.Background()
+
+	if _, err := cache.idForName(ctx, "Alpha"); err == nil {
+		t.Fatal("the stalled fetch succeeded")
+	}
+	if id, err := cache.idForName(ctx, "Alpha"); err != nil || id != "id-1" {
+		t.Errorf("idForName after a timed-out fetch = (%q, %v), want id-1 from a new fetch", id, err)
 	}
 }
 
@@ -1254,6 +1281,30 @@ func TestListNodes_LeaderCancellationDoesNotFailWaiters(t *testing.T) {
 
 	if err := <-waiterErr; err != nil {
 		t.Fatalf("waiter error = %v, want the listing", err)
+	}
+}
+
+// Same for a shared folder listing: a stalled one must not stay in flight and
+// make every later request for the folder wait on it.
+func TestListNodes_StalledFetchTimesOut(t *testing.T) {
+	var calls atomic.Int32
+	listFn := func(ctx context.Context, _, _ string) ([]service.DataroomNodeInfo, error) {
+		if calls.Add(1) == 1 {
+			<-ctx.Done()
+
+			return nil, ctx.Err()
+		}
+
+		return []service.DataroomNodeInfo{{ID: "n1", Name: "a", Type: "file"}}, nil
+	}
+	fs := &webdavFS{fetchTimeout: 20 * time.Millisecond, listFn: listFn}
+	ctx := context.Background()
+
+	if _, err := fs.listNodes(ctx, "dr1", "/"); err == nil {
+		t.Fatal("the stalled listing succeeded")
+	}
+	if nodes, err := fs.listNodes(ctx, "dr1", "/"); err != nil || len(nodes) != 1 {
+		t.Errorf("listNodes after a timed-out fetch = (%v, %v), want the new listing", nodes, err)
 	}
 }
 
@@ -2448,6 +2499,35 @@ func TestWebdavFS_MkdirConflictRechecksParent(t *testing.T) {
 	}
 }
 
+// A folder deleted elsewhere and re-created here under the same name within the
+// TTL must not inherit the listings cached below the old one: a PUT deeper in
+// the tree would otherwise resolve a parent ID of the deleted tree.
+func TestWebdavFS_MkdirDropsListingsOfTheOldFolder(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/dataroom/dr1/node" {
+			fmt.Fprint(w, `{"id":"d-new","name_enc":"x"}`)
+
+			return
+		}
+		http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+	}
+	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{
+		"retyc://dr1/":      {},
+		"retyc://dr1/a":     {{ID: "d-sub-old", Name: "sub", Type: "dir"}},
+		"retyc://dr1/a/sub": {{ID: "f-ghost", Name: "ghost.txt", Type: "file"}},
+	})
+
+	if err := fs.Mkdir(context.Background(), "/dataroom/DR/a", 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	if nodeCacheHas(fs, "retyc://dr1/a/sub") {
+		t.Error("a listing below the re-created folder survived")
+	}
+	if id, listed := cachedNodeID(fs, "retyc://dr1/a", "sub"); !listed || id != "" {
+		t.Errorf("new folder listing: sub = %q (listed %v), want empty", id, listed)
+	}
+}
+
 // The sequence davfs2 sends for `mkdir -p a/b && echo x > a/b/f` (traced on the
 // CSI): MKCOL a, MKCOL a/b, an empty PUT on create, then the PUT with content.
 // Every folder ID is known from the cache — the root listing, then the folders
@@ -2596,6 +2676,8 @@ func TestWriteFileHandle_BufferedPutUsesCachedListings(t *testing.T) {
 		"retyc://dr1/a": {{ID: "f-1", Name: "doc.txt", Type: "file", VersionID: "v-1"}},
 	})
 
+	uploaded := metrics.WebdavBytes.WithLabelValues("upload")
+	uploadedBefore := testutil.ToFloat64(uploaded)
 	f, err := fs.OpenFile(withIsPut(context.Background()), "/dataroom/DR/a/doc.txt",
 		os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -2611,6 +2693,11 @@ func TestWriteFileHandle_BufferedPutUsesCachedListings(t *testing.T) {
 	want := []string{"POST /dataroom/node/f-1/version", "POST /dataroom/node/version/v-2/chunk/0"}
 	if calls := log.list(); !slices.Equal(calls, want) {
 		t.Errorf("calls = %v, want %v", calls, want)
+	}
+	// The bytes were counted once, as they arrived; uploading the buffer must
+	// not count them again.
+	if got := counterDelta(t, uploaded, uploadedBefore); got != 10 {
+		t.Errorf("upload bytes counted = %v, want 10", got)
 	}
 	fs.nodeMu.Lock()
 	defer fs.nodeMu.Unlock()

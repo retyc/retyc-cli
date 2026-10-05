@@ -118,7 +118,10 @@ Notes and limitations:
   move that hits a node deleted elsewhere is retried once against a fresh
   listing. Concurrent requests for the same folder share a single
   listing, and a listing that was in flight when a mutation landed is discarded
-  rather than cached.
+  rather than cached. A shared fetch (a folder listing, the dataroom list) is
+  bounded to 2 minutes: if the API stalls mid-response, the waiting requests fail
+  and the next one starts a fresh fetch, instead of all hanging on the stalled
+  one. A folder whose listing genuinely takes longer than that cannot be listed.
 - Files expose the version ID as their `ETag` and the version's creation time as
   `Last-Modified`, so clients can detect a new version even when the size is
   unchanged. Folders have no timestamp in the API and report none.
