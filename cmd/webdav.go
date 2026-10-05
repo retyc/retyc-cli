@@ -223,6 +223,33 @@ func orDetachedFetchTimeout(d time.Duration) time.Duration {
 	return detachedFetchTimeout
 }
 
+// linkRefresh links the request span of ctx to the cache.refresh trace of a
+// background refresh it waited for (a lookup that joined it: a name missing
+// from the expired listing, an entry past max stale): the API work the request
+// waited for lives in that other trace. An invalid refresh (the fetch was not
+// a background one) adds nothing.
+func linkRefresh(ctx context.Context, refresh trace.SpanContext) {
+	if refresh.IsValid() {
+		trace.SpanFromContext(ctx).AddLink(trace.Link{SpanContext: refresh})
+	}
+}
+
+// startRefreshSpan opens the root span of a background cache refresh, named
+// "cache.refresh", linked to the request whose lookup triggered it.
+//
+// The refresh runs after that request has answered from the expired entry: as
+// a child of the request span it would outlive its parent, and read as if the
+// request had waited for it. A trace of its own keeps the request's duration
+// honest, and the link still leads from one to the other. cache is the
+// retyc.cache.name of the entry (nodes, datarooms), never a path or a title.
+func startRefreshSpan(ctx context.Context, link trace.Link, cache string) (context.Context, trace.Span) {
+	return telemetry.Tracer().Start(ctx, "cache.refresh",
+		trace.WithNewRoot(),
+		trace.WithLinks(link),
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(telemetry.AttrCacheName.String(cache)))
+}
+
 // dataroomCache is a thread-safe, TTL-based cache mapping dataroom display names to IDs.
 //
 // An expired list is served for up to maxStale more while a single background
@@ -245,10 +272,14 @@ type dataroomCache struct {
 
 // dataroomFetch is a fetch of the list shared by every caller that needs it
 // while it runs. entry and err are written once, before done is closed.
+//
+// refresh is the span context of the fetch's own trace when it runs as a
+// background refresh (see startRefreshSpan), invalid otherwise.
 type dataroomFetch struct {
-	done  chan struct{}
-	entry *dataroomCacheEntry
-	err   error
+	done    chan struct{}
+	entry   *dataroomCacheEntry
+	err     error
+	refresh trace.SpanContext
 }
 
 // newDataroomCache returns a cache with the default webdav.cache settings;
@@ -291,9 +322,10 @@ func (c *dataroomCache) resolve(ctx context.Context) (*dataroomCacheEntry, error
 
 		return e, nil
 	}
-	f := c.fetchLocked(ctx)
+	servable := c.servable(e)
+	f := c.fetchLocked(ctx, servable)
 	c.mu.Unlock()
-	if c.servable(e) {
+	if servable {
 		return e, nil
 	}
 
@@ -309,7 +341,7 @@ func (c *dataroomCache) refreshed(ctx context.Context) (*dataroomCacheEntry, err
 
 		return e, nil
 	}
-	f := c.fetchLocked(ctx)
+	f := c.fetchLocked(ctx, false)
 	c.mu.Unlock()
 
 	return f.wait(ctx)
@@ -318,6 +350,8 @@ func (c *dataroomCache) refreshed(ctx context.Context) (*dataroomCacheEntry, err
 func (f *dataroomFetch) wait(ctx context.Context) (*dataroomCacheEntry, error) {
 	select {
 	case <-f.done:
+		linkRefresh(ctx, f.refresh)
+
 		return f.entry, f.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -326,19 +360,32 @@ func (f *dataroomFetch) wait(ctx context.Context) (*dataroomCacheEntry, error) {
 
 // fetchLocked returns the fetch in flight, or starts one. The fetch outlives
 // the request that started it (it serves every waiter); a failed one leaves
-// the stale list in place, and the next request starts another. The caller
-// holds c.mu.
-func (c *dataroomCache) fetchLocked(ctx context.Context) *dataroomFetch {
+// the stale list in place, and the next request starts another. background
+// is true when the caller serves the expired list instead of waiting: the
+// fetch then gets a trace of its own (see startRefreshSpan). The caller holds
+// c.mu.
+func (c *dataroomCache) fetchLocked(ctx context.Context, background bool) *dataroomFetch {
 	if c.incoming != nil {
 		return c.incoming
 	}
 	f := &dataroomFetch{done: make(chan struct{})}
 	c.incoming = f
+	link := trace.LinkFromContext(ctx)
 	go func() {
 		metrics.WebdavDataroomCacheRefreshes.Inc()
-		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), orDetachedFetchTimeout(c.fetchTimeout))
+		fctx := context.WithoutCancel(ctx)
+		var span trace.Span
+		if background {
+			fctx, span = startRefreshSpan(fctx, link, "datarooms")
+			f.refresh = span.SpanContext()
+		}
+		fctx, cancel := context.WithTimeout(fctx, orDetachedFetchTimeout(c.fetchTimeout))
 		items, err := c.fetchFn(fctx)
 		cancel()
+		if span != nil {
+			telemetry.RecordError(span, err)
+			span.End()
+		}
 		var e *dataroomCacheEntry
 		if err == nil {
 			e = newDataroomCacheEntry(items)
@@ -748,12 +795,16 @@ type nodeCacheEntry struct {
 // (through promote) so the fetch starts at once: a request never waits behind
 // the refresh queue, and a refresh holding a slot never waits for one held by
 // another refresh queued behind it.
+//
+// refresh is the span context of the fetch's own trace when it runs as a
+// background refresh (see startRefreshSpan), invalid otherwise.
 type nodeFetch struct {
 	done     chan struct{}
 	promoted chan struct{}
 	once     sync.Once
 	nodes    []service.DataroomNodeInfo
 	err      error
+	refresh  trace.SpanContext
 }
 
 // promote lets a queued background refresh start without a refresh slot.
@@ -1128,6 +1179,8 @@ func (fs *webdavFS) listNodesRefreshed(ctx context.Context, drID, nodePath strin
 func (f *nodeFetch) wait(ctx context.Context) ([]service.DataroomNodeInfo, error) {
 	select {
 	case <-f.done:
+		linkRefresh(ctx, f.refresh)
+
 		return f.nodes, f.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -1178,8 +1231,10 @@ func recordNodeCacheLookup(ctx context.Context, result string) {
 
 // nodeFetchLocked returns the listing of uri in flight, or starts one. A
 // background fetch (refresh of an expired listing) waits for a refresh slot
-// unless a request joins it; a request's fetch promotes any fetch it joins.
-// The caller holds nodeMu.
+// unless a request joins it, and gets a trace of its own (startRefreshSpan); a
+// request's fetch promotes any fetch it joins. A fetch the request starts
+// itself runs in its trace; a background one it joins is linked from its span
+// once done (linkRefresh). The caller holds nodeMu.
 //
 // The fetch is shared by every caller of this URI: it is detached from the
 // request that started it, so one aborted PROPFIND cannot fail the others. A
@@ -1212,11 +1267,22 @@ func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri str
 		fetch = fs.fetchNodes
 	}
 	detached := context.WithoutCancel(ctx)
+	link := trace.LinkFromContext(ctx)
 	go func() {
 		select {
 		case slots <- struct{}{}:
 			defer func() { <-slots }()
 		case <-f.promoted:
+		}
+		// The span starts once the fetch leaves the refresh queue: it
+		// measures the API work, and the time spent queued behind
+		// api.concurrency.list shows as the gap after the linked request.
+		fctx := detached
+		var span trace.Span
+		if background {
+			fctx, span = startRefreshSpan(fctx, link, "nodes")
+			span.SetAttributes(telemetry.AttrDataroomID.String(drID))
+			f.refresh = span.SpanContext()
 		}
 		// The generation is read when the fetch starts, not when it was
 		// queued: a mutation made through this server before that is in the
@@ -1224,9 +1290,13 @@ func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri str
 		fs.nodeMu.Lock()
 		gen := fs.nodeGen[uri]
 		fs.nodeMu.Unlock()
-		fctx, cancel := context.WithTimeout(detached, orDetachedFetchTimeout(fs.fetchTimeout))
+		fctx, cancel := context.WithTimeout(fctx, orDetachedFetchTimeout(fs.fetchTimeout))
 		f.nodes, f.err = fetch(fctx, drID, nodePath)
 		cancel()
+		if span != nil {
+			telemetry.RecordError(span, f.err)
+			span.End()
+		}
 
 		fs.nodeMu.Lock()
 		delete(fs.nodeInflight, uri)

@@ -556,7 +556,13 @@ Span model:
   span: `webdav serve` opens `retyc webdav serve init` (child of
   `TRACEPARENT`, ended once the port is bound) then one root `WEBDAV <method>`
   per request (`instrumentWebdav`, `WithNewRoot`, incoming `traceparent`
-  ignored); `mcp serve` opens one root `MCP <tool>` per call; `toolErr`
+  ignored), and one root `cache.refresh` per background refresh of an expired
+  listing or dataroom list (`startRefreshSpan`: `WithNewRoot` + a link to the
+  request that triggered it, `retyc.cache.name`, `retyc.dataroom.id` for
+  nodes), never a child of the request span it would outlive. A fetch the
+  request starts itself stays in its trace; a request that waits for a
+  background refresh it joined gets a link to it (`linkRefresh`);
+  `mcp serve` opens one root `MCP <tool>` per call; `toolErr`
   records the failure on that span;
 - API calls: `telemetry.RoundTripper` (installed by `cmd.apiTransport()` on
   every `api.New`, and by `newHTTPClient` for the OIDC client: discovery,
