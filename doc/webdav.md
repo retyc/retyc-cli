@@ -299,8 +299,15 @@ startup span (`retyc webdav serve init`: login check, key unlock as a
 parented to `TRACEPARENT` when set, then one new trace per request, named
 `WEBDAV <method>`, with the API calls, the per-chunk `crypto.encrypt` /
 `crypto.decrypt` spans and the cache events it caused (`cache.lookup`, with
-`retyc.cache.stale=true` for an expired listing served while refreshed; the
-refresh itself shows as a later API call of that trace). Upload calls carry
+`retyc.cache.stale=true` for an expired listing served while refreshed). The
+background refresh of such a listing is not part of the request's trace: it
+runs after the request has answered, as a trace of its own, `cache.refresh`
+(`retyc.cache.name` `nodes` or `datarooms`, plus `retyc.dataroom.id` for a
+folder listing), carrying the API calls and a span link back to the request
+that triggered it. A listing the request fetches itself (nothing cached, or
+past `max_stale`) stays in the request's trace; when a request has to wait for a
+background refresh already running (a name missing from the expired listing),
+its span gets a link to that `cache.refresh` trace instead. Upload calls carry
 `retyc.upload.unsafe_write`, telling whether the API was asked to store the chunk
 in the background; a chunk download retried on a 404 shows as successive calls of
 the same route. Requests are
