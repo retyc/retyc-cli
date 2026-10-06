@@ -257,8 +257,9 @@ setting only matters together with `--metrics-addr`.
 `RETYC_WEBDAV_METRICS_LABELS="identity=abc pod=x"` separated by spaces) adds
 constant labels to every series, runtime metrics included, so the parent can
 tell its instances apart. The first `=` separates key and value. A key that
-collides with a metric label (`method`, `route`, `status`, ...) or an invalid
-label name stops the server at startup.
+collides with a metric label (`method`, `route`, `status`, ...), a reserved
+name (`le`, `quantile`, anything starting with `__`) or an invalid label name
+stops the server at startup.
 
 ```sh
 retyc webdav serve --metrics-addr 127.0.0.1:9090 --metrics-runtime=false \
