@@ -80,10 +80,26 @@ type webdavFileInfo struct {
 	size        int64
 	isDir       bool
 	modTime     time.Time
-	nodeID      string // non-empty for file nodes
-	versionID   string // current version ID — avoids GetDataroomNode on download
-	chunkCount  int    // number of AGE-encrypted chunks
-	contentType string // decrypted MIME type from node metadata
+	mode        os.FileMode // permission bits stored with the node, 0 for the default
+	nodeID      string      // non-empty for file nodes
+	versionID   string      // current version ID — avoids GetDataroomNode on download
+	chunkCount  int         // number of AGE-encrypted chunks
+	contentType string      // decrypted MIME type from node metadata
+}
+
+// fileInfoFromNode builds the WebDAV view of a listed node.
+func fileInfoFromNode(n service.DataroomNodeInfo) *webdavFileInfo {
+	return &webdavFileInfo{
+		name:        n.Name,
+		size:        n.Size,
+		isDir:       n.Type == "dir",
+		modTime:     n.ModTime(),
+		mode:        n.Mode(),
+		nodeID:      n.ID,
+		versionID:   n.VersionID,
+		chunkCount:  n.ChunkCount,
+		contentType: n.MIMEType,
+	}
 }
 
 func (fi *webdavFileInfo) Name() string       { return fi.name }
@@ -91,12 +107,24 @@ func (fi *webdavFileInfo) Size() int64        { return fi.size }
 func (fi *webdavFileInfo) IsDir() bool        { return fi.isDir }
 func (fi *webdavFileInfo) ModTime() time.Time { return fi.modTime }
 func (fi *webdavFileInfo) Sys() any           { return nil }
+
+// Mode returns the node's stored permission bits, or 0644 / 0755 when the API
+// stores none. The setuid, setgid and sticky bits are never presented: a
+// remote file system has no business granting them.
 func (fi *webdavFileInfo) Mode() os.FileMode {
+	perm := fi.mode.Perm()
 	if fi.isDir {
-		return os.ModeDir | 0755
+		if perm == 0 {
+			perm = 0755
+		}
+
+		return os.ModeDir | perm
+	}
+	if perm == 0 {
+		perm = 0644
 	}
 
-	return 0644
+	return perm
 }
 
 // ETag implements webdav.ETager. The version ID identifies the file's content
@@ -1092,7 +1120,7 @@ func (fs *webdavFS) initUpload(
 	parentID *string, size int64, sess *service.DataroomSession,
 ) (service.StreamUploadInit, error) {
 	if nodeID, ok := fs.cachedFileNodeID(drID, parentPath, fileName); ok {
-		init, err := service.AddVersionToNode(ctx, fs.client, nodeID, fileName, size, sess)
+		init, err := service.AddVersionToNodeIn(ctx, fs.client, drID, nodeID, fileName, size, sess)
 		if err == nil {
 			return init, nil
 		}
@@ -1384,16 +1412,7 @@ func nodesToFileInfos(nodes []service.DataroomNodeInfo) []os.FileInfo {
 
 			continue
 		}
-		infos = append(infos, &webdavFileInfo{
-			name:        n.Name,
-			size:        n.Size,
-			isDir:       n.Type == "dir",
-			modTime:     n.ModTime(),
-			nodeID:      n.ID,
-			versionID:   n.VersionID,
-			chunkCount:  n.ChunkCount,
-			contentType: n.MIMEType,
-		})
+		infos = append(infos, fileInfoFromNode(n))
 	}
 
 	return infos
@@ -1434,7 +1453,7 @@ func (fs *webdavFS) OpenFile(ctx context.Context, name string, flag int, perm os
 	}
 	wfi := info.(*webdavFileInfo)
 	if wfi.isDir {
-		return fs.openNodeDir(ctx, wfi.name, drID, subPath)
+		return fs.openNodeDirInfo(ctx, wfi, drID, subPath)
 	}
 	parentPath, _ := splitWebdavPath(subPath)
 
@@ -1468,9 +1487,21 @@ func (fs *webdavFS) openDataroomRootDir(ctx context.Context) (webdav.File, error
 	}, nil
 }
 
+// openNodeDir opens a folder that has no listed node of its own (the
+// dataroom root): no timestamp, no mode.
 func (fs *webdavFS) openNodeDir(ctx context.Context, displayName, drID, subPath string) (webdav.File, error) {
+	return fs.openNodeDirInfo(ctx, &webdavFileInfo{name: displayName, isDir: true}, drID, subPath)
+}
+
+// openNodeDirInfo opens a folder with the info its listing gave it. PROPFIND
+// reads a resource's properties from OpenFile(...).Stat(), not from
+// FileSystem.Stat, so the handle must carry the folder's modification time
+// and mode for them to be reported.
+func (fs *webdavFS) openNodeDirInfo(
+	ctx context.Context, info *webdavFileInfo, drID, subPath string,
+) (webdav.File, error) {
 	return &dirHandle{
-		info: &webdavFileInfo{name: displayName, isDir: true},
+		info: info,
 		load: func() ([]os.FileInfo, error) {
 			nodes, err := fs.listNodes(ctx, drID, subPath)
 			if err != nil {
@@ -2075,16 +2106,7 @@ func (fs *webdavFS) Stat(ctx context.Context, name string) (os.FileInfo, error) 
 		return nil, err
 	}
 
-	return &webdavFileInfo{
-		name:        n.Name,
-		size:        n.Size,
-		isDir:       n.Type == "dir",
-		modTime:     n.ModTime(),
-		nodeID:      n.ID,
-		versionID:   n.VersionID,
-		chunkCount:  n.ChunkCount,
-		contentType: n.MIMEType,
-	}, nil
+	return fileInfoFromNode(n), nil
 }
 
 // contentTypeForPath resolves the Content-Type for a GET/HEAD target, preferring

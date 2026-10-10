@@ -277,7 +277,7 @@ session keypair (generated fresh per transfer)
 | Data | Format | Function |
 |---|---|---|
 | File chunks | **Raw binary AGE** (no armor) | `EncryptBinaryForKey(data, pubKey)` |
-| Metadata (`name_enc`, `type_enc`, `message_enc`, key fields) | **Armored AGE** | `EncryptStringForKeys(value, []pubKeys)` |
+| Metadata (`name_enc`, `type_enc` / `mime_name_enc`, `message_enc`, key fields) | **Armored AGE** | `EncryptStringForKeys(value, []pubKeys)` |
 | `ephemeral_private_key_enc` (passphrase) | **Armored AGE** scrypt | `EncryptWithPassphrase(data, passphrase)` |
 | `userKey.PrivateKeyEnc` (from API) | **Armored AGE** scrypt | `DecryptToStringWithPassphrase(...)` |
 
@@ -375,8 +375,58 @@ Direction detected from which argument is a `retyc://` URI:
 - **Download** (`retyc:// → local`): one remote path (or glob) → local dir. Directories in
   glob results are skipped with a warning.
 - 409 on upload → existing node found by name → new version created instead.
+- The local file's mtime is sent as `client_mtime` (version creation and single-request
+  route); a download gives the file the `client_mtime` of its version when there is one
+  (`service.downloadVersion`, `os.Chtimes`).
 
 Flags: `--yes`/`-y`
+
+### Node types, MIME table, name-hash lookup (API `evol/dataroom_node_types`)
+
+The API answers **426** to a CLI older than its minimum version (`User-Agent`
+`retyc-cli/<version>`); a `dev` build is refused, build with `-ldflags` to test.
+
+- A node is a folder when `node.type == "folder"`; `api.DataroomNode.IsFolder()` is the
+  **only** test, it falls back to `type_enc == nil` for an API without the type field.
+  Never test `TypeEnc` directly: on the new API a migrated file has `type_enc: null`.
+- MIME types live in a per-dataroom table (`GET /dataroom/{id}/mime-types`: `id`, `hash`
+  = SHA-256(nameSalt + type), `name_enc` encrypted for the session key); a file node
+  references a row by `mime_type_id`, a file not migrated yet still carries `type_enc`.
+  `service.mimeCache` (`internal/service/mime.go`), held by `dataroomSession`, loads the
+  table on first use and resolves rows (one decryption per row, not per node; reload once
+  for an unknown row). All MIME reads go through `sess.mimeTypeOf`.
+- Writes go through `sess.withMIME`: `mime_hash` alone for a type the table knows,
+  `mime_hash` + `mime_name_enc` otherwise; 422 `mime_type_unknown` → resend with the
+  ciphertext; 400 `mime_types_limit` (256 types per dataroom) → legacy `type_enc`. The
+  legacy ciphertext is also what a dataroom **without name salt** gets (the API refuses an
+  unsalted MIME hash) and what the **legacy API** gets.
+- **Probe**: the first `GET /mime-types` of a session tells the API apart. 404 → legacy API
+  (`type_enc`, no name-hash lookup, the session is marked for good); any other failure →
+  legacy for that call only, not cached. This matters because the API in production may
+  predate the branch: the new CLI must keep working against it, and pydantic ignores
+  unknown fields, so a file sent with `mime_hash` and no `type_enc` would become a folder
+  there.
+- `resolvePathWithSession` / `resolvePathItemWithSession` look each path component up
+  with `GET /dataroom/{id}/nodes?parent_id=&name_hash=` (`api.Client.FindDataroomNodeByHash`)
+  on a non-legacy API: O(depth) requests, nothing decrypted. Glob paths still list.
+  `findNodeAndTypeByName` (after a 409) does the same. The identity-only `resolvePath` /
+  `resolvePathItem` remain the listing fallback.
+- `PUT /dataroom/node/{id}` is `exclude_unset`: `api.NodeUpdate` sends only the set fields,
+  `SetParent` + nil `ParentID` is the explicit null that means "move to the root".
+  `RenameDataroomNode` (rename + move), `SetDataroomNodeAccessMode` (chmod, no version),
+  `SetDataroomVersionClientMtime` (`PATCH /dataroom/node/version/{id}`, no version).
+- `access_mode` ("0644", octal string) is parsed by `api.ParseAccessMode` into
+  `DataroomNodeInfo.Mode()`; WebDAV presents it (`webdavFileInfo.Mode`, setuid/setgid/sticky
+  stripped), 0644 / 0755 when absent. Nothing writes it yet.
+- `DataroomNodeInfo.ModTime()`: a file's `client_mtime` else the version's `created_at`; a
+  folder's `created_at` (zero on an older API).
+- Unused but decoded: `versioning_enabled`, `storage_capacity`, `storage_used`
+  (`api.Dataroom`), `allowed_storage_size`, `storage_*` (`api.DataroomStats`),
+  `chunk_count_expected`, `copied_from_version_id` (`api.DataroomNodeVersion`,
+  `Complete()`). Locks, server-side copy and `statfs` are not implemented.
+- `api.HTTPError{Status, Body}` is every non-2xx error; `errors.Is` keeps matching
+  `ErrConflict` / `ErrNotFound` / `ErrGone`, `api.ErrorDetail(err)` returns the stable
+  `detail` code of a JSON refusal.
 
 ### `dataroom mv retyc://id/src retyc://id/dst`
 Rename or move within the same dataroom. Resolves both paths, re-encrypts the name with the
@@ -398,7 +448,9 @@ Creates directory node. Parent path must exist.
 
 ### `dataroom info <id>`
 Parallel fetch of `GET /dataroom/{id}`, `GET /dataroom/{id}/stats`,
-`GET /dataroom/{id}/users`. Displays metadata, file count, encrypted size, and users with roles.
+`GET /dataroom/{id}/users`. Displays metadata, versioning (when the API reports it), file
+count, encrypted size, storage (reserved capacity and free space, or usage on the owner's
+plan), and users with roles.
 
 ### `dataroom user add <dr_id> <email> [--role viewer|editor|admin]`
 ### `dataroom user rm <dr_id> <user_id>`
@@ -421,7 +473,9 @@ dataroom session keypair (generated once at dataroom creation)
 
 node name_hash = SHA-256(nameSalt + filename)  ← nameSalt decrypted from node_name_salt_enc
 node name_enc  = EncryptStringForKeys(filename, [sessionPublicKey])   ← armored AGE
-node type_enc  = EncryptStringForKeys(mimeType, [sessionPublicKey])   ← armored AGE (files only)
+MIME table row = {hash: SHA-256(nameSalt + mimeType),                  ← one row per type and dataroom
+                  name_enc: EncryptStringForKeys(mimeType, [sessionPublicKey])}
+node mime_type_id → row of the table (files); legacy files carry type_enc (same ciphertext, per node)
 file chunks    = EncryptBinaryForKey(chunk, sessionPublicKey)          ← raw binary AGE
 ```
 

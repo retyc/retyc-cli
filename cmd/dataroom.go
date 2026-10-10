@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"text/tabwriter"
 
+	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/schollz/progressbar/v3"
@@ -173,9 +174,17 @@ var dataroomInfoCmd = &cobra.Command{
 		fmt.Printf("ID:      %s\n", info.Dataroom.ID)
 		fmt.Printf("Title:   %s\n", ui.Escape(info.Dataroom.Title))
 		fmt.Printf("Created: %s\n", info.Dataroom.CreatedAt.Format("2006-01-02 15:04"))
+		if info.Dataroom.VersioningEnabled != nil {
+			versioning := "enabled"
+			if !info.Dataroom.Versioning() {
+				versioning = "disabled (each upload replaces the previous version)"
+			}
+			fmt.Printf("Versioning: %s\n", versioning)
+		}
 
 		if info.Stats != nil {
 			fmt.Printf("\nFiles:   %d · %s (encrypted)\n", info.Stats.FilesCount, ui.FormatSize(info.Stats.FilesEncryptedSize))
+			printStorage(info.Stats)
 		}
 
 		if len(info.Users) > 0 {
@@ -190,6 +199,20 @@ var dataroomInfoCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// printStorage prints the storage line of dataroom info: the reserved
+// capacity and what is left of it, or the usage against the owner's plan.
+// An API that reports no storage counters prints nothing.
+func printStorage(stats *api.DataroomStats) {
+	switch {
+	case stats.StorageCapacity != nil:
+		fmt.Printf("Storage: %s used of %s reserved · %s free\n",
+			ui.FormatSize(stats.StorageUsed), ui.FormatSize(*stats.StorageCapacity), ui.FormatSize(stats.StorageFree))
+	case stats.StorageUsed > 0 || stats.StorageFree > 0:
+		fmt.Printf("Storage: %s used · %s free on the owner's plan\n",
+			ui.FormatSize(stats.StorageUsed), ui.FormatSize(stats.StorageFree))
+	}
 }
 
 // — dataroom user add ————————————————————————————————————————————————————————
