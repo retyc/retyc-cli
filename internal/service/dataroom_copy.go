@@ -27,7 +27,7 @@ var copyPollInterval = time.Second
 
 // CopyDataroomNodeByID copies the file srcNodeID into a new node named
 // newName under dstParentID (nil for the dataroom root), in the same
-// dataroom, and waits for the server to finish duplicating the chunks. The
+// dataroom dataroomID, and waits for the server to finish duplicating the chunks. The
 // chunks never transit through the client. It returns the new node as a
 // listing would report it.
 //
@@ -36,7 +36,7 @@ var copyPollInterval = time.Second
 // folder missing, api.ErrNotFound, which a source pending deletion (410)
 // matches too; a folder, or a file without a complete version, a 422.
 func CopyDataroomNodeByID(
-	ctx context.Context, client *api.Client, srcNodeID string, dstParentID *string, newName string,
+	ctx context.Context, client *api.Client, dataroomID, srcNodeID string, dstParentID *string, newName string,
 	sess *DataroomSession,
 ) (DataroomNodeInfo, error) {
 	nameEnc, err := crypto.EncryptStringForKeys(newName, []string{sess.PublicKey})
@@ -55,7 +55,7 @@ func CopyDataroomNodeByID(
 		return DataroomNodeInfo{}, err
 	}
 	item.Version = version
-	info := nodeFromItem(ctx, client, item.Node.ID, item, sess)
+	info := nodeFromItem(ctx, client, dataroomID, item, sess)
 	info.Name = newName
 
 	return info, nil
@@ -114,7 +114,7 @@ func CopyDataroomNodeWithSession(
 		return DataroomNodeInfo{}, err
 	}
 
-	return CopyDataroomNodeByID(ctx, client, src.Node.ID, dstParentID, newName, sess)
+	return CopyDataroomNodeByID(ctx, client, dataroomID, src.Node.ID, dstParentID, newName, sess)
 }
 
 // CopyDataroomNode copies a file between two retyc:// URIs of the same

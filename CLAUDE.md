@@ -423,7 +423,13 @@ The API answers **426** to a CLI older than its minimum version (`User-Agent`
   `SetDataroomVersionClientMtime` (`PATCH /dataroom/node/version/{id}`, no version).
 - `access_mode` ("0644", octal string) is parsed by `api.ParseAccessMode` into
   `DataroomNodeInfo.Mode()`; WebDAV presents it (`webdavFileInfo.Mode`, setuid/setgid/sticky
-  stripped), 0644 / 0755 when absent. Nothing writes it yet.
+  stripped), 0644 / 0755 when absent. `webdav serve` writes it on a `PROPPATCH` of the
+  Apache `executable` property, the only part of a mode WebDAV carries
+  (`cmd/webdav_chmod.go`): x/net/webdav opens the target of a PROPPATCH for writing, so
+  `writeFileHandle.Patch` is where it lands (`withExecutable` → `SetDataroomNodeAccessMode`,
+  cached listing updated in place), and `readFileHandle.DeadProps` reports the property on
+  PROPFIND. Files only. `upsertNodeCacheLocked` keeps the cached mode when an upload path
+  does not know it (`keepMode`).
 - `DataroomNodeInfo.ModTime()`: a file's `client_mtime` else the version's `created_at`; a
   folder's `created_at` (zero on an older API).
 - Decoded and shown only: `versioning_enabled` (`api.Dataroom`, `dataroom info`),
@@ -443,7 +449,11 @@ The API answers **426** to a CLI older than its minimum version (`User-Agent`
   The API only copies into a new node, so a replaced destination is deleted first, and the
   copy is tried again while the API still holds the name of the deleted node (409 until its
   purge has run; `copyReplaceRetry` / `copyReplaceWait`, 15 s). A 410 on the copy route is
-  the source pending deletion, not the name.
+  the source pending deletion, not the name. Bypassing the handler also bypasses its lock
+  check: `confirmCopyLocks` redoes it on the destination against `webdavFS.locks` (own
+  `parseIfHeader`, x/net/webdav exports neither), and a destination that resolves to the
+  source node is refused before anything is deleted (the `Destination` header is not
+  normalized).
   Every dataroom folder handle implements `webdav.DeadPropsHolder` with the RFC 4331
   quota properties from `GET /dataroom/{id}/stats`, cached per dataroom for the listing
   TTL (`dataroomQuota`). `lockMirror` wraps the WebDAV handler: a `LOCK` on a listed file
@@ -451,7 +461,9 @@ The API answers **426** to a CLI older than its minimum version (`User-Agent`
   exclusive API lock (`POST /dataroom/node/{id}/lock`, lease `api.LockTimeoutMax`),
   423 from the API undoes the local lock (`LockSystem.Unlock`) and answers 423; `UNLOCK`
   releases it; `run` renews every mirrored lock every 2 min and releases them all on
-  shutdown. The temporary locks x/net/webdav takes around writes without an `If` header
+  shutdown. A mirrored lock records when its WebDAV lock lapses (the timeout of the LOCK
+  response, `lockExpiry`): `refreshAll` releases a lapsed one instead of renewing it, and
+  the periodic renewal never takes a lock for a token unlocked meanwhile. The temporary locks x/net/webdav takes around writes without an `If` header
   (`confirmLocks`) never reach the API. `statfs` has no WebDAV equivalent beyond quota.
 - `api.HTTPError{Status, Body}` is every non-2xx error; `errors.Is` keeps matching
   `ErrConflict` / `ErrNotFound` / `ErrGone`, `api.ErrorDetail(err)` returns the stable

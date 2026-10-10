@@ -85,6 +85,7 @@ The server exposes a virtual filesystem:
 | Rename / move       | `MOVE`        | Within the **same** dataroom only                         |
 | Copy                | `COPY`        | Files only, within the **same** dataroom: the storage duplicates the chunks, nothing is downloaded (folders return `501`) |
 | Lock / unlock       | `LOCK` / `UNLOCK` | Standard WebDAV locks; a lock on a file is mirrored onto the dataroom so other RETYC clients see it, and a file locked elsewhere answers `423` |
+| Change permissions  | `PROPPATCH`   | The execute bits of a file's mode, through the `executable` property (`chmod +x` on a mount) |
 | Quota               | `PROPFIND`    | `quota-used-bytes` / `quota-available-bytes` (RFC 4331) on every folder of a dataroom |
 
 Notes and limitations:
@@ -99,10 +100,22 @@ Notes and limitations:
   to delete it, and it is not restored when the copy then fails. The server keeps the name of
   a deleted file until its purge has run, so the copy is tried again for up to 15 seconds
   before answering `409`. Copying a folder is not supported (`501`): copy its files.
+  The WebDAV locks apply as for any write: a destination locked by another client answers
+  `423`, or `412` when the `If` header names no lock on it.
+- **Permissions.** A dataroom stores a POSIX mode with every node, but WebDAV only
+  carries a file's execute permission: the `executable` property (`T` / `F`, the one
+  Apache mod_dav defines and davfs2 uses). A `PROPFIND` reports it from the stored mode,
+  and a `PROPPATCH` of it (`chmod +x`, `chmod -x` on a mount) changes the execute bits of
+  that mode, without creating a version: set, they follow the read bits (`0644` becomes
+  `0755`, `0600` becomes `0700`); cleared, all three go. The other bits of a `chmod`
+  (`chmod 600`) do not reach the server: the mount keeps them to itself until it forgets
+  the file. Folders, and every other property, are read-only (`403`).
 - **Locks are mirrored.** A `LOCK` on a file takes an exclusive advisory lock on the node
   in the dataroom, renewed in the background while the WebDAV lock stands (the server's
   lease is 5 minutes at most) and released on `UNLOCK` or when the server shuts down. A file
   already locked by another client, on another mount or in the web app, answers `423`.
+  A lock whose timeout ran out without `UNLOCK` (its client went away) stops being
+  renewed and is released within two minutes.
   The lock is advisory: it arbitrates between clients that lock, it does not block a write
   from one that does not. Locks on folders, and on files being created, stay local.
 - **Quota.** Every folder of a dataroom reports `quota-used-bytes` (what the dataroom

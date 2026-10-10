@@ -924,6 +924,11 @@ type webdavFS struct {
 	// (see dataroomQuota).
 	quotaMu    sync.Mutex
 	quotaCache map[string]quotaCacheEntry
+
+	// locks is the WebDAV lock system of the handler, which COPY must honour
+	// itself since it does not go through the handler (see confirmCopyLocks);
+	// nil checks nothing (tests).
+	locks webdav.LockSystem
 }
 
 var _ webdav.FileSystem = (*webdavFS)(nil)
@@ -1093,7 +1098,7 @@ func (fs *webdavFS) upsertNodeCacheLocked(uri string, node service.DataroomNodeI
 	fs.editNodeCacheLocked(uri, func(nodes []service.DataroomNodeInfo) []service.DataroomNodeInfo {
 		for i := range nodes {
 			if nodes[i].Name == node.Name {
-				nodes[i] = node
+				nodes[i] = keepMode(node, nodes[i])
 
 				return nodes
 			}
@@ -2430,6 +2435,7 @@ Example:
 		fs.cache.ttl, fs.cache.maxStale = cfg.Webdav.Cache.TTL, cfg.Webdav.Cache.MaxStale
 
 		lockSystem := webdav.NewMemLS()
+		fs.locks = lockSystem
 		handler := &webdav.Handler{
 			FileSystem: fs,
 			LockSystem: lockSystem,

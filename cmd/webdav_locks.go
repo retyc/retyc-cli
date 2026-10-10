@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +55,27 @@ type mirroredLock struct {
 	apiToken string
 	nodeID   string
 	path     string
+	// expires is when the WebDAV lock lapses unless the client refreshes it;
+	// zero for a lock without timeout.
+	expires time.Time
+}
+
+// lockTimeoutRE matches the timeout x/net/webdav grants in a LOCK response.
+var lockTimeoutRE = regexp.MustCompile(`<D:timeout>Second-(\d+)</D:timeout>`)
+
+// lockExpiry reads from a LOCK response when the lock it grants lapses, the
+// zero time for one without timeout.
+func lockExpiry(body []byte, now time.Time) time.Time {
+	m := lockTimeoutRE.FindSubmatch(body)
+	if m == nil {
+		return time.Time{}
+	}
+	seconds, err := strconv.ParseInt(string(m[1]), 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+
+	return now.Add(time.Duration(seconds) * time.Second)
 }
 
 func newLockMirror(fs *webdavFS, ls webdav.LockSystem) *lockMirror {
@@ -96,9 +119,10 @@ func (m *lockMirror) handleLock(w http.ResponseWriter, r *http.Request, next htt
 
 		return
 	}
+	expires := lockExpiry(buf.body.Bytes(), time.Now())
 	if refresh {
 		// The WebDAV lock already stands; the server lock may too.
-		m.refresh(r.Context(), token, nodeID, r.URL.Path)
+		m.refresh(r.Context(), token, nodeID, r.URL.Path, expires, false)
 		buf.flush(w)
 
 		return
@@ -121,7 +145,9 @@ func (m *lockMirror) handleLock(w http.ResponseWriter, r *http.Request, next htt
 		return
 	}
 	m.mu.Lock()
-	m.locks[token] = &mirroredLock{lockID: lock.ID, apiToken: lock.Token, nodeID: nodeID, path: r.URL.Path}
+	m.locks[token] = &mirroredLock{
+		lockID: lock.ID, apiToken: lock.Token, nodeID: nodeID, path: r.URL.Path, expires: expires,
+	}
 	m.mu.Unlock()
 	buf.flush(w)
 }
@@ -175,11 +201,25 @@ func (m *lockMirror) lockedFile(ctx context.Context, urlPath string) (string, bo
 }
 
 // refresh renews the server lock behind token, taking a new one when the
-// previous lease ended (a lock lost to a slow refresh is not fatal).
-func (m *lockMirror) refresh(ctx context.Context, token, nodeID, urlPath string) {
+// previous lease ended (a lock lost to a slow refresh is not fatal). expires
+// is when the WebDAV lock lapses.
+//
+// background is the periodic renewal, which only keeps what is mirrored: a
+// token released since it was read (an UNLOCK landing meanwhile) is left
+// alone, and a lock retaken for it is given back. A LOCK refresh from the
+// client also mirrors a lock whose server lock could not be taken before.
+func (m *lockMirror) refresh(
+	ctx context.Context, token, nodeID, urlPath string, expires time.Time, background bool,
+) {
 	m.mu.Lock()
 	ml := m.locks[token]
+	if ml != nil && !background {
+		ml.expires = expires
+	}
 	m.mu.Unlock()
+	if ml == nil && background {
+		return
+	}
 	if ml != nil {
 		_, err := m.fs.client.RefreshDataroomNodeLock(ctx, ml.lockID, ml.apiToken, api.LockTimeoutMax)
 		if err == nil {
@@ -191,20 +231,34 @@ func (m *lockMirror) refresh(ctx context.Context, token, nodeID, urlPath string)
 
 			return
 		}
-		m.mu.Lock()
-		delete(m.locks, token)
-		m.mu.Unlock()
 	}
 	lock, err := m.fs.client.LockDataroomNode(ctx, nodeID, api.LockExclusive, api.LockTimeoutMax)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "webdav: LOCK %s: server lock not retaken: %s\n",
 			ui.Escape(urlPath), ui.EscapeLines(err.Error()))
+		m.mu.Lock()
+		if m.locks[token] == ml {
+			delete(m.locks, token)
+		}
+		m.mu.Unlock()
 
 		return
 	}
 	m.mu.Lock()
-	m.locks[token] = &mirroredLock{lockID: lock.ID, apiToken: lock.Token, nodeID: nodeID, path: urlPath}
+	released := m.locks[token] != ml
+	if !released {
+		m.locks[token] = &mirroredLock{
+			lockID: lock.ID, apiToken: lock.Token, nodeID: nodeID, path: urlPath, expires: expires,
+		}
+	}
 	m.mu.Unlock()
+	if released {
+		// Unlocked while the server lock was being retaken.
+		if err := m.fs.client.UnlockDataroomNode(ctx, lock.ID, lock.Token); err != nil && !errors.Is(err, api.ErrNotFound) {
+			fmt.Fprintf(os.Stderr, "webdav: UNLOCK %s: server lock not released: %s\n",
+				ui.Escape(urlPath), ui.EscapeLines(err.Error()))
+		}
+	}
 }
 
 // release drops the server lock behind token, if any.
@@ -241,18 +295,26 @@ func (m *lockMirror) run(ctx context.Context) {
 }
 
 // refreshAll renews every mirrored lock; a lock whose lease ended is retaken.
+// A lock whose WebDAV lock lapsed (its client went away without UNLOCK) is
+// released instead: nothing holds the file any more.
 func (m *lockMirror) refreshAll(ctx context.Context) {
 	m.mu.Lock()
 	tokens := make([]string, 0, len(m.locks))
-	byToken := make(map[string]*mirroredLock, len(m.locks))
+	byToken := make(map[string]mirroredLock, len(m.locks))
 	for token, ml := range m.locks {
 		tokens = append(tokens, token)
-		byToken[token] = ml
+		byToken[token] = *ml
 	}
 	m.mu.Unlock()
+	now := time.Now()
 	for _, token := range tokens {
 		ml := byToken[token]
-		m.refresh(ctx, token, ml.nodeID, ml.path)
+		if !ml.expires.IsZero() && now.After(ml.expires) {
+			m.release(ctx, token)
+
+			continue
+		}
+		m.refresh(ctx, token, ml.nodeID, ml.path, ml.expires, true)
 	}
 }
 

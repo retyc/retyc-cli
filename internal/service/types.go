@@ -127,6 +127,13 @@ func (n DataroomNodeInfo) ModTime() time.Time { return n.modTime }
 // API stores none: the caller then applies its own default.
 func (n DataroomNodeInfo) Mode() fs.FileMode { return n.mode }
 
+// WithMode returns a copy of n carrying mode as its POSIX mode.
+func (n DataroomNodeInfo) WithMode(mode fs.FileMode) DataroomNodeInfo {
+	n.mode = mode
+
+	return n
+}
+
 // WithModTime returns a copy of n carrying t as its modification time.
 func (n DataroomNodeInfo) WithModTime(t time.Time) DataroomNodeInfo {
 	n.modTime = t

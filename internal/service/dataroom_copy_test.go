@@ -70,7 +70,8 @@ func TestCopyDataroomNodeByID_WaitsForSeal(t *testing.T) {
 	defer srv.Close()
 	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String(), NameSalt: "s"}
 
-	node, err := CopyDataroomNodeByID(context.Background(), newExportTestClient(srv), "n-src", nil, "copy.bin", sess)
+	client := newExportTestClient(srv)
+	node, err := CopyDataroomNodeByID(context.Background(), client, "dr-1", "n-src", nil, "copy.bin", sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestCopyDataroomNodeByID_Vanishes(t *testing.T) {
 		fake := &copyAPI{polls: 10, vanish: status}
 		srv := httptest.NewServer(http.HandlerFunc(fake.handle))
 		sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
-		_, err := CopyDataroomNodeByID(context.Background(), newExportTestClient(srv), "n-src", nil, "c", sess)
+		_, err := CopyDataroomNodeByID(context.Background(), newExportTestClient(srv), "dr-1", "n-src", nil, "c", sess)
 		srv.Close()
 		if !errors.Is(err, want) {
 			t.Errorf("status %d: err = %v, want %v", status, err, want)
@@ -120,7 +121,7 @@ func TestCopyDataroomNodeByID_Cancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
-	_, err = CopyDataroomNodeByID(ctx, newExportTestClient(srv), "n-src", nil, "c", sess)
+	_, err = CopyDataroomNodeByID(ctx, newExportTestClient(srv), "dr-1", "n-src", nil, "c", sess)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want context.DeadlineExceeded", err)
 	}
@@ -146,5 +147,48 @@ func TestCopyDataroomNode_Validation(t *testing.T) {
 	_, err = CopyDataroomNodeWithSession(context.Background(), newExportTestClient(srv), "dr1", "/", "/e", sess)
 	if err == nil || err.Error() != "cannot copy the root folder" {
 		t.Errorf("root err = %v", err)
+	}
+}
+
+// The copy's MIME type is resolved in the table of its dataroom: asking the
+// table of another ID would answer 404 and mark the session as talking to an
+// API without one, for good.
+func TestCopyDataroomNodeByID_ResolvesMIMEInItsDataroom(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String(), NameSalt: "s"}
+	nameEnc, err := crypto.EncryptStringForKeys("text/plain", []string{sess.PublicKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, _ := json.Marshal([]map[string]string{{"id": "m-1", "hash": "h", "name_enc": nameEnc}})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/n-src/copy":
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"node":{"id":"n-copy","type":"file","name_enc":"x","type_enc":null,"mime_type_id":"m-1",`+
+				`"access_mode":"0644","parent_id":null},"node_version":{"id":"v-copy","node_id":"n-copy",`+
+				`"original_size":9,"chunk_count":2,"chunk_count_expected":2,"version_number":1,`+
+				`"created_at":"2026-10-10T12:00:00Z"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr-1/mime-types":
+			_, _ = w.Write(row)
+		default:
+			http.Error(w, `{"detail":"not found"}`, http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := newExportTestClient(srv)
+	node, err := CopyDataroomNodeByID(context.Background(), client, "dr-1", "n-src", nil, "copy.txt", sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.MIMEType != "text/plain" {
+		t.Errorf("MIME type = %q, want text/plain", node.MIMEType)
+	}
+	if !sess.supportsNodeTypes(context.Background(), client, "dr-1") {
+		t.Error("the session was marked as talking to an API without a MIME table")
 	}
 }

@@ -7,9 +7,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/webdav"
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/service"
@@ -78,6 +82,14 @@ func (fs *webdavFS) copyNode(ctx context.Context, r *http.Request) (int, error) 
 		return http.StatusBadGateway, errors.New("copying between datarooms is not supported")
 	}
 
+	// The destination is checked against the WebDAV locks as the handler
+	// would have: a file another client locked is not replaced.
+	release, status, err := fs.confirmCopyLocks(r, path.Clean(dst))
+	if err != nil {
+		return status, err
+	}
+	defer release()
+
 	srcParent, srcName := splitWebdavPath(srcSub)
 	src, err := fs.findListedNode(ctx, srcID, srcParent, srcName)
 	if err != nil {
@@ -93,8 +105,20 @@ func (fs *webdavFS) copyNode(ctx context.Context, r *http.Request) (int, error) 
 		return http.StatusConflict, fmt.Errorf("destination folder: %w", err)
 	}
 
+	// Resolved before the destination is deleted: nothing but the copy
+	// itself may fail once it is gone.
+	sess, err := fs.getSession(ctx, dstID)
+	if err != nil {
+		return http.StatusInternalServerError, fmt.Errorf("dataroom session: %w", err)
+	}
+
 	status = http.StatusCreated
 	if existing, err := fs.findListedNode(ctx, dstID, dstParent, dstName); err == nil {
+		if existing.ID == src.ID {
+			// Two spellings of one path (the Destination header is not
+			// normalized): replacing it would delete the source.
+			return http.StatusForbidden, errors.New("destination equals source")
+		}
 		if r.Header.Get("Overwrite") == "F" {
 			return http.StatusPreconditionFailed, errors.New("destination exists and Overwrite is F")
 		}
@@ -108,11 +132,7 @@ func (fs *webdavFS) copyNode(ctx context.Context, r *http.Request) (int, error) 
 		status = http.StatusNoContent
 	}
 
-	sess, err := fs.getSession(ctx, dstID)
-	if err != nil {
-		return http.StatusInternalServerError, fmt.Errorf("dataroom session: %w", err)
-	}
-	node, err := service.CopyDataroomNodeByID(ctx, fs.client, src.ID, dstParentID, dstName, sess)
+	node, err := service.CopyDataroomNodeByID(ctx, fs.client, dstID, src.ID, dstParentID, dstName, sess)
 	// The API keeps the name of the file just deleted until its purge has run
 	// (seconds with the workers keeping up) and answers 409 meanwhile.
 	for waited := time.Duration(0); status == http.StatusNoContent && errors.Is(err, api.ErrConflict) &&
@@ -122,7 +142,7 @@ func (fs *webdavFS) copyNode(ctx context.Context, r *http.Request) (int, error) 
 			return http.StatusInternalServerError, ctx.Err()
 		case <-time.After(copyReplaceRetry):
 		}
-		node, err = service.CopyDataroomNodeByID(ctx, fs.client, src.ID, dstParentID, dstName, sess)
+		node, err = service.CopyDataroomNodeByID(ctx, fs.client, dstID, src.ID, dstParentID, dstName, sess)
 	}
 	if err != nil {
 		return copyErrorStatus(err), err
@@ -153,6 +173,127 @@ func copyDestination(r *http.Request) (string, int, error) {
 	}
 
 	return u.Path, 0, nil
+}
+
+// confirmCopyLocks checks the destination of a COPY against the WebDAV locks,
+// as x/net/webdav does for the methods it serves itself (its confirmLocks is
+// not exported). Without an If header the destination must not be locked: a
+// temporary lock is taken on it, which another client's lock refuses (423).
+// With one, a list of the header must name a lock covering the destination
+// (412 otherwise). The returned release ends the hold.
+func (fs *webdavFS) confirmCopyLocks(r *http.Request, dst string) (release func(), status int, err error) {
+	if fs.locks == nil {
+		return func() {}, 0, nil
+	}
+	now := time.Now()
+	hdr := r.Header.Get("If")
+	if hdr == "" {
+		token, err := fs.locks.Create(now, webdav.LockDetails{Root: dst, Duration: -1, ZeroDepth: true})
+		switch {
+		case errors.Is(err, webdav.ErrLocked):
+			return nil, webdav.StatusLocked, errors.New("the destination is locked")
+		case err != nil:
+			return nil, http.StatusInternalServerError, err
+		}
+
+		return func() { _ = fs.locks.Unlock(now, token) }, 0, nil
+	}
+	lists, ok := parseIfHeader(hdr)
+	if !ok {
+		return nil, http.StatusBadRequest, errors.New("invalid If header")
+	}
+	for _, l := range lists {
+		target := dst
+		if l.resourceTag != "" {
+			u, err := url.Parse(l.resourceTag)
+			if err != nil {
+				continue
+			}
+			target = path.Clean(u.Path)
+		}
+		release, err := fs.locks.Confirm(now, target, "", l.conditions...)
+		switch {
+		case errors.Is(err, webdav.ErrConfirmationFailed):
+			continue
+		case err != nil:
+			return nil, http.StatusInternalServerError, err
+		}
+
+		return release, 0, nil
+	}
+
+	return nil, http.StatusPreconditionFailed, errors.New("the If header names no lock on the destination")
+}
+
+// ifList is one parenthesized list of an If header, with the resource it is
+// tagged with ("" for the request's own).
+type ifList struct {
+	resourceTag string
+	conditions  []webdav.Condition
+}
+
+// parseIfHeader parses an If header (RFC 4918 §10.4): lists of state tokens
+// and entity tags, each optionally negated, optionally tagged with a resource.
+func parseIfHeader(hdr string) ([]ifList, bool) {
+	var lists []ifList
+	var tag string
+	for s := strings.TrimSpace(hdr); s != ""; s = strings.TrimSpace(s) {
+		switch s[0] {
+		case '<':
+			end := strings.IndexByte(s, '>')
+			if end < 0 {
+				return nil, false
+			}
+			tag, s = s[1:end], s[end+1:]
+		case '(':
+			end := strings.IndexByte(s, ')')
+			if end < 0 {
+				return nil, false
+			}
+			conditions, ok := parseIfConditions(s[1:end])
+			if !ok {
+				return nil, false
+			}
+			lists = append(lists, ifList{resourceTag: tag, conditions: conditions})
+			s = s[end+1:]
+		default:
+			return nil, false
+		}
+	}
+
+	return lists, len(lists) > 0
+}
+
+// parseIfConditions parses the inside of one list of an If header.
+func parseIfConditions(s string) ([]webdav.Condition, bool) {
+	var conditions []webdav.Condition
+	var c webdav.Condition
+	for s = strings.TrimSpace(s); s != ""; s = strings.TrimSpace(s) {
+		closing := byte('>')
+		switch {
+		case strings.HasPrefix(s, "Not") && !c.Not:
+			c.Not, s = true, s[len("Not"):]
+
+			continue
+		case s[0] == '[':
+			closing = ']'
+		case s[0] != '<':
+			return nil, false
+		}
+		end := strings.IndexByte(s, closing)
+		if end < 0 {
+			return nil, false
+		}
+		if closing == '>' {
+			c.Token = s[1:end]
+		} else {
+			c.ETag = s[1:end]
+		}
+		conditions = append(conditions, c)
+		c, s = webdav.Condition{}, s[end+1:]
+	}
+
+	return conditions, len(conditions) > 0 && !c.Not
 }
 
 // copyErrorStatus maps a failed server-side copy to an HTTP status.
