@@ -83,14 +83,45 @@ The server exposes a virtual filesystem:
 | Create folder       | `MKCOL`       | `mkdir` inside a dataroom                                  |
 | Delete              | `DELETE`      | Removes a node (or a folder and its contents)             |
 | Rename / move       | `MOVE`        | Within the **same** dataroom only                         |
-| Copy                | `COPY`        | **Not supported** — the dataroom API has no server-side copy (returns `501`) |
+| Copy                | `COPY`        | Files only, within the **same** dataroom: the storage duplicates the chunks, nothing is downloaded (folders return `501`) |
+| Lock / unlock       | `LOCK` / `UNLOCK` | Standard WebDAV locks; a lock on a file is mirrored onto the dataroom so other RETYC clients see it, and a file locked elsewhere answers `423` |
+| Change permissions  | `PROPPATCH`   | The execute bits of a file's mode, through the `executable` property (`chmod +x` on a mount) |
+| Quota               | `PROPFIND`    | `quota-used-bytes` / `quota-available-bytes` (RFC 4331) on every folder of a dataroom |
 
 Notes and limitations:
 
 - **Move is intra-dataroom only.** Moving a node from one dataroom to another is
   rejected. To relocate across datarooms, download then upload.
-- **Copy is unavailable.** Many clients implement a drag-copy as `COPY`; if yours fails,
-  download the file and re-upload it instead.
+- **Copy is server-side, for files.** A `COPY` of a file asks the dataroom API to duplicate
+  its last complete version into a new node; the server answers once the copy is sealed
+  (about a second per gigabyte). The copy keeps the MIME type, mode and modification time.
+  A destination that already exists is replaced (a new node, not a new version) unless the
+  client sends `Overwrite: F`: it is deleted first, with its versions, which needs the right
+  to delete it, and it is not restored when the copy then fails. The server keeps the name of
+  a deleted file until its purge has run, so the copy is tried again for up to 15 seconds
+  before answering `409`. Copying a folder is not supported (`501`): copy its files.
+  The WebDAV locks apply as for any write: a destination locked by another client answers
+  `423`, or `412` when the `If` header names no lock on it.
+- **Permissions.** A dataroom stores a POSIX mode with every node, but WebDAV only
+  carries a file's execute permission: the `executable` property (`T` / `F`, the one
+  Apache mod_dav defines and davfs2 uses). A `PROPFIND` reports it from the stored mode,
+  and a `PROPPATCH` of it (`chmod +x`, `chmod -x` on a mount) changes the execute bits of
+  that mode, without creating a version: set, they follow the read bits (`0644` becomes
+  `0755`, `0600` becomes `0700`); cleared, all three go. The other bits of a `chmod`
+  (`chmod 600`) do not reach the server: the mount keeps them to itself until it forgets
+  the file. Folders, and every other property, are read-only (`403`).
+- **Locks are mirrored.** A `LOCK` on a file takes an exclusive advisory lock on the node
+  in the dataroom, renewed in the background while the WebDAV lock stands (the server's
+  lease is 5 minutes at most) and released on `UNLOCK` or when the server shuts down. A file
+  already locked by another client, on another mount or in the web app, answers `423`.
+  A lock whose timeout ran out without `UNLOCK` (its client went away) stops being
+  renewed and is released within two minutes.
+  The lock is advisory: it arbitrates between clients that lock, it does not block a write
+  from one that does not. Locks on folders, and on files being created, stay local.
+- **Quota.** Every folder of a dataroom reports `quota-used-bytes` (what the dataroom
+  stores, versions pending purge included) and `quota-available-bytes` (the room left on
+  its reserved capacity, or on its owner's plan), refreshed with the listing TTL. File
+  managers show them as the free space of the mount.
 - **Uploading an existing name** creates a new **version** of that node rather than a
   duplicate.
 - **Small files are one request.** A file that fits in one 8 MB chunk (an empty one
@@ -147,6 +178,14 @@ refreshed behind it. Background refreshes run at most `api.concurrency.list` at 
 time; a request that needs a listing a refresh is still queued for starts it at
 once. A failed refresh keeps the expired listing, except for a folder deleted
 elsewhere, which is dropped so the next request answers `404`.
+
+A refresh is conditional when the API supports it: the listing is kept with the
+`ETag` of its dataroom and sent back as `If-None-Match`. While nothing changed in
+the dataroom the API answers `304`, and the listing is kept for another TTL at the
+cost of one round trip, with no page to fetch and no name to decrypt. The `ETag`
+is per dataroom, not per folder: any change anywhere in the dataroom makes the
+next refresh of each of its folders a full listing. These refreshes show as
+status `304` in `retyc_cli_api_requests_total`.
 
 Mutations made through the server keep the cache exact. Changes made elsewhere
 (web app, another client, another `webdav serve`) appear once the listing is

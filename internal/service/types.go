@@ -2,6 +2,7 @@
 package service
 
 import (
+	"io/fs"
 	"time"
 
 	"github.com/retyc/retyc-cli/internal/api"
@@ -107,15 +108,31 @@ type DataroomNodeInfo struct {
 	Size       int64
 	VersionID  string // non-empty for file nodes; the current version's ID
 	ChunkCount int    // number of encrypted chunks; used for direct download without GetDataroomNode
-	// modTime is the current version's creation time (zero for folders). Kept
+	// modTime is the modification time to present: for a file the one its
+	// uploader declared, else the current version's creation time; for a
+	// folder its creation time (zero on an API that reports none). Kept
 	// unexported so the JSON shape emitted by the MCP server does not change;
 	// read it through ModTime.
 	modTime time.Time
+	// mode is the node's POSIX mode when the API stores one, zero otherwise.
+	// Unexported for the same reason; read it through Mode.
+	mode fs.FileMode
 }
 
-// ModTime returns the current version's creation time, or the zero time for
-// folders and versionless nodes.
+// ModTime returns the node's modification time (see modTime), or the zero
+// time when the API reports none.
 func (n DataroomNodeInfo) ModTime() time.Time { return n.modTime }
+
+// Mode returns the POSIX permission bits stored with the node, or 0 when the
+// API stores none: the caller then applies its own default.
+func (n DataroomNodeInfo) Mode() fs.FileMode { return n.mode }
+
+// WithMode returns a copy of n carrying mode as its POSIX mode.
+func (n DataroomNodeInfo) WithMode(mode fs.FileMode) DataroomNodeInfo {
+	n.mode = mode
+
+	return n
+}
 
 // WithModTime returns a copy of n carrying t as its modification time.
 func (n DataroomNodeInfo) WithModTime(t time.Time) DataroomNodeInfo {

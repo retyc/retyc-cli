@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"text/tabwriter"
 
+	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/schollz/progressbar/v3"
@@ -173,9 +174,17 @@ var dataroomInfoCmd = &cobra.Command{
 		fmt.Printf("ID:      %s\n", info.Dataroom.ID)
 		fmt.Printf("Title:   %s\n", ui.Escape(info.Dataroom.Title))
 		fmt.Printf("Created: %s\n", info.Dataroom.CreatedAt.Format("2006-01-02 15:04"))
+		if info.Dataroom.VersioningEnabled != nil {
+			versioning := "enabled"
+			if !info.Dataroom.Versioning() {
+				versioning = "disabled (each upload replaces the previous version)"
+			}
+			fmt.Printf("Versioning: %s\n", versioning)
+		}
 
 		if info.Stats != nil {
 			fmt.Printf("\nFiles:   %d · %s (encrypted)\n", info.Stats.FilesCount, ui.FormatSize(info.Stats.FilesEncryptedSize))
+			printStorage(info.Stats)
 		}
 
 		if len(info.Users) > 0 {
@@ -190,6 +199,21 @@ var dataroomInfoCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// printStorage prints the storage line of dataroom info: the reserved
+// capacity and what is left of it, or the usage against the owner's plan.
+// An API that reports no storage counters prints nothing.
+func printStorage(stats *api.DataroomStats) {
+	switch {
+	case stats.StorageUsed == nil:
+	case stats.StorageCapacity != nil:
+		fmt.Printf("Storage: %s used of %s reserved · %s free\n",
+			ui.FormatSize(*stats.StorageUsed), ui.FormatSize(*stats.StorageCapacity), ui.FormatSize(stats.StorageFree))
+	default:
+		fmt.Printf("Storage: %s used · %s free on the owner's plan\n",
+			ui.FormatSize(*stats.StorageUsed), ui.FormatSize(stats.StorageFree))
+	}
 }
 
 // — dataroom user add ————————————————————————————————————————————————————————
@@ -269,9 +293,33 @@ var dataroomUserRmCmd = &cobra.Command{
 
 // — dataroom cp ——————————————————————————————————————————————————————————————
 
+// dataroomCopyRemote copies one file between two paths of the same dataroom
+// on the server: the chunks are duplicated by the storage, nothing is
+// downloaded. The command waits for the copy to be sealed.
+func dataroomCopyRemote(ctx context.Context, srcURI, dstURI string) error {
+	cfg, client, err := newAPIClient(ctx)
+	if err != nil {
+		return err
+	}
+	s := ui.NewSpinner("Copying on the server…")
+	s.Start()
+	node, err := service.CopyDataroomNode(ctx, cfg, client, srcURI, dstURI, spinnerReader(s))
+	s.Stop()
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		return printJSON(newDataroomNodesJSON([]service.DataroomNodeInfo{node})[0])
+	}
+	fmt.Printf("Copied %s → %s (%s, id: %s)\n", srcURI, dstURI, ui.FormatSize(node.Size), node.ID)
+
+	return nil
+}
+
 var dataroomCpCmd = &cobra.Command{
 	Use:   "cp <src...> <dst>",
-	Short: "Copy files to or from a dataroom  (local→retyc:// uploads, retyc://→local downloads)",
+	Short: "Copy files to, from or within a dataroom (local→retyc:// uploads, retyc://→local downloads, " +
+		"retyc://→retyc:// copies on the server)",
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		yes, _ := cmd.Flags().GetBool("yes")
@@ -284,7 +332,11 @@ var dataroomCpCmd = &cobra.Command{
 
 		switch {
 		case dstErr == nil && srcErr == nil:
-			return fmt.Errorf("remote-to-remote copy is not supported")
+			if len(srcs) > 1 {
+				return fmt.Errorf("only one remote source is supported for a server-side copy")
+			}
+
+			return dataroomCopyRemote(cmd.Context(), srcs[0], dst)
 		case dstErr != nil && srcErr != nil:
 			return fmt.Errorf("either source or destination must be a retyc:// URI")
 		case dstErr == nil:

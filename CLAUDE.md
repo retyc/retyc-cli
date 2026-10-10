@@ -277,7 +277,7 @@ session keypair (generated fresh per transfer)
 | Data | Format | Function |
 |---|---|---|
 | File chunks | **Raw binary AGE** (no armor) | `EncryptBinaryForKey(data, pubKey)` |
-| Metadata (`name_enc`, `type_enc`, `message_enc`, key fields) | **Armored AGE** | `EncryptStringForKeys(value, []pubKeys)` |
+| Metadata (`name_enc`, `type_enc` / `mime_name_enc`, `message_enc`, key fields) | **Armored AGE** | `EncryptStringForKeys(value, []pubKeys)` |
 | `ephemeral_private_key_enc` (passphrase) | **Armored AGE** scrypt | `EncryptWithPassphrase(data, passphrase)` |
 | `userKey.PrivateKeyEnc` (from API) | **Armored AGE** scrypt | `DecryptToStringWithPassphrase(...)` |
 
@@ -351,6 +351,12 @@ glob patterns (`*`, `?`, `[...]`) resolved against decrypted node names at each 
 
 ### `dataroom cp <src...> <dst>`
 Direction detected from which argument is a `retyc://` URI:
+- **Server-side copy** (`retyc:// → retyc://`, same dataroom, one file):
+  `service.CopyDataroomNode` → `POST /dataroom/node/{id}/copy` (202, chunks duplicated by
+  the storage, MIME / mode / `client_mtime` kept), then `waitForVersion` polls
+  `GET /dataroom/node/version/{id}` every second until `chunk_count` reaches
+  `chunk_count_expected` (`api.DataroomNodeVersion.Complete`); 404 while polling →
+  `ErrCopyDiscarded`, 410 → `ErrCopyTargetDeleted`. Folders are refused.
 - **Upload** (`local → retyc://`): one or more local paths, last arg is remote dest folder.
   Directories are uploaded recursively (BFS). SIGINT or a failed upload discards what the
   upload created (`service.DiscardFailedUpload`): the node if it was new, otherwise only the
@@ -375,8 +381,93 @@ Direction detected from which argument is a `retyc://` URI:
 - **Download** (`retyc:// → local`): one remote path (or glob) → local dir. Directories in
   glob results are skipped with a warning.
 - 409 on upload → existing node found by name → new version created instead.
+- The local file's mtime is sent as `client_mtime` (version creation and single-request
+  route); a download gives the file the `client_mtime` of its version when there is one
+  (`service.downloadVersion`, `os.Chtimes`).
 
 Flags: `--yes`/`-y`
+
+### Node types, MIME table, name-hash lookup (API `evol/dataroom_node_types`)
+
+The API answers **426** to a CLI older than its minimum version (`User-Agent`
+`retyc-cli/<version>`); a `dev` build is refused, build with `-ldflags` to test.
+
+- A node is a folder when `node.type == "folder"`; `api.DataroomNode.IsFolder()` is the
+  **only** test, it falls back to `type_enc == nil` for an API without the type field.
+  Never test `TypeEnc` directly: on the new API a migrated file has `type_enc: null`.
+- MIME types live in a per-dataroom table (`GET /dataroom/{id}/mime-types`: `id`, `hash`
+  = SHA-256(nameSalt + type), `name_enc` encrypted for the session key); a file node
+  references a row by `mime_type_id`, a file not migrated yet still carries `type_enc`.
+  `service.mimeCache` (`internal/service/mime.go`), held by `dataroomSession`, loads the
+  table on first use and resolves rows (one decryption per row, not per node; reload once
+  for an unknown row). All MIME reads go through `sess.mimeTypeOf`.
+- Writes go through `sess.withMIME`: `mime_hash` alone for a type the table knows,
+  `mime_hash` + `mime_name_enc` otherwise; 422 `mime_type_unknown` → resend with the
+  ciphertext; 400 `mime_types_limit` (256 types per dataroom) → legacy `type_enc`. The
+  legacy ciphertext is also what a dataroom **without name salt** gets (the API refuses an
+  unsalted MIME hash) and what the **legacy API** gets.
+- **Probe**: the first `GET /mime-types` of a session tells the API apart. 404 → legacy API
+  (`type_enc`, no name-hash lookup, the session is marked for good); any other failure →
+  legacy for that call only, not cached. This matters because the API in production may
+  predate the branch: the new CLI must keep working against it, and pydantic ignores
+  unknown fields, so a file sent with `mime_hash` and no `type_enc` would become a folder
+  there.
+- `resolvePathWithSession` / `resolvePathItemWithSession` look each path component up
+  with `GET /dataroom/{id}/nodes?parent_id=&name_hash=` (`api.Client.FindDataroomNodeByHash`)
+  on a non-legacy API: O(depth) requests, nothing decrypted. Glob paths still list.
+  `findNodeAndTypeByName` (after a 409) does the same. The identity-only `resolvePath` /
+  `resolvePathItem` remain the listing fallback.
+- `PUT /dataroom/node/{id}` is `exclude_unset`: `api.NodeUpdate` sends only the set fields,
+  `SetParent` + nil `ParentID` is the explicit null that means "move to the root".
+  `RenameDataroomNode` (rename + move), `SetDataroomNodeAccessMode` (chmod, no version),
+  `SetDataroomVersionClientMtime` (`PATCH /dataroom/node/version/{id}`, no version).
+- `access_mode` ("0644", octal string) is parsed by `api.ParseAccessMode` into
+  `DataroomNodeInfo.Mode()`; WebDAV presents it (`webdavFileInfo.Mode`, setuid/setgid/sticky
+  stripped), 0644 / 0755 when absent. `webdav serve` writes it on a `PROPPATCH` of the
+  Apache `executable` property, the only part of a mode WebDAV carries
+  (`cmd/webdav_chmod.go`): x/net/webdav opens the target of a PROPPATCH for writing, so
+  `writeFileHandle.Patch` is where it lands (`withExecutable` → `SetDataroomNodeAccessMode`,
+  cached listing updated in place), and `readFileHandle.DeadProps` reports the property on
+  PROPFIND. Files only. `upsertNodeCacheLocked` keeps the cached mode when an upload path
+  does not know it (`keepMode`).
+- `DataroomNodeInfo.ModTime()`: a file's `client_mtime` else the version's `created_at`; a
+  folder's `created_at` (zero on an older API).
+- Decoded and shown only: `versioning_enabled` (`api.Dataroom`, `dataroom info`),
+  `storage_capacity` / `storage_used` / `storage_free` (`api.DataroomStats`, `dataroom info`
+  and the WebDAV quota; `storage_used` is a pointer, nil on an API without the counters).
+  `chunk_count_expected` (`api.DataroomNodeVersion.Complete()`) follows a copy. Decoded and
+  unused: `allowed_storage_size`, `copied_from_version_id`, and the dataroom's `storage_*`.
+- Listing ETag: `api.Client.ListDataroomNodesIfChanged` sends `If-None-Match` and answers
+  `api.ErrNotModified` on a 304 (`HTTPError.Is`); `service.ListNodesByIDIfChanged` makes
+  only the first page conditional and returns its ETag. The ETag is the dataroom's
+  revision, not the folder's. Only the WebDAV listing cache uses it (see WebDAV server
+  flags); `GET /mime-types` is not conditional.
+- **WebDAV** (`cmd/webdav_copy.go`, `cmd/webdav_locks.go`): `COPY` of a file goes to
+  `handleCopy` from the mux (x/net/webdav's `copyFiles` would move every byte through the
+  server), RFC 4918 statuses (201 / 204 replaced / 412 `Overwrite: F` / 409 missing folder /
+  501 folder / 507 storage); the cached listing of the destination is updated in place.
+  The API only copies into a new node, so a replaced destination is deleted first, and the
+  copy is tried again while the API still holds the name of the deleted node (409 until its
+  purge has run; `copyReplaceRetry` / `copyReplaceWait`, 15 s). A 410 on the copy route is
+  the source pending deletion, not the name. Bypassing the handler also bypasses its lock
+  check: `confirmCopyLocks` redoes it on the destination against `webdavFS.locks` (own
+  `parseIfHeader`, x/net/webdav exports neither), and a destination that resolves to the
+  source node is refused before anything is deleted (the `Destination` header is not
+  normalized).
+  Every dataroom folder handle implements `webdav.DeadPropsHolder` with the RFC 4331
+  quota properties from `GET /dataroom/{id}/stats`, cached per dataroom for the listing
+  TTL (`dataroomQuota`). `lockMirror` wraps the WebDAV handler: a `LOCK` on a listed file
+  (buffered response, `Lock-Token` header, or the `If` header on a refresh) takes an
+  exclusive API lock (`POST /dataroom/node/{id}/lock`, lease `api.LockTimeoutMax`),
+  423 from the API undoes the local lock (`LockSystem.Unlock`) and answers 423; `UNLOCK`
+  releases it; `run` renews every mirrored lock every 2 min and releases them all on
+  shutdown. A mirrored lock records when its WebDAV lock lapses (the timeout of the LOCK
+  response, `lockExpiry`): `refreshAll` releases a lapsed one instead of renewing it, and
+  the periodic renewal never takes a lock for a token unlocked meanwhile. The temporary locks x/net/webdav takes around writes without an `If` header
+  (`confirmLocks`) never reach the API. `statfs` has no WebDAV equivalent beyond quota.
+- `api.HTTPError{Status, Body}` is every non-2xx error; `errors.Is` keeps matching
+  `ErrConflict` / `ErrNotFound` / `ErrGone`, `api.ErrorDetail(err)` returns the stable
+  `detail` code of a JSON refusal.
 
 ### `dataroom mv retyc://id/src retyc://id/dst`
 Rename or move within the same dataroom. Resolves both paths, re-encrypts the name with the
@@ -398,7 +489,9 @@ Creates directory node. Parent path must exist.
 
 ### `dataroom info <id>`
 Parallel fetch of `GET /dataroom/{id}`, `GET /dataroom/{id}/stats`,
-`GET /dataroom/{id}/users`. Displays metadata, file count, encrypted size, and users with roles.
+`GET /dataroom/{id}/users`. Displays metadata, versioning (when the API reports it), file
+count, encrypted size, storage (reserved capacity and free space, or usage on the owner's
+plan), and users with roles.
 
 ### `dataroom user add <dr_id> <email> [--role viewer|editor|admin]`
 ### `dataroom user rm <dr_id> <user_id>`
@@ -421,7 +514,9 @@ dataroom session keypair (generated once at dataroom creation)
 
 node name_hash = SHA-256(nameSalt + filename)  ← nameSalt decrypted from node_name_salt_enc
 node name_enc  = EncryptStringForKeys(filename, [sessionPublicKey])   ← armored AGE
-node type_enc  = EncryptStringForKeys(mimeType, [sessionPublicKey])   ← armored AGE (files only)
+MIME table row = {hash: SHA-256(nameSalt + mimeType),                  ← one row per type and dataroom
+                  name_enc: EncryptStringForKeys(mimeType, [sessionPublicKey])}
+node mime_type_id → row of the table (files); legacy files carry type_enc (same ciphertext, per node)
 file chunks    = EncryptBinaryForKey(chunk, sessionPublicKey)          ← raw binary AGE
 ```
 
@@ -507,6 +602,11 @@ starts, not when it is queued. Name lookups (`Stat`, `parentNodeID`,
 `listedNodeID`) go through `findListedNode`: a name missing from an expired
 listing waits for the refresh instead of answering 404. `cachedFileNodeID`
 trusts fresh listings only. A `webdavFS` literal (tests) has `cacheMaxStale` 0: no stale serving.
+A listing is cached with the ETag the API answered (`nodeCacheEntry.etag`) and
+refreshed with it: on a 304 `fetchNodes` returns the held nodes and the entry
+is renewed for a TTL, one round trip and nothing decrypted. An entry edited in
+place (`editNodeCacheLocked`) loses its ETag, so its next refresh is a full
+listing. `listFn` (tests) bypasses the ETag.
 
 ## Metrics (`webdav serve --metrics-addr`)
 

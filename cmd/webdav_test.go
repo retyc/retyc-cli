@@ -899,6 +899,35 @@ func TestWebdavFS_StatCarriesModTime(t *testing.T) {
 	}
 }
 
+// PROPFIND reads a resource's properties from OpenFile(...).Stat(), not from
+// FileSystem.Stat: a folder opened for reading must carry the modification
+// time its listing gave it, or getlastmodified reports the zero time.
+func TestWebdavFS_OpenFolderCarriesModTime(t *testing.T) {
+	created := time.Date(2026, 10, 10, 12, 2, 32, 0, time.UTC)
+	folder := service.DataroomNodeInfo{ID: "n-sub", Name: "sub", Type: "dir"}.WithModTime(created)
+	fs := &webdavFS{
+		cache: newDataroomCache(func(_ context.Context) ([]dataroomCacheItem, error) {
+			return []dataroomCacheItem{{id: "dr1", title: "DR"}}, nil
+		}),
+		nodeCache: map[string]*nodeCacheEntry{
+			"retyc://dr1/": {nodes: []service.DataroomNodeInfo{folder}, fetchedAt: time.Now()},
+		},
+	}
+
+	f, err := fs.OpenFile(context.Background(), "/dataroom/DR/sub", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	defer f.Close() //nolint:errcheck
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if !info.IsDir() || !info.ModTime().Equal(created) {
+		t.Errorf("opened folder: IsDir = %v, ModTime = %v, want dir at %v", info.IsDir(), info.ModTime(), created)
+	}
+}
+
 // — Mutations reuse the cached session ————————————————————————————————————————
 
 // Every mutation used to re-resolve the dataroom session (2 API calls + AGE
