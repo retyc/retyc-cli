@@ -23,9 +23,9 @@ import (
 const lockRefreshEvery = 2 * time.Minute
 
 // lockMirror mirrors the WebDAV locks clients take on files onto the API's
-// advisory node locks, so that another RETYC client (a second mount, the web
-// app) sees the file as locked, and so that a file another client locked
-// answers 423 here.
+// advisory node locks, so that another cooperating RETYC client (a second
+// mount; the web app ignores locks) sees the file as locked, and so that a
+// file another client locked answers 423 to a LOCK here.
 //
 // x/net/webdav keeps its own in-memory lock system (the one doing the WebDAV
 // bookkeeping: lock-null resources, folders, If-header checks). The mirror

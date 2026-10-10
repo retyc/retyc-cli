@@ -27,7 +27,9 @@ import (
 // Folders are not copied (501, as before): the API copies files only, and a
 // recursive copy of a tree would fall back to the byte-moving path.
 // Semantics follow RFC 4918 §9.8: a destination held by a file is replaced
-// unless Overwrite: F (412); a missing destination folder is a 409; the
+// unless Overwrite: F (412), by deleting it first, since the API only copies
+// into a new node: its versions go with it, and it is not restored when the
+// copy then fails; a missing destination folder is a 409; the
 // response is 201 for a new resource, 204 for a replaced one. The copy is
 // sealed by the server before the response is sent, so the client can read
 // the copy at once.
@@ -44,6 +46,14 @@ func (fs *webdavFS) handleCopy(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(status)
 }
+
+// copyReplaceRetry and copyReplaceWait pace the copy onto a destination this
+// server just deleted: how often it is tried again while the API still holds
+// the name, and for how long before the 409 is reported.
+var (
+	copyReplaceRetry = 500 * time.Millisecond
+	copyReplaceWait  = 15 * time.Second
+)
 
 // copyNode performs the copy of r and returns the status to answer.
 func (fs *webdavFS) copyNode(ctx context.Context, r *http.Request) (int, error) {
@@ -103,6 +113,17 @@ func (fs *webdavFS) copyNode(ctx context.Context, r *http.Request) (int, error) 
 		return http.StatusInternalServerError, fmt.Errorf("dataroom session: %w", err)
 	}
 	node, err := service.CopyDataroomNodeByID(ctx, fs.client, src.ID, dstParentID, dstName, sess)
+	// The API keeps the name of the file just deleted until its purge has run
+	// (seconds with the workers keeping up) and answers 409 meanwhile.
+	for waited := time.Duration(0); status == http.StatusNoContent && errors.Is(err, api.ErrConflict) &&
+		waited < copyReplaceWait; waited += copyReplaceRetry {
+		select {
+		case <-ctx.Done():
+			return http.StatusInternalServerError, ctx.Err()
+		case <-time.After(copyReplaceRetry):
+		}
+		node, err = service.CopyDataroomNodeByID(ctx, fs.client, src.ID, dstParentID, dstName, sess)
+	}
 	if err != nil {
 		return copyErrorStatus(err), err
 	}
@@ -138,7 +159,7 @@ func copyDestination(r *http.Request) (string, int, error) {
 func copyErrorStatus(err error) int {
 	var httpErr *api.HTTPError
 	switch {
-	case errors.Is(err, service.ErrNameBeingDeleted), errors.Is(err, api.ErrConflict):
+	case errors.Is(err, api.ErrConflict):
 		return http.StatusConflict
 	case errors.Is(err, api.ErrNotFound):
 		return http.StatusNotFound
@@ -186,7 +207,7 @@ func (fs *webdavFS) dataroomQuota(ctx context.Context, drID string) (used, free 
 
 		return 0, 0, false
 	}
-	if stats.StorageUsed == 0 && stats.StorageFree == 0 && stats.StorageCapacity == nil {
+	if stats.StorageUsed == nil {
 		// An API without storage counters.
 		return 0, 0, false
 	}
@@ -194,10 +215,10 @@ func (fs *webdavFS) dataroomQuota(ctx context.Context, drID string) (used, free 
 	if fs.quotaCache == nil {
 		fs.quotaCache = make(map[string]quotaCacheEntry)
 	}
-	fs.quotaCache[drID] = quotaCacheEntry{used: stats.StorageUsed, free: stats.StorageFree, fetchedAt: time.Now()}
+	fs.quotaCache[drID] = quotaCacheEntry{used: *stats.StorageUsed, free: stats.StorageFree, fetchedAt: time.Now()}
 	fs.quotaMu.Unlock()
 
-	return stats.StorageUsed, stats.StorageFree, true
+	return *stats.StorageUsed, stats.StorageFree, true
 }
 
 // quotaFunc is what a folder handle calls to report its dataroom's quota.

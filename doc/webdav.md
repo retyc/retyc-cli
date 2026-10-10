@@ -95,7 +95,10 @@ Notes and limitations:
   its last complete version into a new node; the server answers once the copy is sealed
   (about a second per gigabyte). The copy keeps the MIME type, mode and modification time.
   A destination that already exists is replaced (a new node, not a new version) unless the
-  client sends `Overwrite: F`. Copying a folder is not supported (`501`): copy its files.
+  client sends `Overwrite: F`: it is deleted first, with its versions, which needs the right
+  to delete it, and it is not restored when the copy then fails. The server keeps the name of
+  a deleted file until its purge has run, so the copy is tried again for up to 15 seconds
+  before answering `409`. Copying a folder is not supported (`501`): copy its files.
 - **Locks are mirrored.** A `LOCK` on a file takes an exclusive advisory lock on the node
   in the dataroom, renewed in the background while the WebDAV lock stands (the server's
   lease is 5 minutes at most) and released on `UNLOCK` or when the server shuts down. A file
@@ -162,6 +165,14 @@ refreshed behind it. Background refreshes run at most `api.concurrency.list` at 
 time; a request that needs a listing a refresh is still queued for starts it at
 once. A failed refresh keeps the expired listing, except for a folder deleted
 elsewhere, which is dropped so the next request answers `404`.
+
+A refresh is conditional when the API supports it: the listing is kept with the
+`ETag` of its dataroom and sent back as `If-None-Match`. While nothing changed in
+the dataroom the API answers `304`, and the listing is kept for another TTL at the
+cost of one round trip, with no page to fetch and no name to decrypt. The `ETag`
+is per dataroom, not per folder: any change anywhere in the dataroom makes the
+next refresh of each of its folders a full listing. These refreshes show as
+status `304` in `retyc_cli_api_requests_total`.
 
 Mutations made through the server keep the cache exact. Changes made elsewhere
 (web app, another client, another `webdav serve`) appear once the listing is

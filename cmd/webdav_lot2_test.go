@@ -24,6 +24,9 @@ type lot2API struct {
 	mu sync.Mutex
 	// lockStatus is answered to a lock creation (201 by default).
 	lockStatus int
+	// copyConflicts is the number of copies answered 409 before one is
+	// accepted: a destination deleted and not purged yet.
+	copyConflicts int
 	calls      []string
 	statsCalls int
 }
@@ -34,6 +37,12 @@ func (a *lot2API) handle(w http.ResponseWriter, r *http.Request) {
 	a.calls = append(a.calls, r.Method+" "+r.URL.Path)
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/n-src/copy":
+		if a.copyConflicts > 0 {
+			a.copyConflicts--
+			http.Error(w, `{"detail":"Duplicate node name hash in the same folder"}`, http.StatusConflict)
+
+			return
+		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		parent, _ := body["parent_id"].(string)
@@ -187,6 +196,36 @@ func TestHandleCopy_Refusals(t *testing.T) {
 				t.Errorf("old node deleted %d times, want %d", got, tc.deletes)
 			}
 		})
+	}
+}
+
+// The API keeps the name of the replaced file until its purge has run: the
+// copy is tried again while it answers 409, and the 409 is reported once the
+// wait is over.
+func TestHandleCopy_ReplaceWaitsForPurge(t *testing.T) {
+	copyReplaceRetry, copyReplaceWait = time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { copyReplaceRetry, copyReplaceWait = 500*time.Millisecond, 15*time.Second })
+
+	fake := &lot2API{t: t, copyConflicts: 2}
+	w := httptest.NewRecorder()
+	newLot2FS(t, fake).handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/old.txt", ""))
+	if w.Code != http.StatusNoContent || fake.count("POST /dataroom/node/n-src/copy") != 3 {
+		t.Errorf("status = %d after %d copies, want 204 after 3", w.Code, fake.count("POST /dataroom/node/n-src/copy"))
+	}
+
+	fake = &lot2API{t: t, copyConflicts: 1000}
+	w = httptest.NewRecorder()
+	newLot2FS(t, fake).handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/old.txt", ""))
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 once the wait is over", w.Code)
+	}
+
+	// A name held by a file this server did not delete is not waited for.
+	fake = &lot2API{t: t, copyConflicts: 1}
+	w = httptest.NewRecorder()
+	newLot2FS(t, fake).handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/sub/new.txt", ""))
+	if w.Code != http.StatusConflict || fake.count("POST /dataroom/node/n-src/copy") != 1 {
+		t.Errorf("status = %d after %d copies, want 409 after 1", w.Code, fake.count("POST /dataroom/node/n-src/copy"))
 	}
 }
 

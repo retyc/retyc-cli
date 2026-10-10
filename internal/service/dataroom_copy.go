@@ -31,10 +31,10 @@ var copyPollInterval = time.Second
 // chunks never transit through the client. It returns the new node as a
 // listing would report it.
 //
-// A name already held in the destination answers api.ErrConflict (or
-// ErrNameBeingDeleted when its holder is pending deletion); the source or the
-// destination folder missing, api.ErrNotFound; a folder, or a file without a
-// complete version, a 422.
+// A name already held in the destination answers api.ErrConflict, also while
+// its holder is deleted and not purged yet; the source or the destination
+// folder missing, api.ErrNotFound, which a source pending deletion (410)
+// matches too; a folder, or a file without a complete version, a 422.
 func CopyDataroomNodeByID(
 	ctx context.Context, client *api.Client, srcNodeID string, dstParentID *string, newName string,
 	sess *DataroomSession,
@@ -45,8 +45,6 @@ func CopyDataroomNodeByID(
 	}
 	item, err := client.CopyDataroomNode(ctx, srcNodeID, dstParentID, nameEnc, nodeNameHash(newName, sess.NameSalt))
 	switch {
-	case errors.Is(err, api.ErrGone):
-		return DataroomNodeInfo{}, fmt.Errorf("%q: %w", newName, ErrNameBeingDeleted)
 	case err != nil:
 		return DataroomNodeInfo{}, fmt.Errorf("copying node: %w", err)
 	case item.Version == nil:

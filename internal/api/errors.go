@@ -18,6 +18,10 @@ var ErrNotFound = errors.New("not found")
 // separate check.
 var ErrGone = errors.New("gone")
 
+// ErrNotModified is returned by a conditional GET (If-None-Match) when the
+// server responds with HTTP 304: what the caller holds is still current.
+var ErrNotModified = errors.New("not modified")
+
 // ErrLocked is returned by API methods when the server responds with HTTP 423:
 // another lock on the node excludes the one requested.
 var ErrLocked = errors.New("locked")

@@ -50,13 +50,15 @@ type DataroomStats struct {
 	FilesCount         int   `json:"files_count"`
 	VersionsCount      int   `json:"versions_count"`
 	FilesEncryptedSize int64 `json:"files_encrypted_size"`
-	// AllowedStorageSize is the owner's plan allowance in bytes.
+	// AllowedStorageSize is what is left of the owner's plan, in bytes; negative
+	// when the plan is exceeded.
 	AllowedStorageSize int64 `json:"allowed_storage_size,omitempty"`
 	// StorageCapacity is the reserved capacity in bytes, nil when the dataroom
 	// is bounded by the owner's plan instead (see Dataroom.StorageCapacity).
 	StorageCapacity *int64 `json:"storage_capacity,omitempty"`
 	// StorageUsed counts every stored version, including those pending purge.
-	StorageUsed int64 `json:"storage_used,omitempty"`
+	// Nil on an API that predates the storage counters.
+	StorageUsed *int64 `json:"storage_used,omitempty"`
 	// StorageFree is capacity minus used, or the owner's plan remainder when
 	// unbounded; never negative.
 	StorageFree int64 `json:"storage_free,omitempty"`
@@ -383,16 +385,33 @@ func (c *Client) RekeyDataroom(ctx context.Context, dataroomID, sessionPrivKeyEn
 func (c *Client) ListDataroomNodes(
 	ctx context.Context, dataroomID string, parentID *string, page, size int,
 ) (*DataroomNodePage, error) {
+	result, _, err := c.ListDataroomNodesIfChanged(ctx, dataroomID, parentID, page, size, "")
+
+	return result, err
+}
+
+// ListDataroomNodesIfChanged is ListDataroomNodes for a caller that holds a
+// listing of the dataroom and the ETag it came with: etag, when not empty, is
+// sent as If-None-Match, and an unchanged dataroom answers ErrNotModified
+// without a page to decrypt. The ETag of the answer is returned, "" on an API
+// that sends none.
+//
+// The ETag is the dataroom's revision, not the folder's: every change a
+// listing shows, anywhere in the dataroom, moves it.
+func (c *Client) ListDataroomNodesIfChanged(
+	ctx context.Context, dataroomID string, parentID *string, page, size int, etag string,
+) (*DataroomNodePage, string, error) {
 	path := fmt.Sprintf("/dataroom/%s/nodes?page=%d&size=%d", dataroomID, page, size)
 	if parentID != nil {
 		path += "&parent_id=" + *parentID
 	}
 	var result DataroomNodePage
-	if err := c.Get(ctx, path, &result); err != nil {
-		return nil, err
+	newETag, err := c.getIfNoneMatch(ctx, path, etag, &result)
+	if err != nil {
+		return nil, "", err
 	}
 
-	return &result, nil
+	return &result, newETag, nil
 }
 
 // FindDataroomNodeByHash looks a node up by its name hash under parentID (nil

@@ -349,17 +349,50 @@ func ListNodesLiteralWithSession(
 func ListNodesByIDWithSession(
 	ctx context.Context, client *api.Client, dataroomID string, parentID *string, sess *DataroomSession,
 ) ([]DataroomNodeInfo, error) {
+	nodes, _, err := ListNodesByIDIfChanged(ctx, client, dataroomID, parentID, sess, "")
+
+	return nodes, err
+}
+
+// ListNodesByIDIfChanged is ListNodesByIDWithSession for a caller that kept
+// the listing of the folder and the ETag it came with: when the dataroom has
+// not changed since, it answers api.ErrNotModified after one round trip,
+// without a page fetched or a name decrypted. It returns the ETag to keep
+// with the new listing, "" on an API that sends none.
+func ListNodesByIDIfChanged(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string, sess *DataroomSession, etag string,
+) ([]DataroomNodeInfo, string, error) {
+	// Only the first page is conditional, and its ETag is the one kept: it is
+	// fetched alone, before the others, so a change landing between two pages
+	// leaves an ETag older than the listing, which the next call refreshes.
+	var newETag string
+	fetch := func(ctx context.Context, page int) ([]api.DataroomNodeItem, int, error) {
+		condition := ""
+		if page == 1 {
+			condition = etag
+		}
+		pg, pageETag, err := client.ListDataroomNodesIfChanged(
+			ctx, dataroomID, parentID, page, nodeListPageSize, condition)
+		if err != nil {
+			return nil, 0, err
+		}
+		if page == 1 {
+			newETag = pageETag
+		}
+
+		return pg.Items, pg.Pages, nil
+	}
 	// Each page is decrypted as soon as it arrives, in parallel with the other
 	// pages and outside the fetch slots (see fetchAllPages).
-	pages, err := fetchAllPages(ctx, nodePageFetcher(client, dataroomID, parentID),
+	pages, err := fetchAllPages(ctx, fetch,
 		func(ctx context.Context, items []api.DataroomNodeItem) []DataroomNodeInfo {
 			return nodesFromItems(ctx, client, dataroomID, items, sess)
 		})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	return slices.Concat(pages...), nil
+	return slices.Concat(pages...), newETag, nil
 }
 
 // — Node traversal helpers ————————————————————————————————————————————————————

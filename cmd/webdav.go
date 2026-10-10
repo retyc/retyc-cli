@@ -845,9 +845,16 @@ func (h *writeFileHandle) Stat() (os.FileInfo, error)           { return h.info,
 func (h *writeFileHandle) Readdir(_ int) ([]os.FileInfo, error) { return nil, os.ErrInvalid }
 
 // nodeCacheEntry caches the result of a ListNodes call for a given URI.
+//
+// etag is the ETag the API answered the listing with (the dataroom's
+// revision), "" when it sent none or when this server edited the listing in
+// place since. An expired listing that has one is refreshed with
+// If-None-Match: an unchanged dataroom answers 304, and the listing is kept
+// for another TTL at the cost of one round trip, no page and no decryption.
 type nodeCacheEntry struct {
 	nodes     []service.DataroomNodeInfo
 	fetchedAt time.Time
+	etag      string
 }
 
 // nodeFetch is an in-flight listing shared by every caller that misses the cache
@@ -1331,10 +1338,7 @@ func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri str
 	}
 	slots := fs.refreshSlots
 
-	fetch := fs.listFn
-	if fetch == nil {
-		fetch = fs.fetchNodes
-	}
+	fetch := fs.listFn // nil: fetchNodes
 	detached := context.WithoutCancel(ctx)
 	link := trace.LinkFromContext(ctx)
 	go func() {
@@ -1356,11 +1360,19 @@ func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri str
 		// The generation is read when the fetch starts, not when it was
 		// queued: a mutation made through this server before that is in the
 		// API's answer, so only one landing during the fetch must discard it.
+		// The listing to revalidate is read with it: an edit made in place
+		// after that bumps the generation, and the answer is discarded.
 		fs.nodeMu.Lock()
 		gen := fs.nodeGen[uri]
+		held := fs.nodeCache[uri]
 		fs.nodeMu.Unlock()
 		fctx, cancel := context.WithTimeout(fctx, orDetachedFetchTimeout(fs.fetchTimeout))
-		f.nodes, f.err = fetch(fctx, drID, nodePath)
+		var etag string
+		if fetch != nil {
+			f.nodes, f.err = fetch(fctx, drID, nodePath)
+		} else {
+			f.nodes, etag, f.err = fs.fetchNodes(fctx, drID, nodePath, held)
+		}
 		cancel()
 		if span != nil {
 			telemetry.RecordError(span, f.err)
@@ -1375,7 +1387,7 @@ func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri str
 				if fs.nodeCache == nil {
 					fs.nodeCache = make(map[string]*nodeCacheEntry)
 				}
-				fs.nodeCache[uri] = &nodeCacheEntry{nodes: f.nodes, fetchedAt: time.Now()}
+				fs.nodeCache[uri] = &nodeCacheEntry{nodes: f.nodes, fetchedAt: time.Now(), etag: etag}
 			case errors.Is(f.err, os.ErrNotExist):
 				delete(fs.nodeCache, uri)
 			}
@@ -1401,44 +1413,59 @@ func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri str
 // pending, and the listing is retried once against a fresh parent listing. As
 // for RemoveAll and Rename, a folder moved elsewhere within that window is
 // listed at its new location until the parent listing is refreshed.
-func (fs *webdavFS) fetchNodes(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error) {
+//
+// held is the listing of the folder still in cache, nil when there is none.
+// When it carries an ETag the listing is conditional: a dataroom that has not
+// changed since answers 304 and held's nodes are returned as they are, with
+// the same ETag. A folder deleted elsewhere changed the dataroom, so it never
+// answers 304. The ETag returned is the one to keep with the nodes.
+func (fs *webdavFS) fetchNodes(
+	ctx context.Context, drID, nodePath string, held *nodeCacheEntry,
+) ([]service.DataroomNodeInfo, string, error) {
 	sess, err := fs.getSession(ctx, drID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	var heldETag string
+	if held != nil {
+		heldETag = held.etag
 	}
 
-	nodes, err := fs.fetchNodesOnce(ctx, drID, nodePath, sess)
+	nodes, etag, err := fs.fetchNodesOnce(ctx, drID, nodePath, sess, heldETag)
+	if errors.Is(err, api.ErrNotModified) {
+		return held.nodes, held.etag, nil
+	}
 	if errors.Is(err, api.ErrNotFound) && strings.Trim(nodePath, "/") != "" {
 		grandParent, _ := splitWebdavPath(nodePath)
 		fs.invalidateNodeCache(dataroomURI(drID, grandParent))
-		nodes, err = fs.fetchNodesOnce(ctx, drID, nodePath, sess)
+		nodes, etag, err = fs.fetchNodesOnce(ctx, drID, nodePath, sess, "")
 		if errors.Is(err, api.ErrNotFound) {
 			err = os.ErrNotExist
 		}
 	}
 
-	return nodes, err
+	return nodes, etag, err
 }
 
-// fetchNodesOnce resolves the folder ID of nodePath and lists its children.
+// fetchNodesOnce resolves the folder ID of nodePath and lists its children,
+// unless the dataroom still answers etag (api.ErrNotModified).
 func (fs *webdavFS) fetchNodesOnce(
-	ctx context.Context, drID, nodePath string, sess *service.DataroomSession,
-) ([]service.DataroomNodeInfo, error) {
+	ctx context.Context, drID, nodePath string, sess *service.DataroomSession, etag string,
+) ([]service.DataroomNodeInfo, string, error) {
 	folderID, err := fs.parentNodeID(ctx, drID, nodePath)
 	if errors.Is(err, os.ErrInvalid) {
 		// The path names a file, which has no children: not found (404), where
 		// ErrInvalid would reach the client as a 405.
-		return nil, os.ErrNotExist
+		return nil, "", os.ErrNotExist
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if folderID == nil {
-		return service.ListNodesByIDWithSession(ctx, fs.client, drID, nil, sess)
+	if folderID != nil {
+		trace.SpanFromContext(ctx).SetAttributes(telemetry.AttrNodeID.String(*folderID))
 	}
-	trace.SpanFromContext(ctx).SetAttributes(telemetry.AttrNodeID.String(*folderID))
 
-	return service.ListNodesByIDWithSession(ctx, fs.client, drID, folderID, sess)
+	return service.ListNodesByIDIfChanged(ctx, fs.client, drID, folderID, sess, etag)
 }
 
 // nodesToFileInfos converts a slice of DataroomNodeInfo to []os.FileInfo.

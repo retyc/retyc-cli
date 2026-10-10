@@ -426,14 +426,24 @@ The API answers **426** to a CLI older than its minimum version (`User-Agent`
   stripped), 0644 / 0755 when absent. Nothing writes it yet.
 - `DataroomNodeInfo.ModTime()`: a file's `client_mtime` else the version's `created_at`; a
   folder's `created_at` (zero on an older API).
-- Unused but decoded: `versioning_enabled`, `storage_capacity`, `storage_used`
-  (`api.Dataroom`), `allowed_storage_size`, `storage_*` (`api.DataroomStats`),
-  `chunk_count_expected`, `copied_from_version_id` (`api.DataroomNodeVersion`,
-  `Complete()`).
+- Decoded and shown only: `versioning_enabled` (`api.Dataroom`, `dataroom info`),
+  `storage_capacity` / `storage_used` / `storage_free` (`api.DataroomStats`, `dataroom info`
+  and the WebDAV quota; `storage_used` is a pointer, nil on an API without the counters).
+  `chunk_count_expected` (`api.DataroomNodeVersion.Complete()`) follows a copy. Decoded and
+  unused: `allowed_storage_size`, `copied_from_version_id`, and the dataroom's `storage_*`.
+- Listing ETag: `api.Client.ListDataroomNodesIfChanged` sends `If-None-Match` and answers
+  `api.ErrNotModified` on a 304 (`HTTPError.Is`); `service.ListNodesByIDIfChanged` makes
+  only the first page conditional and returns its ETag. The ETag is the dataroom's
+  revision, not the folder's. Only the WebDAV listing cache uses it (see WebDAV server
+  flags); `GET /mime-types` is not conditional.
 - **WebDAV** (`cmd/webdav_copy.go`, `cmd/webdav_locks.go`): `COPY` of a file goes to
   `handleCopy` from the mux (x/net/webdav's `copyFiles` would move every byte through the
   server), RFC 4918 statuses (201 / 204 replaced / 412 `Overwrite: F` / 409 missing folder /
   501 folder / 507 storage); the cached listing of the destination is updated in place.
+  The API only copies into a new node, so a replaced destination is deleted first, and the
+  copy is tried again while the API still holds the name of the deleted node (409 until its
+  purge has run; `copyReplaceRetry` / `copyReplaceWait`, 15 s). A 410 on the copy route is
+  the source pending deletion, not the name.
   Every dataroom folder handle implements `webdav.DeadPropsHolder` with the RFC 4331
   quota properties from `GET /dataroom/{id}/stats`, cached per dataroom for the listing
   TTL (`dataroomQuota`). `lockMirror` wraps the WebDAV handler: a `LOCK` on a listed file
@@ -580,6 +590,11 @@ starts, not when it is queued. Name lookups (`Stat`, `parentNodeID`,
 `listedNodeID`) go through `findListedNode`: a name missing from an expired
 listing waits for the refresh instead of answering 404. `cachedFileNodeID`
 trusts fresh listings only. A `webdavFS` literal (tests) has `cacheMaxStale` 0: no stale serving.
+A listing is cached with the ETag the API answered (`nodeCacheEntry.etag`) and
+refreshed with it: on a 304 `fetchNodes` returns the held nodes and the entry
+is renewed for a TTL, one round trip and nothing decrypted. An entry edited in
+place (`editNodeCacheLocked`) loses its ETag, so its next refresh is a full
+listing. `listFn` (tests) bypasses the ETag.
 
 ## Metrics (`webdav serve --metrics-addr`)
 

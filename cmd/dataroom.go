@@ -206,12 +206,13 @@ var dataroomInfoCmd = &cobra.Command{
 // An API that reports no storage counters prints nothing.
 func printStorage(stats *api.DataroomStats) {
 	switch {
+	case stats.StorageUsed == nil:
 	case stats.StorageCapacity != nil:
 		fmt.Printf("Storage: %s used of %s reserved · %s free\n",
-			ui.FormatSize(stats.StorageUsed), ui.FormatSize(*stats.StorageCapacity), ui.FormatSize(stats.StorageFree))
-	case stats.StorageUsed > 0 || stats.StorageFree > 0:
+			ui.FormatSize(*stats.StorageUsed), ui.FormatSize(*stats.StorageCapacity), ui.FormatSize(stats.StorageFree))
+	default:
 		fmt.Printf("Storage: %s used · %s free on the owner's plan\n",
-			ui.FormatSize(stats.StorageUsed), ui.FormatSize(stats.StorageFree))
+			ui.FormatSize(*stats.StorageUsed), ui.FormatSize(stats.StorageFree))
 	}
 }
 
