@@ -378,6 +378,8 @@ func (e *HTTPError) Is(target error) bool {
 		return e.Status == http.StatusNotFound || e.Status == http.StatusGone
 	case ErrGone:
 		return e.Status == http.StatusGone
+	case ErrLocked:
+		return e.Status == http.StatusLocked
 	default:
 		return false
 	}

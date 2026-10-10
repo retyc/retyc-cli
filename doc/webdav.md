@@ -83,14 +83,29 @@ The server exposes a virtual filesystem:
 | Create folder       | `MKCOL`       | `mkdir` inside a dataroom                                  |
 | Delete              | `DELETE`      | Removes a node (or a folder and its contents)             |
 | Rename / move       | `MOVE`        | Within the **same** dataroom only                         |
-| Copy                | `COPY`        | **Not supported** — the dataroom API has no server-side copy (returns `501`) |
+| Copy                | `COPY`        | Files only, within the **same** dataroom: the storage duplicates the chunks, nothing is downloaded (folders return `501`) |
+| Lock / unlock       | `LOCK` / `UNLOCK` | Standard WebDAV locks; a lock on a file is mirrored onto the dataroom so other RETYC clients see it, and a file locked elsewhere answers `423` |
+| Quota               | `PROPFIND`    | `quota-used-bytes` / `quota-available-bytes` (RFC 4331) on every folder of a dataroom |
 
 Notes and limitations:
 
 - **Move is intra-dataroom only.** Moving a node from one dataroom to another is
   rejected. To relocate across datarooms, download then upload.
-- **Copy is unavailable.** Many clients implement a drag-copy as `COPY`; if yours fails,
-  download the file and re-upload it instead.
+- **Copy is server-side, for files.** A `COPY` of a file asks the dataroom API to duplicate
+  its last complete version into a new node; the server answers once the copy is sealed
+  (about a second per gigabyte). The copy keeps the MIME type, mode and modification time.
+  A destination that already exists is replaced (a new node, not a new version) unless the
+  client sends `Overwrite: F`. Copying a folder is not supported (`501`): copy its files.
+- **Locks are mirrored.** A `LOCK` on a file takes an exclusive advisory lock on the node
+  in the dataroom, renewed in the background while the WebDAV lock stands (the server's
+  lease is 5 minutes at most) and released on `UNLOCK` or when the server shuts down. A file
+  already locked by another client, on another mount or in the web app, answers `423`.
+  The lock is advisory: it arbitrates between clients that lock, it does not block a write
+  from one that does not. Locks on folders, and on files being created, stay local.
+- **Quota.** Every folder of a dataroom reports `quota-used-bytes` (what the dataroom
+  stores, versions pending purge included) and `quota-available-bytes` (the room left on
+  its reserved capacity, or on its owner's plan), refreshed with the listing TTL. File
+  managers show them as the free space of the mount.
 - **Uploading an existing name** creates a new **version** of that node rather than a
   duplicate.
 - **Small files are one request.** A file that fits in one 8 MB chunk (an empty one

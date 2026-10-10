@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -513,6 +514,41 @@ type dirHandle struct {
 	offset  int
 	load    func() ([]os.FileInfo, error) // nil = entries already populated
 	loaded  bool
+	// quota reports the dataroom's storage counters (RFC 4331), nil for a
+	// folder outside a dataroom.
+	quota quotaFunc
+}
+
+// DeadProps implements webdav.DeadPropsHolder: a dataroom folder reports the
+// RFC 4331 quota properties (quota-used-bytes, quota-available-bytes), which
+// file managers read on the mount root to show the space left.
+func (h *dirHandle) DeadProps() (map[xml.Name]webdav.Property, error) {
+	if h.quota == nil {
+		return nil, nil
+	}
+	used, free, ok := h.quota()
+	if !ok {
+		return nil, nil
+	}
+	props := make(map[xml.Name]webdav.Property, 2)
+	for local, value := range quotaProps(used, free) {
+		name := xml.Name{Space: "DAV:", Local: local}
+		props[name] = webdav.Property{XMLName: name, InnerXML: []byte(value)}
+	}
+
+	return props, nil
+}
+
+// Patch implements webdav.DeadPropsHolder: no dead property is writable.
+func (h *dirHandle) Patch(patches []webdav.Proppatch) ([]webdav.Propstat, error) {
+	pstat := webdav.Propstat{Status: http.StatusForbidden}
+	for _, patch := range patches {
+		for _, p := range patch.Props {
+			pstat.Props = append(pstat.Props, webdav.Property{XMLName: p.XMLName})
+		}
+	}
+
+	return []webdav.Propstat{pstat}, nil
 }
 
 func (h *dirHandle) Close() error                       { return nil }
@@ -876,6 +912,11 @@ type webdavFS struct {
 	// sessions holds one resolved session per dataroom for the life of the
 	// process (no TTL, single-flight, one scrypt at a time — see service.SessionCache).
 	sessions service.SessionCache
+
+	// quotaCache holds each dataroom's storage counters for the listing TTL
+	// (see dataroomQuota).
+	quotaMu    sync.Mutex
+	quotaCache map[string]quotaCacheEntry
 }
 
 var _ webdav.FileSystem = (*webdavFS)(nil)
@@ -1501,7 +1542,8 @@ func (fs *webdavFS) openNodeDirInfo(
 	ctx context.Context, info *webdavFileInfo, drID, subPath string,
 ) (webdav.File, error) {
 	return &dirHandle{
-		info: info,
+		info:  info,
+		quota: quotaOnce(func() (int64, int64, bool) { return fs.dataroomQuota(ctx, drID) }),
 		load: func() ([]os.FileInfo, error) {
 			nodes, err := fs.listNodes(ctx, drID, subPath)
 			if err != nil {
@@ -2360,9 +2402,10 @@ Example:
 		}
 		fs.cache.ttl, fs.cache.maxStale = cfg.Webdav.Cache.TTL, cfg.Webdav.Cache.MaxStale
 
+		lockSystem := webdav.NewMemLS()
 		handler := &webdav.Handler{
 			FileSystem: fs,
-			LockSystem: webdav.NewMemLS(),
+			LockSystem: lockSystem,
 			Logger: func(r *http.Request, err error) {
 				// URL.Path is percent-decoded: "%1b" arrives as a raw ESC.
 				if err != nil {
@@ -2375,12 +2418,17 @@ Example:
 			},
 		}
 
+		// WebDAV locks on files are mirrored onto the API's node locks, so other
+		// RETYC clients see them and theirs are honoured here (see lockMirror).
+		mirror := newLockMirror(fs, lockSystem)
+		davHandler := mirror.middleware(handler)
+
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "COPY" {
-				http.Error(w,
-					"COPY not supported: server-side copy is not available in the dataroom API",
-					http.StatusNotImplemented)
+				// Server-side copy: the storage duplicates the chunks, nothing
+				// transits through this process (see handleCopy).
+				fs.handleCopy(w, r)
 
 				return
 			}
@@ -2398,7 +2446,7 @@ Example:
 			if r.Method == "GET" || r.Method == "HEAD" {
 				w.Header().Set("Content-Type", fs.contentTypeForPath(r.Context(), r.URL.Path))
 			}
-			handler.ServeHTTP(w, r)
+			davHandler.ServeHTTP(w, r)
 		})
 
 		authEnabled, _ := cmd.Flags().GetBool("auth")
@@ -2479,6 +2527,10 @@ Example:
 				}
 			})
 		}
+
+		// Renew the mirrored server locks while the WebDAV locks stand, and
+		// release them on shutdown.
+		go mirror.run(ctx)
 
 		authErrCh := make(chan error, 1)
 		go tokenKeepalive(ctx, tokSrc, func(err error) {

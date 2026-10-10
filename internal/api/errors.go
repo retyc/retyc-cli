@@ -18,6 +18,10 @@ var ErrNotFound = errors.New("not found")
 // separate check.
 var ErrGone = errors.New("gone")
 
+// ErrLocked is returned by API methods when the server responds with HTTP 423:
+// another lock on the node excludes the one requested.
+var ErrLocked = errors.New("locked")
+
 // ErrChunkMissing is returned by a chunk download that still answers 404 after
 // its retries, on a version the listing announces complete: the chunk was
 // counted but never reached the object store (an unsafe_write upload whose

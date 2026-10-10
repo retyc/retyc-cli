@@ -351,6 +351,12 @@ glob patterns (`*`, `?`, `[...]`) resolved against decrypted node names at each 
 
 ### `dataroom cp <src...> <dst>`
 Direction detected from which argument is a `retyc://` URI:
+- **Server-side copy** (`retyc:// → retyc://`, same dataroom, one file):
+  `service.CopyDataroomNode` → `POST /dataroom/node/{id}/copy` (202, chunks duplicated by
+  the storage, MIME / mode / `client_mtime` kept), then `waitForVersion` polls
+  `GET /dataroom/node/version/{id}` every second until `chunk_count` reaches
+  `chunk_count_expected` (`api.DataroomNodeVersion.Complete`); 404 while polling →
+  `ErrCopyDiscarded`, 410 → `ErrCopyTargetDeleted`. Folders are refused.
 - **Upload** (`local → retyc://`): one or more local paths, last arg is remote dest folder.
   Directories are uploaded recursively (BFS). SIGINT or a failed upload discards what the
   upload created (`service.DiscardFailedUpload`): the node if it was new, otherwise only the
@@ -423,7 +429,20 @@ The API answers **426** to a CLI older than its minimum version (`User-Agent`
 - Unused but decoded: `versioning_enabled`, `storage_capacity`, `storage_used`
   (`api.Dataroom`), `allowed_storage_size`, `storage_*` (`api.DataroomStats`),
   `chunk_count_expected`, `copied_from_version_id` (`api.DataroomNodeVersion`,
-  `Complete()`). Locks, server-side copy and `statfs` are not implemented.
+  `Complete()`).
+- **WebDAV** (`cmd/webdav_copy.go`, `cmd/webdav_locks.go`): `COPY` of a file goes to
+  `handleCopy` from the mux (x/net/webdav's `copyFiles` would move every byte through the
+  server), RFC 4918 statuses (201 / 204 replaced / 412 `Overwrite: F` / 409 missing folder /
+  501 folder / 507 storage); the cached listing of the destination is updated in place.
+  Every dataroom folder handle implements `webdav.DeadPropsHolder` with the RFC 4331
+  quota properties from `GET /dataroom/{id}/stats`, cached per dataroom for the listing
+  TTL (`dataroomQuota`). `lockMirror` wraps the WebDAV handler: a `LOCK` on a listed file
+  (buffered response, `Lock-Token` header, or the `If` header on a refresh) takes an
+  exclusive API lock (`POST /dataroom/node/{id}/lock`, lease `api.LockTimeoutMax`),
+  423 from the API undoes the local lock (`LockSystem.Unlock`) and answers 423; `UNLOCK`
+  releases it; `run` renews every mirrored lock every 2 min and releases them all on
+  shutdown. The temporary locks x/net/webdav takes around writes without an `If` header
+  (`confirmLocks`) never reach the API. `statfs` has no WebDAV equivalent beyond quota.
 - `api.HTTPError{Status, Body}` is every non-2xx error; `errors.Is` keeps matching
   `ErrConflict` / `ErrNotFound` / `ErrGone`, `api.ErrorDetail(err)` returns the stable
   `detail` code of a JSON refusal.

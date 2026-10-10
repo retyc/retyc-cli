@@ -292,9 +292,33 @@ var dataroomUserRmCmd = &cobra.Command{
 
 // — dataroom cp ——————————————————————————————————————————————————————————————
 
+// dataroomCopyRemote copies one file between two paths of the same dataroom
+// on the server: the chunks are duplicated by the storage, nothing is
+// downloaded. The command waits for the copy to be sealed.
+func dataroomCopyRemote(ctx context.Context, srcURI, dstURI string) error {
+	cfg, client, err := newAPIClient(ctx)
+	if err != nil {
+		return err
+	}
+	s := ui.NewSpinner("Copying on the server…")
+	s.Start()
+	node, err := service.CopyDataroomNode(ctx, cfg, client, srcURI, dstURI, spinnerReader(s))
+	s.Stop()
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		return printJSON(newDataroomNodesJSON([]service.DataroomNodeInfo{node})[0])
+	}
+	fmt.Printf("Copied %s → %s (%s, id: %s)\n", srcURI, dstURI, ui.FormatSize(node.Size), node.ID)
+
+	return nil
+}
+
 var dataroomCpCmd = &cobra.Command{
 	Use:   "cp <src...> <dst>",
-	Short: "Copy files to or from a dataroom  (local→retyc:// uploads, retyc://→local downloads)",
+	Short: "Copy files to, from or within a dataroom (local→retyc:// uploads, retyc://→local downloads, " +
+		"retyc://→retyc:// copies on the server)",
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		yes, _ := cmd.Flags().GetBool("yes")
@@ -307,7 +331,11 @@ var dataroomCpCmd = &cobra.Command{
 
 		switch {
 		case dstErr == nil && srcErr == nil:
-			return fmt.Errorf("remote-to-remote copy is not supported")
+			if len(srcs) > 1 {
+				return fmt.Errorf("only one remote source is supported for a server-side copy")
+			}
+
+			return dataroomCopyRemote(cmd.Context(), srcs[0], dst)
 		case dstErr != nil && srcErr != nil:
 			return fmt.Errorf("either source or destination must be a retyc:// URI")
 		case dstErr == nil:
