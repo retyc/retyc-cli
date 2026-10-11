@@ -104,6 +104,9 @@ func CopyDataroomNodeWithSession(
 	if src.Node.IsFolder() {
 		return DataroomNodeInfo{}, fmt.Errorf("%s is a folder: server-side copy applies to files only", srcPath)
 	}
+	if src.Node.IsSymlink() {
+		return DataroomNodeInfo{}, fmt.Errorf("%s is a symlink: server-side copy applies to files only", srcPath)
+	}
 
 	dstParentPath, newName := splitPathParent(dstPath)
 	if newName == "" {

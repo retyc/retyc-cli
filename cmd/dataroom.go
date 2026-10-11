@@ -99,9 +99,12 @@ var dataroomLsCmd = &cobra.Command{
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "TYPE\tNAME\tSIZE")
 		for _, n := range nodes {
-			if n.Type == "dir" {
+			switch n.Type {
+			case "dir":
 				fmt.Fprintf(w, "DIR\t%s\t\n", ui.Escape(n.Name))
-			} else {
+			case "symlink":
+				fmt.Fprintf(w, "LINK\t%s -> %s\t\n", ui.Escape(n.Name), ui.Escape(n.Target()))
+			default:
 				fmt.Fprintf(w, "FILE\t%s\t%s\n", ui.Escape(n.Name), ui.FormatSize(n.Size))
 			}
 		}

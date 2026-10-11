@@ -127,6 +127,10 @@ func (m *lockMirror) handleLock(w http.ResponseWriter, r *http.Request, next htt
 
 		return
 	}
+	// The server holds one lock per token, not per user: a server lock this
+	// mirror still holds for a WebDAV lock that lapsed locally (MemLS forgets
+	// an expired lock in silence) would answer 423 to its own successor.
+	m.releaseStale(r.Context(), nodeID)
 	lock, err := m.fs.client.LockDataroomNode(r.Context(), nodeID, api.LockExclusive, api.LockTimeoutMax)
 	switch {
 	case errors.Is(err, api.ErrLocked):
@@ -258,6 +262,23 @@ func (m *lockMirror) refresh(
 			fmt.Fprintf(os.Stderr, "webdav: UNLOCK %s: server lock not released: %s\n",
 				ui.Escape(urlPath), ui.EscapeLines(err.Error()))
 		}
+	}
+}
+
+// releaseStale drops the server locks mirrored for nodeID. The local lock
+// system has just granted an exclusive lock on the file, so whatever WebDAV
+// lock they mirrored no longer stands.
+func (m *lockMirror) releaseStale(ctx context.Context, nodeID string) {
+	m.mu.Lock()
+	var tokens []string
+	for token, ml := range m.locks {
+		if ml.nodeID == nodeID {
+			tokens = append(tokens, token)
+		}
+	}
+	m.mu.Unlock()
+	for _, token := range tokens {
+		m.release(ctx, token)
 	}
 }
 

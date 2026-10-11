@@ -196,7 +196,7 @@ retyc dataroom create --title "Project Alpha"
 # Upload a release directory
 retyc dataroom cp ./dist/ retyc://019d3de3-.../releases/
 
-# List contents
+# List contents (TYPE is DIR, FILE or LINK; a symlink shows as "name -> target")
 retyc dataroom ls retyc://019d3de3-.../releases/
 
 # Download a specific file

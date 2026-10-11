@@ -1226,7 +1226,8 @@ func (fs *webdavFS) findListedNode(
 	nodes, stale, err := fs.listNodesStale(ctx, drID, parentPath)
 	for attempt := 0; err == nil; attempt++ {
 		for _, n := range nodes {
-			if n.Name == name {
+			// A symlink does not exist for WebDAV (see nodesToFileInfos).
+			if n.Name == name && n.Type != "symlink" {
 				return n, nil
 			}
 		}
@@ -1483,6 +1484,11 @@ func nodesToFileInfos(nodes []service.DataroomNodeInfo) []os.FileInfo {
 		if strings.ContainsRune(n.Name, '/') {
 			fmt.Fprintf(os.Stderr, "webdav: skipping node with unsupported name %q\n", n.Name)
 
+			continue
+		}
+		// WebDAV has no symbolic links: a symlink node is left out rather
+		// than shown as a file no client could read or write.
+		if n.Type == "symlink" {
 			continue
 		}
 		infos = append(infos, fileInfoFromNode(n))

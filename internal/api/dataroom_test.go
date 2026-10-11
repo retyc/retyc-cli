@@ -966,3 +966,36 @@ func TestDownloadChunk_RetriesMissingChunk(t *testing.T) {
 		})
 	}
 }
+
+// A node is a file, a folder or a symlink: the three tests are exclusive, and
+// an API without the type field is read by the presence of a MIME ciphertext.
+func TestDataroomNode_Kinds(t *testing.T) {
+	enc := "-----BEGIN AGE ENCRYPTED FILE-----"
+	cases := []struct {
+		name                     string
+		node                     DataroomNode
+		folder, file, symlink    bool
+	}{
+		{"typed file", DataroomNode{Type: NodeTypeFile}, false, true, false},
+		{"typed folder", DataroomNode{Type: NodeTypeFolder}, true, false, false},
+		{"typed symlink", DataroomNode{Type: NodeTypeSymlink, TargetEnc: &enc}, false, false, true},
+		{"legacy file", DataroomNode{TypeEnc: &enc}, false, true, false},
+		{"legacy folder", DataroomNode{}, true, false, false},
+	}
+	for _, tc := range cases {
+		n := tc.node
+		if n.IsFolder() != tc.folder || n.IsFile() != tc.file || n.IsSymlink() != tc.symlink {
+			t.Errorf("%s: folder=%v file=%v symlink=%v, want %v %v %v",
+				tc.name, n.IsFolder(), n.IsFile(), n.IsSymlink(), tc.folder, tc.file, tc.symlink)
+		}
+	}
+
+	var decoded DataroomNode
+	if err := json.Unmarshal([]byte(`{"id":"l","type":"symlink","name_enc":"n","type_enc":null,`+
+		`"target_enc":"`+enc+`","parent_id":null}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.IsSymlink() || decoded.TargetEnc == nil || *decoded.TargetEnc != enc {
+		t.Errorf("decoded symlink = %+v, want target_enc kept", decoded)
+	}
+}

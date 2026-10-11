@@ -476,3 +476,64 @@ func TestDownloadVersion_SetsClientMtime(t *testing.T) {
 		t.Errorf("mtime = %v, want %v", info.ModTime(), mtime)
 	}
 }
+
+// A symlink is listed as its own kind: its target decrypted, its size that of
+// the target as lstat reports it, its time the node's, and no MIME lookup.
+func TestNodeFromItem_Symlink(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newMimeAPI(t, identity)
+	client := newExportTestClient(fake.server())
+	sess := fake.session()
+	pub := identity.Recipient().String()
+	nameEnc, _ := crypto.EncryptStringForKeys("link", []string{pub})
+	targetEnc, _ := crypto.EncryptStringForKeys("../docs/readme.md", []string{pub})
+	created := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+
+	n := nodeFromItem(context.Background(), client, "dr1", &api.DataroomNodeItem{
+		Node: api.DataroomNode{ID: "l", Type: api.NodeTypeSymlink, NameEnc: nameEnc, TargetEnc: &targetEnc,
+			AccessMode: "0777", CreatedAt: created},
+	}, sess)
+
+	if n.Type != "symlink" || n.Target() != "../docs/readme.md" || n.Size != int64(len("../docs/readme.md")) ||
+		!n.ModTime().Equal(created) || n.MIMEType != "" || n.VersionID != "" {
+		t.Errorf("symlink node = %+v (target %q, mod %v)", n, n.Target(), n.ModTime())
+	}
+	if got := fake.count("GET /dataroom/dr1/mime-types"); got != 0 {
+		t.Errorf("MIME table fetched %d times for a symlink, want 0", got)
+	}
+}
+
+// A name held by a symlink is neither a file to version nor a folder to
+// reuse: an upload onto it is refused, and so is a server-side copy of it.
+func TestSymlink_RefusedAsFileTarget(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newMimeAPI(t, identity)
+	client := newExportTestClient(fake.server())
+	sess := fake.session()
+	pub := identity.Recipient().String()
+	nameEnc, _ := crypto.EncryptStringForKeys("link", []string{pub})
+	targetEnc, _ := crypto.EncryptStringForKeys("target", []string{pub})
+	fake.nodes = []api.DataroomNodeItem{{Node: api.DataroomNode{
+		ID: "l", Type: api.NodeTypeSymlink, NameEnc: nameEnc, NameHash: nodeNameHash("link", fake.salt),
+		TargetEnc: &targetEnc}}}
+	ctx := context.Background()
+
+	holder, err := findNodeByName(ctx, client, "dr1", nil, "link", sess)
+	if err != nil || holder.ID != "l" || holder.IsFile() || holder.IsFolder() {
+		t.Errorf("findNodeByName(symlink) = %+v, %v; want the symlink, neither file nor folder", holder, err)
+	}
+
+	_, err = CopyDataroomNodeWithSession(ctx, client, "dr1", "/link", "/copy", sess)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("copy of a symlink: err = %v, want a symlink refusal", err)
+	}
+	if fake.count("POST /dataroom/node/l/copy") != 0 {
+		t.Errorf("copy route called for a symlink: %v", fake.requests)
+	}
+}

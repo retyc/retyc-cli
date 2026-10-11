@@ -118,6 +118,13 @@ Notes and limitations:
   renewed and is released within two minutes.
   The lock is advisory: it arbitrates between clients that lock, it does not block a write
   from one that does not. Locks on folders, and on files being created, stay local.
+  The server holds one lock per client, so a second `retyc webdav serve` of the same user
+  locking the same file gets `423` too; a lock this server still mirrors for a WebDAV lock
+  that lapsed is released before the next `LOCK` on the file takes its place.
+- **Symbolic links are not shown.** A dataroom may hold symlinks (created by a mount or
+  another client); WebDAV has no such thing, so they are left out of listings and do not
+  exist for this server: a `PUT` on a name a symlink holds answers `409`. `retyc dataroom ls`
+  lists them as `LINK name -> target`.
 - **Quota.** Every folder of a dataroom reports `quota-used-bytes` (what the dataroom
   stores, versions pending purge included) and `quota-available-bytes` (the room left on
   its reserved capacity, or on its owner's plan), refreshed with the listing TTL. File

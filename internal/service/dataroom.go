@@ -303,6 +303,17 @@ func nodeFromItem(
 	if item.Node.IsFolder() {
 		return info
 	}
+	if item.Node.IsSymlink() {
+		info.Type = "symlink"
+		if item.Node.TargetEnc != nil {
+			if target, err := crypto.DecryptToString(*item.Node.TargetEnc, sess.Identity); err == nil {
+				info.target = target
+				info.Size = int64(len(target))
+			}
+		}
+
+		return info
+	}
 	info.Type = "file"
 	info.MIMEType = sess.mimeTypeOf(ctx, client, dataroomID, &item.Node)
 	if item.Version != nil {
@@ -648,38 +659,40 @@ func resolveGlob(
 var ErrNameBeingDeleted = errors.New(
 	"a node of that name was deleted and the server has not released the name yet; retry in a moment")
 
-// findNodeAndTypeByName finds the node named name in a folder: by name hash
-// when the API supports the lookup, by listing and decrypting the folder
-// otherwise.
+// findNodeByName finds the node named name in a folder: by name hash when
+// the API supports the lookup, by listing and decrypting the folder otherwise.
+// Callers tell a file from a folder or a symlink with the node's IsFile and
+// IsFolder: a symlink holding a name can no more take a version than a folder
+// can, nor stand for one.
 //
 // Callers reach it after a 409 on creation, so a miss means the conflicting
 // node is one pending purge: ErrNameBeingDeleted.
-func findNodeAndTypeByName(
+func findNodeByName(
 	ctx context.Context, client *api.Client, dataroomID string,
 	parentID *string, name string, sess *dataroomSession,
-) (id string, isFile bool, err error) {
+) (*api.DataroomNode, error) {
 	if sess.supportsNodeTypes(ctx, client, dataroomID) {
 		item, err := client.FindDataroomNodeByHash(ctx, dataroomID, parentID, nodeNameHash(name, sess.NameSalt))
 		if err != nil {
-			return "", false, err
+			return nil, err
 		}
 		if item == nil {
-			return "", false, fmt.Errorf("%q: %w", name, ErrNameBeingDeleted)
+			return nil, fmt.Errorf("%q: %w", name, ErrNameBeingDeleted)
 		}
 
-		return item.Node.ID, !item.Node.IsFolder(), nil
+		return &item.Node, nil
 	}
 	nodes, err := fetchNodesWithNames(ctx, client, dataroomID, parentID, sess.Identity)
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
 	for _, nn := range nodes {
 		if nn.name == name {
-			return nn.item.Node.ID, !nn.item.Node.IsFolder(), nil
+			return &nn.item.Node, nil
 		}
 	}
 
-	return "", false, fmt.Errorf("%q: %w", name, ErrNameBeingDeleted)
+	return nil, fmt.Errorf("%q: %w", name, ErrNameBeingDeleted)
 }
 
 // — Upload / download helpers —————————————————————————————————————————————————
@@ -936,17 +949,18 @@ func initStreamUploadInto(
 		if !isConflict(createErr) {
 			return StreamUploadInit{}, fmt.Errorf("creating file node: %w", createErr)
 		}
-		existingID, isFile, findErr := findNodeAndTypeByName(ctx, client, dataroomID, parentID, fileName, sess)
+		existing, findErr := findNodeByName(ctx, client, dataroomID, parentID, fileName, sess)
 		if errors.Is(findErr, ErrNameBeingDeleted) {
 			return StreamUploadInit{}, findErr
 		}
 		if findErr != nil {
 			return StreamUploadInit{}, fmt.Errorf("node already exists but could not be located: %w", findErr)
 		}
-		if !isFile {
-			return StreamUploadInit{}, fmt.Errorf("cannot upload file %q: a folder with that name already exists", fileName)
+		if !existing.IsFile() {
+			return StreamUploadInit{}, fmt.Errorf(
+				"cannot upload file %q: a folder or a symlink with that name already exists", fileName)
 		}
-		targetNodeID = existingID
+		targetNodeID = existing.ID
 	} else {
 		targetNodeID = node.ID
 	}
@@ -1107,18 +1121,18 @@ func ensureFolder(
 	if !isConflict(createErr) {
 		return "", fmt.Errorf("creating folder %s: %w", name, createErr)
 	}
-	existingID, isFile, findErr := findNodeAndTypeByName(ctx, client, dataroomID, parentID, name, sess)
+	existing, findErr := findNodeByName(ctx, client, dataroomID, parentID, name, sess)
 	if errors.Is(findErr, ErrNameBeingDeleted) {
 		return "", findErr
 	}
 	if findErr != nil {
 		return "", fmt.Errorf("folder %s already exists but could not be located: %w", name, findErr)
 	}
-	if isFile {
-		return "", fmt.Errorf("cannot create folder %q: a file with that name already exists", name)
+	if !existing.IsFolder() {
+		return "", fmt.Errorf("cannot create folder %q: a file or a symlink with that name already exists", name)
 	}
 
-	return existingID, nil
+	return existing.ID, nil
 }
 
 // — Public service functions —————————————————————————————————————————————————
@@ -1361,6 +1375,9 @@ func DownloadFromDataroom(
 	}
 	if item.Node.IsFolder() {
 		return nil, fmt.Errorf("%s is a folder — use `ls` to browse it", src.Path)
+	}
+	if item.Node.IsSymlink() {
+		return nil, fmt.Errorf("%s is a symlink: it has no content to download", src.Path)
 	}
 	if item.Version == nil {
 		return nil, fmt.Errorf("node has no version yet")

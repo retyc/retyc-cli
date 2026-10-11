@@ -395,6 +395,17 @@ The API answers **426** to a CLI older than its minimum version (`User-Agent`
 - A node is a folder when `node.type == "folder"`; `api.DataroomNode.IsFolder()` is the
   **only** test, it falls back to `type_enc == nil` for an API without the type field.
   Never test `TypeEnc` directly: on the new API a migrated file has `type_enc: null`.
+  A node is a **symlink** when `node.type == "symlink"` (`IsSymlink()`): no version, no
+  MIME, its target in `target_enc` (session key). `IsFile()` is the kind that carries
+  versions; `!IsFolder()` is **not** "file". `service.DataroomNodeInfo` reports
+  `Type: "symlink"`, `Size` = target length (lstat), `Target()` the decrypted target,
+  `ModTime()` the node's `created_at`; `dataroom ls` prints `LINK name -> target`.
+  After a 409, `findNodeByName` returns the holder: an upload refuses a folder or a
+  symlink holder, `mkdir` reuses a folder holder only. `download` and the server-side copy
+  refuse a symlink source. **WebDAV hides symlinks**: `nodesToFileInfos` leaves them out and
+  `findListedNode` does not match them, so `Stat` answers `ErrNotExist` and a `PUT` on the
+  name ends in the 409 path. The CLI does not create symlinks (`POST /dataroom/{id}/node/symlink`
+  is for the FUSE driver).
 - MIME types live in a per-dataroom table (`GET /dataroom/{id}/mime-types`: `id`, `hash`
   = SHA-256(nameSalt + type), `name_enc` encrypted for the session key); a file node
   references a row by `mime_type_id`, a file not migrated yet still carries `type_enc`.
@@ -463,7 +474,11 @@ The API answers **426** to a CLI older than its minimum version (`User-Agent`
   releases it; `run` renews every mirrored lock every 2 min and releases them all on
   shutdown. A mirrored lock records when its WebDAV lock lapses (the timeout of the LOCK
   response, `lockExpiry`): `refreshAll` releases a lapsed one instead of renewing it, and
-  the periodic renewal never takes a lock for a token unlocked meanwhile. The temporary locks x/net/webdav takes around writes without an `If` header
+  the periodic renewal never takes a lock for a token unlocked meanwhile. The server holds
+  one lock per **token**, not per user (a second exclusive LOCK by the same user answers
+  423): before taking a server lock for a new WebDAV lock, `releaseStale` drops the server
+  locks the mirror still holds for that node, since MemLS only grants the new lock once the
+  previous one lapsed or was unlocked; without it the mirror would refuse itself. The temporary locks x/net/webdav takes around writes without an `If` header
   (`confirmLocks`) never reach the API. `statfs` has no WebDAV equivalent beyond quota.
 - `api.HTTPError{Status, Body}` is every non-2xx error; `errors.Is` keeps matching
   `ErrConflict` / `ErrNotFound` / `ErrGone`, `api.ErrorDetail(err)` returns the stable

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +26,10 @@ type lot2API struct {
 	mu sync.Mutex
 	// lockStatus is answered to a lock creation (201 by default).
 	lockStatus int
+	// lockExclusive makes the fake hold one lock at a time, as the server
+	// does: a creation while l-1 stands answers 423 until it is released.
+	lockExclusive bool
+	lockHeld      bool
 	// copyConflicts is the number of copies answered 409 before one is
 	// accepted: a destination deleted and not purged yet.
 	copyConflicts int
@@ -58,11 +64,15 @@ func (a *lot2API) handle(w http.ResponseWriter, r *http.Request) {
 		if status == 0 {
 			status = http.StatusCreated
 		}
+		if a.lockExclusive && a.lockHeld {
+			status = http.StatusLocked
+		}
 		if status != http.StatusCreated {
 			http.Error(w, `{"detail":"Another lock excludes this one"}`, status)
 
 			return
 		}
+		a.lockHeld = true
 		w.WriteHeader(http.StatusCreated)
 		fmt.Fprint(w, `{"id":"l-1","node_id":"n-doc","dataroom_id":"dr1","user_id":"u","kind":"exclusive",`+
 			`"expires_at":"2026-10-10T12:05:00Z","created_at":"2026-10-10T12:00:00Z","token":"api-tok"}`)
@@ -80,6 +90,7 @@ func (a *lot2API) handle(w http.ResponseWriter, r *http.Request) {
 
 			return
 		}
+		a.lockHeld = false
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/stats":
 		a.statsCalls++
@@ -373,5 +384,63 @@ func TestLockMirror_ReleaseAllOnShutdown(t *testing.T) {
 	<-done
 	if mirror.held() != 0 || fake.count("DELETE /dataroom/node/lock/l-1") != 1 {
 		t.Errorf("held = %d, calls = %v", mirror.held(), fake.calls)
+	}
+}
+
+// WebDAV has no symlinks: a symlink node is left out of listings and does not
+// exist for Stat, so no client takes it for a file or writes a version to it.
+func TestWebdav_SymlinksHidden(t *testing.T) {
+	fs := newLot2FS(t, &lot2API{t: t})
+	fs.nodeCache["retyc://dr1/"].nodes = append(fs.nodeCache["retyc://dr1/"].nodes,
+		service.DataroomNodeInfo{ID: "n-link", Name: "link", Type: "symlink", Size: 6})
+	ctx := context.Background()
+
+	f, err := fs.OpenFile(ctx, "/dataroom/DR/", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := f.Readdir(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() == "link" {
+			t.Errorf("symlink listed as %+v", e)
+		}
+	}
+	if len(entries) != 4 {
+		t.Errorf("listed %d entries, want the 4 files and folders", len(entries))
+	}
+	if _, err := fs.Stat(ctx, "/dataroom/DR/link"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Stat(symlink) = %v, want ErrNotExist", err)
+	}
+}
+
+// The server holds one lock per token: when the WebDAV lock lapsed locally
+// (the client went away, then came back) the mirror still holds the server
+// lock, so a new LOCK releases it before taking the next one instead of
+// refusing itself with the server's 423.
+func TestLockMirror_RelocksAfterLocalLapse(t *testing.T) {
+	fake := &lot2API{t: t, lockExclusive: true}
+	fs := newLot2FS(t, fake)
+	handler, mirror := newLockedHandler(fs)
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", ""))
+	if w.Code != http.StatusOK || mirror.held() != 1 {
+		t.Fatalf("first LOCK: status = %d, held = %d", w.Code, mirror.held())
+	}
+	// The WebDAV lock lapses without an UNLOCK: MemLS forgets it silently.
+	if err := mirror.ls.Unlock(time.Now(), strings.Trim(w.Header().Get("Lock-Token"), "<>")); err != nil {
+		t.Fatal(err)
+	}
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", ""))
+	if w.Code != http.StatusOK || mirror.held() != 1 {
+		t.Errorf("second LOCK: status = %d (%s), held = %d; want 200 and one lock", w.Code, w.Body.String(), mirror.held())
+	}
+	if fake.count("DELETE /dataroom/node/lock/l-1") != 1 || fake.count("POST /dataroom/node/n-doc/lock") != 2 {
+		t.Errorf("calls = %v, want the stale lock released before the new one", fake.calls)
 	}
 }

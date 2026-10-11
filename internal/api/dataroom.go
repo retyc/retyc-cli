@@ -116,16 +116,17 @@ func (v *DataroomNodeVersion) Complete() bool {
 const (
 	NodeTypeFile   = "file"
 	NodeTypeFolder = "folder"
-	// NodeTypeSymlink is reserved by the API and never produced today.
+	// NodeTypeSymlink is a POSIX symbolic link: no version, no MIME type, its
+	// target in TargetEnc. Created through POST /dataroom/{id}/node/symlink.
 	NodeTypeSymlink = "symlink"
 )
 
-// DataroomNode is a node (file or directory) in a dataroom.
+// DataroomNode is a node (file, folder or symlink) in a dataroom.
 //
-// Type tells files from folders. It is empty on an API that predates it,
-// where a nil TypeEnc meant a folder; IsFolder covers both. A file's MIME type
-// is either a row of the dataroom's MIME table (MimeTypeID) or, on a file not
-// migrated to it yet, the legacy per-node ciphertext TypeEnc.
+// Type tells the kinds apart. It is empty on an API that predates it, where a
+// nil TypeEnc meant a folder; IsFolder, IsFile and IsSymlink cover both. A
+// file's MIME type is either a row of the dataroom's MIME table (MimeTypeID)
+// or, on a file not migrated to it yet, the legacy per-node ciphertext TypeEnc.
 type DataroomNode struct {
 	ID         string  `json:"id"`
 	Type       string  `json:"type,omitempty"`
@@ -133,6 +134,9 @@ type DataroomNode struct {
 	NameHash   string  `json:"name_hash,omitempty"`
 	TypeEnc    *string `json:"type_enc"`
 	MimeTypeID *string `json:"mime_type_id,omitempty"`
+	// TargetEnc is a symlink's target, encrypted for the session key and never
+	// read by the server; nil on files and folders.
+	TargetEnc *string `json:"target_enc,omitempty"`
 	// AccessMode is the POSIX mode as an octal string ("0644"), empty on an
 	// API that does not store one; see ParseAccessMode.
 	AccessMode string    `json:"access_mode,omitempty"`
@@ -148,6 +152,18 @@ func (n *DataroomNode) IsFolder() bool {
 	}
 
 	return n.TypeEnc == nil
+}
+
+// IsSymlink reports whether the node is a symbolic link. An API without the
+// type field has none.
+func (n *DataroomNode) IsSymlink() bool {
+	return n.Type == NodeTypeSymlink
+}
+
+// IsFile reports whether the node is a regular file: the kind that carries
+// versions, and the only one an upload may add a version to.
+func (n *DataroomNode) IsFile() bool {
+	return !n.IsFolder() && !n.IsSymlink()
 }
 
 // POSIX special bits, which Go's fs.FileMode keeps apart from the permission
