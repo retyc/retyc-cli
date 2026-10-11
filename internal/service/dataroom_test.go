@@ -230,13 +230,13 @@ func TestNodesFromItems_ModTime(t *testing.T) {
 	}
 	created := time.Date(2026, 9, 4, 10, 30, 0, 0, time.UTC)
 
-	nodes := nodesFromItems(context.Background(), []api.DataroomNodeItem{
+	nodes := nodesFromItems(context.Background(), nil, "dr1", []api.DataroomNodeItem{
 		{
 			Node:    api.DataroomNode{ID: "n1", NameEnc: nameEnc, TypeEnc: &typeEnc},
 			Version: &api.DataroomNodeVersion{ID: "v1", OriginalSize: 5, ChunkCount: 1, CreatedAt: created},
 		},
 		{Node: api.DataroomNode{ID: "n2", NameEnc: nameEnc}},
-	}, identity)
+	}, &DataroomSession{Identity: identity})
 
 	if len(nodes) != 2 {
 		t.Fatalf("got %d nodes, want 2", len(nodes))
@@ -321,7 +321,7 @@ func TestNodesFromItems_DecryptNamesSpan(t *testing.T) {
 		items[i] = api.DataroomNodeItem{Node: api.DataroomNode{ID: fmt.Sprintf("n%d", i), NameEnc: nameEnc}}
 	}
 	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
-	nodesFromItems(ctx, items, identity)
+	nodesFromItems(ctx, nil, "dr1", items, &DataroomSession{Identity: identity})
 	parent.End()
 
 	var found bool
@@ -464,7 +464,8 @@ func smallFileServer(
 			t.Errorf("ParseMultipartForm: %v", err)
 		}
 		form := map[string]string{"parent_id": r.FormValue("parent_id"), "overwrite": r.FormValue("overwrite"),
-			"original_size": r.FormValue("original_size"), "name_hash": r.FormValue("name_hash")}
+			"original_size": r.FormValue("original_size"), "name_hash": r.FormValue("name_hash"),
+			"client_mtime": r.FormValue("client_mtime")}
 		form["name"], _ = crypto.DecryptToString(r.FormValue("name_enc"), identity)
 		form["type"], _ = crypto.DecryptToString(r.FormValue("type_enc"), identity)
 		if f, _, err := r.FormFile("upload_file"); err == nil {
@@ -591,6 +592,10 @@ func TestUploadToDataroom_SmallFileIsOneRequest(t *testing.T) {
 	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	mtime := time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC)
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
 	var progressed int
 	progress := func(_ string, n int, _ int64) { progressed += n }
 
@@ -601,7 +606,29 @@ func TestUploadToDataroom_SmallFileIsOneRequest(t *testing.T) {
 	if len(got) != 1 || got[0]["content"] != "hello" {
 		t.Errorf("requests = %v, want one carrying the content", got)
 	}
+	// The local file's modification time travels with the upload.
+	if got[0]["client_mtime"] != "2024-05-06T07:08:09Z" {
+		t.Errorf("client_mtime = %q, want the local mtime", got[0]["client_mtime"])
+	}
 	if progressed != 5 {
 		t.Errorf("progress reported %d bytes, want 5", progressed)
+	}
+}
+
+// A WebDAV upload has no source mtime: the single-request route sends none.
+func TestUploadSmallFile_NoClientMtime(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]string
+	srv := smallFileServer(t, identity, http.StatusCreated, &got)
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+	_, _, err = UploadSmallFile(context.Background(), newExportTestClient(srv), "dr1", nil, "a", []byte("x"), sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0]["client_mtime"] != "" {
+		t.Errorf("client_mtime = %q, want none", got[0]["client_mtime"])
 	}
 }

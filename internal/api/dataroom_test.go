@@ -199,8 +199,9 @@ func TestListDataroomNodes_Root(t *testing.T) {
 	}
 }
 
+// A file node in the legacy MIME form: type_enc carries the ciphertext, and
+// the explicit type is sent too for an API that knows it.
 func TestCreateDataroomNode_File(t *testing.T) {
-	typeEnc := "enc-type"
 	parentID := "parent-456"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -211,28 +212,66 @@ func TestCreateDataroomNode_File(t *testing.T) {
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["name_enc"] != "enc-name" {
-			t.Errorf("name_enc = %v", body["name_enc"])
+		for k, want := range map[string]any{
+			"name_enc": "enc-name", "name_hash": "hash", "type_enc": "enc-type", "parent_id": "parent-456", "type": "file",
+		} {
+			if body[k] != want {
+				t.Errorf("%s = %v, want %v", k, body[k], want)
+			}
 		}
-		if body["type_enc"] != "enc-type" {
-			t.Errorf("type_enc = %v, want enc-type", body["type_enc"])
-		}
-		if body["parent_id"] != "parent-456" {
-			t.Errorf("parent_id = %v, want parent-456", body["parent_id"])
+		for _, k := range []string{"mime_hash", "mime_name_enc", "access_mode"} {
+			if _, sent := body[k]; sent {
+				t.Errorf("%s sent in the legacy form", k)
+			}
 		}
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(DataroomNodeCreateResponse{ID: "node-new"})
+		_ = json.NewEncoder(w).Encode(DataroomNode{ID: "node-new", Type: NodeTypeFile})
 	}))
 	defer srv.Close()
 
-	node, err := newTestClient(srv).CreateDataroomNode(
-		context.Background(), "dr-1", "enc-name", "hash", &typeEnc, &parentID,
-	)
+	node, err := newTestClient(srv).CreateDataroomNode(context.Background(), "dr-1", NodeCreate{
+		ParentID: &parentID, NameEnc: "enc-name", NameHash: "hash", MIME: NodeMIME{TypeEnc: "enc-type"},
+	})
 	if err != nil {
 		t.Fatalf("CreateDataroomNode() error = %v", err)
 	}
-	if node.ID != "node-new" {
-		t.Errorf("ID = %q, want node-new", node.ID)
+	if node.ID != "node-new" || node.IsFolder() {
+		t.Errorf("node = %+v, want file node-new", node)
+	}
+}
+
+// A file node in the shared-table MIME form: the hash, the ciphertext only
+// when given, and the mode when given.
+func TestCreateDataroomNode_FileMimeHash(t *testing.T) {
+	for _, withName := range []bool{false, true} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["mime_hash"] != "mh" || body["type"] != "file" || body["access_mode"] != "0755" {
+				t.Errorf("body = %v", body)
+			}
+			if _, sent := body["type_enc"]; sent {
+				t.Error("type_enc sent with mime_hash")
+			}
+			if _, sent := body["mime_name_enc"]; sent != withName {
+				t.Errorf("mime_name_enc sent = %v, want %v", sent, withName)
+			}
+			w.WriteHeader(http.StatusCreated)
+			mimeID := "mt-1"
+			_ = json.NewEncoder(w).Encode(DataroomNode{ID: "node-new", Type: NodeTypeFile, MimeTypeID: &mimeID})
+		}))
+		p := NodeCreate{NameEnc: "n", NameHash: "h", MIME: NodeMIME{Hash: "mh"}, AccessMode: "0755"}
+		if withName {
+			p.MIME.NameEnc = "enc-mime"
+		}
+		node, err := newTestClient(srv).CreateDataroomNode(context.Background(), "dr-1", p)
+		srv.Close()
+		if err != nil {
+			t.Fatalf("CreateDataroomNode() error = %v", err)
+		}
+		if node.MimeTypeID == nil || *node.MimeTypeID != "mt-1" {
+			t.Errorf("MimeTypeID = %v, want mt-1", node.MimeTypeID)
+		}
 	}
 }
 
@@ -240,22 +279,32 @@ func TestCreateDataroomNode_Directory(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["type_enc"] != nil {
-			t.Errorf("type_enc should be nil for directory, got %v", body["type_enc"])
+		if body["type"] != "folder" {
+			t.Errorf("type = %v, want folder", body["type"])
+		}
+		for _, k := range []string{"type_enc", "mime_hash", "mime_name_enc"} {
+			if _, sent := body[k]; sent {
+				t.Errorf("%s sent for a folder", k)
+			}
+		}
+		if _, sent := body["parent_id"]; !sent || body["parent_id"] != nil {
+			t.Errorf("parent_id = %v, want an explicit null for the root", body["parent_id"])
 		}
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(DataroomNodeCreateResponse{ID: "dir-new"})
+		_ = json.NewEncoder(w).Encode(DataroomNode{ID: "dir-new", Type: NodeTypeFolder})
 	}))
 	defer srv.Close()
 
-	node, err := newTestClient(srv).CreateDataroomNode(
-		context.Background(), "dr-1", "enc-name", "hash", nil, nil,
-	)
+	node, err := newTestClient(srv).CreateDataroomNode(context.Background(), "dr-1", NodeCreate{
+		NameEnc: "enc-name", NameHash: "hash", Folder: true,
+		// A folder's MIME is ignored, whatever the caller passes.
+		MIME: NodeMIME{TypeEnc: "ignored"},
+	})
 	if err != nil {
 		t.Fatalf("CreateDataroomNode() error = %v", err)
 	}
-	if node.ID != "dir-new" {
-		t.Errorf("ID = %q, want dir-new", node.ID)
+	if node.ID != "dir-new" || !node.IsFolder() {
+		t.Errorf("node = %+v, want folder dir-new", node)
 	}
 }
 
@@ -309,20 +358,48 @@ func TestCreateDataroomNodeVersion(t *testing.T) {
 		if body["chunk_count_expected"] != float64(1) {
 			t.Errorf("chunk_count_expected = %v, want 1", body["chunk_count_expected"])
 		}
-		if body["type_enc"] != "enc-mime" {
-			t.Errorf("type_enc = %v, want enc-mime", body["type_enc"])
+		if body["mime_hash"] != "mh" || body["mime_name_enc"] != "enc-mime" {
+			t.Errorf("mime fields = %v / %v, want mh / enc-mime", body["mime_hash"], body["mime_name_enc"])
+		}
+		if body["client_mtime"] != "2026-10-01T12:00:00Z" {
+			t.Errorf("client_mtime = %v, want 2026-10-01T12:00:00Z", body["client_mtime"])
 		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(DataroomNodeVersion{ID: "ver-1", ChunkCount: 0, OriginalSize: 1024})
 	}))
 	defer srv.Close()
 
-	ver, err := newTestClient(srv).CreateDataroomNodeVersion(context.Background(), "node-1", 1024, 1, "enc-mime")
+	mtime := time.Date(2026, 10, 1, 14, 0, 0, 0, time.FixedZone("CEST", 2*3600))
+	ver, err := newTestClient(srv).CreateDataroomNodeVersion(context.Background(), "node-1", VersionCreate{
+		OriginalSize: 1024, ChunkCount: 1, MIME: NodeMIME{Hash: "mh", NameEnc: "enc-mime"}, ClientMtime: &mtime,
+	})
 	if err != nil {
 		t.Fatalf("CreateDataroomNodeVersion() error = %v", err)
 	}
 	if ver.ID != "ver-1" {
 		t.Errorf("ID = %q, want ver-1", ver.ID)
+	}
+}
+
+// Without a modification time or MIME type, neither field is sent: the API
+// keeps the node's MIME type and records no client_mtime.
+func TestCreateDataroomNodeVersion_Minimal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for _, k := range []string{"client_mtime", "type_enc", "mime_hash", "mime_name_enc"} {
+			if _, sent := body[k]; sent {
+				t.Errorf("%s sent without a value", k)
+			}
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(DataroomNodeVersion{ID: "ver-1"})
+	}))
+	defer srv.Close()
+
+	if _, err := newTestClient(srv).CreateDataroomNodeVersion(context.Background(), "node-1",
+		VersionCreate{OriginalSize: 1, ChunkCount: 1}); err != nil {
+		t.Fatalf("CreateDataroomNodeVersion() error = %v", err)
 	}
 }
 
@@ -444,20 +521,182 @@ func TestUpdateDataroomNode(t *testing.T) {
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["name_enc"] != "new-enc-name" {
-			t.Errorf("name_enc = %v", body["name_enc"])
+		if body["name_enc"] != "new-enc-name" || body["name_hash"] != "new-hash" {
+			t.Errorf("name = %v / %v", body["name_enc"], body["name_hash"])
 		}
 		if body["parent_id"] != "parent-new" {
 			t.Errorf("parent_id = %v, want parent-new", body["parent_id"])
 		}
+		if _, sent := body["access_mode"]; sent {
+			t.Error("access_mode sent by a rename")
+		}
 	}))
 	defer srv.Close()
 
-	err := newTestClient(srv).UpdateDataroomNode(
-		context.Background(), "node-1", "new-enc-name", "new-hash", &parentID,
-	)
+	err := newTestClient(srv).RenameDataroomNode(context.Background(), "node-1", "new-enc-name", "new-hash", &parentID)
 	if err != nil {
-		t.Fatalf("UpdateDataroomNode() error = %v", err)
+		t.Fatalf("RenameDataroomNode() error = %v", err)
+	}
+}
+
+// The API leaves an absent field as it is and reads an explicit null parent
+// as "move to the root": a move to the root sends null, a chmod sends nothing
+// but access_mode. A Go client marshalling a nil pointer unconditionally
+// would move every renamed node to the root.
+func TestUpdateDataroomNode_OnlySetFields(t *testing.T) {
+	cases := map[string]struct {
+		update NodeUpdate
+		want   map[string]any
+	}{
+		"move to root": {
+			update: NodeUpdate{SetParent: true},
+			want:   map[string]any{"parent_id": nil},
+		},
+		"chmod": {
+			update: NodeUpdate{AccessMode: ptr("0755")},
+			want:   map[string]any{"access_mode": "0755"},
+		},
+		"rename in place": {
+			update: NodeUpdate{NameEnc: ptr("e"), NameHash: ptr("h")},
+			want:   map[string]any{"name_enc": "e", "name_hash": "h"},
+		},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if len(body) != len(tc.want) {
+					t.Errorf("body = %v, want exactly %v", body, tc.want)
+				}
+				for k, v := range tc.want {
+					got, sent := body[k]
+					if !sent || got != v {
+						t.Errorf("%s = %v (sent %v), want %v", k, got, sent, v)
+					}
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer srv.Close()
+			if err := newTestClient(srv).UpdateDataroomNode(context.Background(), "node-1", tc.update); err != nil {
+				t.Fatalf("UpdateDataroomNode() error = %v", err)
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestSetDataroomNodeAccessMode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r.Method != http.MethodPut || r.URL.Path != "/dataroom/node/n-1" ||
+			len(body) != 1 || body["access_mode"] != "0700" {
+			t.Errorf("request = %s %s %v", r.Method, r.URL.Path, body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	if err := newTestClient(srv).SetDataroomNodeAccessMode(context.Background(), "n-1", "0700"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The modification time of an existing version is declared with a PATCH, in
+// UTC with an explicit offset (a naive timestamp is a 422), and no version is
+// created.
+func TestSetDataroomVersionClientMtime(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r.Method != http.MethodPatch || r.URL.Path != "/dataroom/node/version/v-1" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if body["client_mtime"] != "2026-10-01T12:00:00.5Z" {
+			t.Errorf("client_mtime = %v", body["client_mtime"])
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	mtime := time.Date(2026, 10, 1, 14, 0, 0, 500_000_000, time.FixedZone("CEST", 2*3600))
+	if err := newTestClient(srv).SetDataroomVersionClientMtime(context.Background(), "v-1", mtime); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The lookup by name hash goes through the listing route with name_hash (and
+// parent_id outside the root) and yields the single item, or nil.
+func TestFindDataroomNodeByHash(t *testing.T) {
+	parent := "p-1"
+	cases := map[string]struct {
+		parentID *string
+		items    []DataroomNodeItem
+		wantID   string
+		wantErr  bool
+	}{
+		"found in folder": {
+			parentID: &parent, items: []DataroomNodeItem{{Node: DataroomNode{ID: "n-1", NameHash: "h"}}}, wantID: "n-1",
+		},
+		"found at root": {items: []DataroomNodeItem{{Node: DataroomNode{ID: "n-2"}}}, wantID: "n-2"},
+		"none":          {},
+		"another hash":  {items: []DataroomNodeItem{{Node: DataroomNode{ID: "n-3", NameHash: "other"}}}, wantErr: true},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				q := r.URL.Query()
+				if r.URL.Path != "/dataroom/dr-1/nodes" || q.Get("name_hash") != "h" {
+					t.Errorf("request = %s %s", r.URL.Path, r.URL.RawQuery)
+				}
+				if got, want := q.Get("parent_id"), tc.parentID; (want == nil && got != "") || (want != nil && got != *want) {
+					t.Errorf("parent_id = %q, want %v", got, want)
+				}
+				_ = json.NewEncoder(w).Encode(DataroomNodePage{Items: tc.items, Total: len(tc.items), Page: 1, Pages: 1})
+			}))
+			defer srv.Close()
+			item, err := newTestClient(srv).FindDataroomNodeByHash(context.Background(), "dr-1", tc.parentID, "h")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			switch {
+			case tc.wantErr:
+			case tc.wantID == "" && item != nil:
+				t.Errorf("item = %+v, want nil", item)
+			case tc.wantID != "" && (item == nil || item.Node.ID != tc.wantID):
+				t.Errorf("item = %+v, want %s", item, tc.wantID)
+			}
+		})
+	}
+}
+
+func TestListDataroomMimeTypes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dataroom/dr-1/mime-types" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		fmt.Fprint(w, `[{"id":"mt-1","hash":"h1","name_enc":"e1"},{"id":"mt-2","hash":"h2","name_enc":"e2"}]`)
+	}))
+	defer srv.Close()
+	rows, err := newTestClient(srv).ListDataroomMimeTypes(context.Background(), "dr-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[1].ID != "mt-2" || rows[1].Hash != "h2" || rows[1].NameEnc != "e2" {
+		t.Errorf("rows = %+v", rows)
+	}
+}
+
+// An API that predates the MIME table answers 404 on the route, which callers
+// read as "legacy API" through ErrNotFound without ErrGone.
+func TestListDataroomMimeTypes_LegacyAPI(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"detail":"Not Found"}`, http.StatusNotFound)
+	}))
+	defer srv.Close()
+	_, err := newTestClient(srv).ListDataroomMimeTypes(context.Background(), "dr-1")
+	if !errors.Is(err, ErrNotFound) || errors.Is(err, ErrGone) {
+		t.Errorf("err = %v, want ErrNotFound and not ErrGone", err)
 	}
 }
 
@@ -585,8 +824,9 @@ func TestCreateDataroomFileNode(t *testing.T) {
 					t.Fatalf("ParseMultipartForm() error = %v", err)
 				}
 				want := map[string]string{
-					"name_enc": "N", "name_hash": "H", "type_enc": "T",
-					"original_size": "9", "overwrite": "true",
+					"name_enc": "N", "name_hash": "H", "mime_hash": "MH", "mime_name_enc": "MN", "type": "file",
+					"original_size": "9", "overwrite": "true", "access_mode": "0600",
+					"client_mtime": "2026-10-01T12:00:00Z",
 				}
 				if tc.parentID != nil {
 					want["parent_id"] = *tc.parentID
@@ -598,6 +838,9 @@ func TestCreateDataroomFileNode(t *testing.T) {
 				}
 				if _, ok := r.MultipartForm.Value["parent_id"]; ok && tc.parentID == nil {
 					t.Error("parent_id sent for a root file")
+				}
+				if _, ok := r.MultipartForm.Value["type_enc"]; ok {
+					t.Error("type_enc sent with mime_hash")
 				}
 				f, _, err := r.FormFile("upload_file")
 				switch {
@@ -619,8 +862,11 @@ func TestCreateDataroomFileNode(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			item, err := newTestClient(srv).CreateDataroomFileNode(context.Background(), "dr-1", tc.parentID,
-				"N", "H", "T", 9, true, tc.chunk)
+			mtime := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+			item, err := newTestClient(srv).CreateDataroomFileNode(context.Background(), "dr-1", FileNodeCreate{
+				ParentID: tc.parentID, NameEnc: "N", NameHash: "H", MIME: NodeMIME{Hash: "MH", NameEnc: "MN"},
+				OriginalSize: 9, Overwrite: true, AccessMode: "0600", ClientMtime: &mtime, Chunk: tc.chunk,
+			})
 			if err != nil {
 				t.Fatalf("CreateDataroomFileNode() error = %v", err)
 			}
@@ -649,7 +895,9 @@ func TestUploadRoutes_SendUnsafeWrite(t *testing.T) {
 		}))
 		c := New(srv.URL, "retyc-test/1.0", staticTokenSource(), false, false, WithUnsafeWrite(unsafe))
 		ctx := context.Background()
-		if _, err := c.CreateDataroomFileNode(ctx, "dr", nil, "N", "H", "T", 1, true, []byte("x")); err != nil {
+		if _, err := c.CreateDataroomFileNode(ctx, "dr", FileNodeCreate{
+			NameEnc: "N", NameHash: "H", MIME: NodeMIME{TypeEnc: "T"}, OriginalSize: 1, Overwrite: true, Chunk: []byte("x"),
+		}); err != nil {
 			t.Fatal(err)
 		}
 		if err := c.UploadDataroomChunk(ctx, "v", 0, []byte("x")); err != nil {

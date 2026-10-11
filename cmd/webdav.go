@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -80,10 +81,26 @@ type webdavFileInfo struct {
 	size        int64
 	isDir       bool
 	modTime     time.Time
-	nodeID      string // non-empty for file nodes
-	versionID   string // current version ID — avoids GetDataroomNode on download
-	chunkCount  int    // number of AGE-encrypted chunks
-	contentType string // decrypted MIME type from node metadata
+	mode        os.FileMode // permission bits stored with the node, 0 for the default
+	nodeID      string      // non-empty for file nodes
+	versionID   string      // current version ID — avoids GetDataroomNode on download
+	chunkCount  int         // number of AGE-encrypted chunks
+	contentType string      // decrypted MIME type from node metadata
+}
+
+// fileInfoFromNode builds the WebDAV view of a listed node.
+func fileInfoFromNode(n service.DataroomNodeInfo) *webdavFileInfo {
+	return &webdavFileInfo{
+		name:        n.Name,
+		size:        n.Size,
+		isDir:       n.Type == "dir",
+		modTime:     n.ModTime(),
+		mode:        n.Mode(),
+		nodeID:      n.ID,
+		versionID:   n.VersionID,
+		chunkCount:  n.ChunkCount,
+		contentType: n.MIMEType,
+	}
 }
 
 func (fi *webdavFileInfo) Name() string       { return fi.name }
@@ -91,12 +108,24 @@ func (fi *webdavFileInfo) Size() int64        { return fi.size }
 func (fi *webdavFileInfo) IsDir() bool        { return fi.isDir }
 func (fi *webdavFileInfo) ModTime() time.Time { return fi.modTime }
 func (fi *webdavFileInfo) Sys() any           { return nil }
+
+// Mode returns the node's stored permission bits, or 0644 / 0755 when the API
+// stores none. The setuid, setgid and sticky bits are never presented: a
+// remote file system has no business granting them.
 func (fi *webdavFileInfo) Mode() os.FileMode {
+	perm := fi.mode.Perm()
 	if fi.isDir {
-		return os.ModeDir | 0755
+		if perm == 0 {
+			perm = 0755
+		}
+
+		return os.ModeDir | perm
+	}
+	if perm == 0 {
+		perm = 0644
 	}
 
-	return 0644
+	return perm
 }
 
 // ETag implements webdav.ETager. The version ID identifies the file's content
@@ -485,6 +514,41 @@ type dirHandle struct {
 	offset  int
 	load    func() ([]os.FileInfo, error) // nil = entries already populated
 	loaded  bool
+	// quota reports the dataroom's storage counters (RFC 4331), nil for a
+	// folder outside a dataroom.
+	quota quotaFunc
+}
+
+// DeadProps implements webdav.DeadPropsHolder: a dataroom folder reports the
+// RFC 4331 quota properties (quota-used-bytes, quota-available-bytes), which
+// file managers read on the mount root to show the space left.
+func (h *dirHandle) DeadProps() (map[xml.Name]webdav.Property, error) {
+	if h.quota == nil {
+		return nil, nil
+	}
+	used, free, ok := h.quota()
+	if !ok {
+		return nil, nil
+	}
+	props := make(map[xml.Name]webdav.Property, 2)
+	for local, value := range quotaProps(used, free) {
+		name := xml.Name{Space: "DAV:", Local: local}
+		props[name] = webdav.Property{XMLName: name, InnerXML: []byte(value)}
+	}
+
+	return props, nil
+}
+
+// Patch implements webdav.DeadPropsHolder: no dead property is writable.
+func (h *dirHandle) Patch(patches []webdav.Proppatch) ([]webdav.Propstat, error) {
+	pstat := webdav.Propstat{Status: http.StatusForbidden}
+	for _, patch := range patches {
+		for _, p := range patch.Props {
+			pstat.Props = append(pstat.Props, webdav.Property{XMLName: p.XMLName})
+		}
+	}
+
+	return []webdav.Propstat{pstat}, nil
 }
 
 func (h *dirHandle) Close() error                       { return nil }
@@ -781,9 +845,16 @@ func (h *writeFileHandle) Stat() (os.FileInfo, error)           { return h.info,
 func (h *writeFileHandle) Readdir(_ int) ([]os.FileInfo, error) { return nil, os.ErrInvalid }
 
 // nodeCacheEntry caches the result of a ListNodes call for a given URI.
+//
+// etag is the ETag the API answered the listing with (the dataroom's
+// revision), "" when it sent none or when this server edited the listing in
+// place since. An expired listing that has one is refreshed with
+// If-None-Match: an unchanged dataroom answers 304, and the listing is kept
+// for another TTL at the cost of one round trip, no page and no decryption.
 type nodeCacheEntry struct {
 	nodes     []service.DataroomNodeInfo
 	fetchedAt time.Time
+	etag      string
 }
 
 // nodeFetch is an in-flight listing shared by every caller that misses the cache
@@ -848,6 +919,16 @@ type webdavFS struct {
 	// sessions holds one resolved session per dataroom for the life of the
 	// process (no TTL, single-flight, one scrypt at a time — see service.SessionCache).
 	sessions service.SessionCache
+
+	// quotaCache holds each dataroom's storage counters for the listing TTL
+	// (see dataroomQuota).
+	quotaMu    sync.Mutex
+	quotaCache map[string]quotaCacheEntry
+
+	// locks is the WebDAV lock system of the handler, which COPY must honour
+	// itself since it does not go through the handler (see confirmCopyLocks);
+	// nil checks nothing (tests).
+	locks webdav.LockSystem
 }
 
 var _ webdav.FileSystem = (*webdavFS)(nil)
@@ -1017,7 +1098,7 @@ func (fs *webdavFS) upsertNodeCacheLocked(uri string, node service.DataroomNodeI
 	fs.editNodeCacheLocked(uri, func(nodes []service.DataroomNodeInfo) []service.DataroomNodeInfo {
 		for i := range nodes {
 			if nodes[i].Name == node.Name {
-				nodes[i] = node
+				nodes[i] = keepMode(node, nodes[i])
 
 				return nodes
 			}
@@ -1092,7 +1173,7 @@ func (fs *webdavFS) initUpload(
 	parentID *string, size int64, sess *service.DataroomSession,
 ) (service.StreamUploadInit, error) {
 	if nodeID, ok := fs.cachedFileNodeID(drID, parentPath, fileName); ok {
-		init, err := service.AddVersionToNode(ctx, fs.client, nodeID, fileName, size, sess)
+		init, err := service.AddVersionToNodeIn(ctx, fs.client, drID, nodeID, fileName, size, sess)
 		if err == nil {
 			return init, nil
 		}
@@ -1262,10 +1343,7 @@ func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri str
 	}
 	slots := fs.refreshSlots
 
-	fetch := fs.listFn
-	if fetch == nil {
-		fetch = fs.fetchNodes
-	}
+	fetch := fs.listFn // nil: fetchNodes
 	detached := context.WithoutCancel(ctx)
 	link := trace.LinkFromContext(ctx)
 	go func() {
@@ -1287,11 +1365,19 @@ func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri str
 		// The generation is read when the fetch starts, not when it was
 		// queued: a mutation made through this server before that is in the
 		// API's answer, so only one landing during the fetch must discard it.
+		// The listing to revalidate is read with it: an edit made in place
+		// after that bumps the generation, and the answer is discarded.
 		fs.nodeMu.Lock()
 		gen := fs.nodeGen[uri]
+		held := fs.nodeCache[uri]
 		fs.nodeMu.Unlock()
 		fctx, cancel := context.WithTimeout(fctx, orDetachedFetchTimeout(fs.fetchTimeout))
-		f.nodes, f.err = fetch(fctx, drID, nodePath)
+		var etag string
+		if fetch != nil {
+			f.nodes, f.err = fetch(fctx, drID, nodePath)
+		} else {
+			f.nodes, etag, f.err = fs.fetchNodes(fctx, drID, nodePath, held)
+		}
 		cancel()
 		if span != nil {
 			telemetry.RecordError(span, f.err)
@@ -1306,7 +1392,7 @@ func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri str
 				if fs.nodeCache == nil {
 					fs.nodeCache = make(map[string]*nodeCacheEntry)
 				}
-				fs.nodeCache[uri] = &nodeCacheEntry{nodes: f.nodes, fetchedAt: time.Now()}
+				fs.nodeCache[uri] = &nodeCacheEntry{nodes: f.nodes, fetchedAt: time.Now(), etag: etag}
 			case errors.Is(f.err, os.ErrNotExist):
 				delete(fs.nodeCache, uri)
 			}
@@ -1332,44 +1418,59 @@ func (fs *webdavFS) nodeFetchLocked(ctx context.Context, drID, nodePath, uri str
 // pending, and the listing is retried once against a fresh parent listing. As
 // for RemoveAll and Rename, a folder moved elsewhere within that window is
 // listed at its new location until the parent listing is refreshed.
-func (fs *webdavFS) fetchNodes(ctx context.Context, drID, nodePath string) ([]service.DataroomNodeInfo, error) {
+//
+// held is the listing of the folder still in cache, nil when there is none.
+// When it carries an ETag the listing is conditional: a dataroom that has not
+// changed since answers 304 and held's nodes are returned as they are, with
+// the same ETag. A folder deleted elsewhere changed the dataroom, so it never
+// answers 304. The ETag returned is the one to keep with the nodes.
+func (fs *webdavFS) fetchNodes(
+	ctx context.Context, drID, nodePath string, held *nodeCacheEntry,
+) ([]service.DataroomNodeInfo, string, error) {
 	sess, err := fs.getSession(ctx, drID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	var heldETag string
+	if held != nil {
+		heldETag = held.etag
 	}
 
-	nodes, err := fs.fetchNodesOnce(ctx, drID, nodePath, sess)
+	nodes, etag, err := fs.fetchNodesOnce(ctx, drID, nodePath, sess, heldETag)
+	if errors.Is(err, api.ErrNotModified) {
+		return held.nodes, held.etag, nil
+	}
 	if errors.Is(err, api.ErrNotFound) && strings.Trim(nodePath, "/") != "" {
 		grandParent, _ := splitWebdavPath(nodePath)
 		fs.invalidateNodeCache(dataroomURI(drID, grandParent))
-		nodes, err = fs.fetchNodesOnce(ctx, drID, nodePath, sess)
+		nodes, etag, err = fs.fetchNodesOnce(ctx, drID, nodePath, sess, "")
 		if errors.Is(err, api.ErrNotFound) {
 			err = os.ErrNotExist
 		}
 	}
 
-	return nodes, err
+	return nodes, etag, err
 }
 
-// fetchNodesOnce resolves the folder ID of nodePath and lists its children.
+// fetchNodesOnce resolves the folder ID of nodePath and lists its children,
+// unless the dataroom still answers etag (api.ErrNotModified).
 func (fs *webdavFS) fetchNodesOnce(
-	ctx context.Context, drID, nodePath string, sess *service.DataroomSession,
-) ([]service.DataroomNodeInfo, error) {
+	ctx context.Context, drID, nodePath string, sess *service.DataroomSession, etag string,
+) ([]service.DataroomNodeInfo, string, error) {
 	folderID, err := fs.parentNodeID(ctx, drID, nodePath)
 	if errors.Is(err, os.ErrInvalid) {
 		// The path names a file, which has no children: not found (404), where
 		// ErrInvalid would reach the client as a 405.
-		return nil, os.ErrNotExist
+		return nil, "", os.ErrNotExist
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if folderID == nil {
-		return service.ListNodesByIDWithSession(ctx, fs.client, drID, nil, sess)
+	if folderID != nil {
+		trace.SpanFromContext(ctx).SetAttributes(telemetry.AttrNodeID.String(*folderID))
 	}
-	trace.SpanFromContext(ctx).SetAttributes(telemetry.AttrNodeID.String(*folderID))
 
-	return service.ListNodesByIDWithSession(ctx, fs.client, drID, folderID, sess)
+	return service.ListNodesByIDIfChanged(ctx, fs.client, drID, folderID, sess, etag)
 }
 
 // nodesToFileInfos converts a slice of DataroomNodeInfo to []os.FileInfo.
@@ -1384,16 +1485,7 @@ func nodesToFileInfos(nodes []service.DataroomNodeInfo) []os.FileInfo {
 
 			continue
 		}
-		infos = append(infos, &webdavFileInfo{
-			name:        n.Name,
-			size:        n.Size,
-			isDir:       n.Type == "dir",
-			modTime:     n.ModTime(),
-			nodeID:      n.ID,
-			versionID:   n.VersionID,
-			chunkCount:  n.ChunkCount,
-			contentType: n.MIMEType,
-		})
+		infos = append(infos, fileInfoFromNode(n))
 	}
 
 	return infos
@@ -1434,7 +1526,7 @@ func (fs *webdavFS) OpenFile(ctx context.Context, name string, flag int, perm os
 	}
 	wfi := info.(*webdavFileInfo)
 	if wfi.isDir {
-		return fs.openNodeDir(ctx, wfi.name, drID, subPath)
+		return fs.openNodeDirInfo(ctx, wfi, drID, subPath)
 	}
 	parentPath, _ := splitWebdavPath(subPath)
 
@@ -1468,9 +1560,22 @@ func (fs *webdavFS) openDataroomRootDir(ctx context.Context) (webdav.File, error
 	}, nil
 }
 
+// openNodeDir opens a folder that has no listed node of its own (the
+// dataroom root): no timestamp, no mode.
 func (fs *webdavFS) openNodeDir(ctx context.Context, displayName, drID, subPath string) (webdav.File, error) {
+	return fs.openNodeDirInfo(ctx, &webdavFileInfo{name: displayName, isDir: true}, drID, subPath)
+}
+
+// openNodeDirInfo opens a folder with the info its listing gave it. PROPFIND
+// reads a resource's properties from OpenFile(...).Stat(), not from
+// FileSystem.Stat, so the handle must carry the folder's modification time
+// and mode for them to be reported.
+func (fs *webdavFS) openNodeDirInfo(
+	ctx context.Context, info *webdavFileInfo, drID, subPath string,
+) (webdav.File, error) {
 	return &dirHandle{
-		info: &webdavFileInfo{name: displayName, isDir: true},
+		info:  info,
+		quota: quotaOnce(func() (int64, int64, bool) { return fs.dataroomQuota(ctx, drID) }),
 		load: func() ([]os.FileInfo, error) {
 			nodes, err := fs.listNodes(ctx, drID, subPath)
 			if err != nil {
@@ -2075,16 +2180,7 @@ func (fs *webdavFS) Stat(ctx context.Context, name string) (os.FileInfo, error) 
 		return nil, err
 	}
 
-	return &webdavFileInfo{
-		name:        n.Name,
-		size:        n.Size,
-		isDir:       n.Type == "dir",
-		modTime:     n.ModTime(),
-		nodeID:      n.ID,
-		versionID:   n.VersionID,
-		chunkCount:  n.ChunkCount,
-		contentType: n.MIMEType,
-	}, nil
+	return fileInfoFromNode(n), nil
 }
 
 // contentTypeForPath resolves the Content-Type for a GET/HEAD target, preferring
@@ -2338,9 +2434,11 @@ Example:
 		}
 		fs.cache.ttl, fs.cache.maxStale = cfg.Webdav.Cache.TTL, cfg.Webdav.Cache.MaxStale
 
+		lockSystem := webdav.NewMemLS()
+		fs.locks = lockSystem
 		handler := &webdav.Handler{
 			FileSystem: fs,
-			LockSystem: webdav.NewMemLS(),
+			LockSystem: lockSystem,
 			Logger: func(r *http.Request, err error) {
 				// URL.Path is percent-decoded: "%1b" arrives as a raw ESC.
 				if err != nil {
@@ -2353,12 +2451,17 @@ Example:
 			},
 		}
 
+		// WebDAV locks on files are mirrored onto the API's node locks, so other
+		// RETYC clients see them and theirs are honoured here (see lockMirror).
+		mirror := newLockMirror(fs, lockSystem)
+		davHandler := mirror.middleware(handler)
+
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "COPY" {
-				http.Error(w,
-					"COPY not supported: server-side copy is not available in the dataroom API",
-					http.StatusNotImplemented)
+				// Server-side copy: the storage duplicates the chunks, nothing
+				// transits through this process (see handleCopy).
+				fs.handleCopy(w, r)
 
 				return
 			}
@@ -2376,7 +2479,7 @@ Example:
 			if r.Method == "GET" || r.Method == "HEAD" {
 				w.Header().Set("Content-Type", fs.contentTypeForPath(r.Context(), r.URL.Path))
 			}
-			handler.ServeHTTP(w, r)
+			davHandler.ServeHTTP(w, r)
 		})
 
 		authEnabled, _ := cmd.Flags().GetBool("auth")
@@ -2457,6 +2560,10 @@ Example:
 				}
 			})
 		}
+
+		// Renew the mirrored server locks while the WebDAV locks stand, and
+		// release them on shutdown.
+		go mirror.run(ctx)
 
 		authErrCh := make(chan error, 1)
 		go tokenKeepalive(ctx, tokSrc, func(err error) {
