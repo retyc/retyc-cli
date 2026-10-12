@@ -6,29 +6,45 @@ import (
 	"testing"
 
 	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/spf13/viper"
 )
 
-// A prod binary always verifies TLS: `config show` must report the value it
-// acts on, and say that the configuration asked for something else.
-func TestConfigEntries_InsecureIgnoredInProd(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv("RETYC_INSECURE", "true")
-	config.SetDefaults()
+// insecure is not a setting of a prod binary: `config show` must not list it,
+// whether nothing asks for it, the environment does, or a config file does.
+func TestConfigEntries_NoInsecureInProd(t *testing.T) {
+	hasInsecure := func() bool {
+		for _, e := range configEntries() {
+			if e.Key == "insecure" {
+				return true
+			}
+		}
 
-	e := entryFor(t, "insecure")
-	if e.Value != "false" {
-		t.Errorf("insecure value = %q, want \"false\": a prod build ignores the setting", e.Value)
+		return false
 	}
-	if e.Note == "" {
-		t.Error("insecure note is empty, want an explanation that the setting is ignored")
-	}
-}
 
-func TestConfigEntries_InsecureNoNoteWhenUnsetInProd(t *testing.T) {
-	isolateConfig(t)
-	config.SetDefaults()
+	t.Run("unset", func(t *testing.T) {
+		isolateConfig(t)
+		config.SetDefaults()
+		if hasInsecure() {
+			t.Error("configEntries() lists insecure, want it absent from a prod build")
+		}
+	})
 
-	if e := entryFor(t, "insecure"); e.Value != "false" || e.Note != "" {
-		t.Errorf("insecure entry = %+v, want value \"false\" and no note when nothing asks for it", e)
-	}
+	t.Run("environment", func(t *testing.T) {
+		isolateConfig(t)
+		t.Setenv("RETYC_INSECURE", "true")
+		config.SetDefaults()
+		if hasInsecure() {
+			t.Error("configEntries() lists insecure set from RETYC_INSECURE, want it absent")
+		}
+	})
+
+	t.Run("config file", func(t *testing.T) {
+		isolateConfig(t)
+		config.SetDefaults()
+		viper.Set("insecure", true) // listed by AllKeys(), like a key read from config.yaml
+		if hasInsecure() {
+			t.Error("configEntries() lists insecure set in the configuration, want it absent")
+		}
+	})
 }

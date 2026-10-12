@@ -159,7 +159,10 @@ All overridable from `~/.config/retyc/config.yaml` (prod) or `.retyc/config.yaml
 - `retyc config show` / `retyc config path` print the effective values and the
   file locations. viper does not report which source won, so `show` is labelled
   "effective value", not "origin". `insecure` is read from the Go variable, not
-  viper, because only the variable sees `-k`.
+  viper, because only the variable sees `-k`. A prod build has no `insecure`
+  key at all: no default (`setBuildDefaults`, `paths_prod.go`), `config show`
+  leaves it out even when a config file carries it (`hiddenConfigKey`), and a
+  requested `insecure` is ignored silently.
 - A config file that exists but fails to load (unreadable `--config` path, YAML
   error) is still skipped — defaults and env apply — but no longer silently:
   `initConfig` keeps the error in `configFileErr`, printed by `config path`
@@ -172,8 +175,9 @@ Adding a config key: `viper.SetDefault` in `SetDefaults()`, a field in the
 The `SetDefault` is **mandatory, even for a zero value**: `viper.AllKeys()` only
 reports keys that carry a default, so a key without one is invisible to
 `retyc config show` and to `TestEnvVarsDocumented` — it would silently escape
-the documentation check. This is why `insecure` has a `SetDefault(false)` even
-though it is a dev-only flag.
+the documentation check. This is why `insecure` has a `SetDefault(false)`, in
+`setBuildDefaults` of `paths_dev.go` only: a key that exists in one build mode
+gets its default there, not in `SetDefaults()`.
 
 ## JSON output (`--json`)
 

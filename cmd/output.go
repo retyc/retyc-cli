@@ -115,13 +115,11 @@ type configPathJSON struct {
 
 // configEntryJSON is one effective configuration key in `retyc config show`.
 // Secret values are masked: Value carries a fixed placeholder when the key is
-// set, and "" when it is not. Note flags a value that the running binary does
-// not act on, such as `insecure` in a prod build.
+// set, and "" when it is not.
 type configEntryJSON struct {
 	Key    string `json:"key"`
 	Value  string `json:"value"`
 	Secret bool   `json:"secret"`
-	Note   string `json:"note,omitempty"`
 }
 
 // nonNil returns s, or an empty slice when s is nil (→ [] not null).

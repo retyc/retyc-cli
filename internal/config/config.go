@@ -148,9 +148,7 @@ func SetDefaults() {
 	viper.SetDefault("api.concurrency.upload", DefaultConcurrency)
 	viper.SetDefault("api.concurrency.download", DefaultConcurrency)
 	viper.SetDefault("api.unsafe_write", false)
-	// Dev builds only (see cmd/insecure_dev.go). Registered unconditionally so
-	// that the key appears in viper.AllKeys() and stays documented.
-	viper.SetDefault("insecure", false)
+	setBuildDefaults()
 	viper.SetDefault("keyring.enabled", true)
 	viper.SetDefault("keyring.ttl", 60)
 	viper.SetDefault("admin.base_url", "")

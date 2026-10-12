@@ -15,6 +15,10 @@ func init() {
 		"skip TLS certificate verification (useful for self-signed certificates)")
 }
 
+// hiddenConfigKey reports whether `config show` leaves key out: a development
+// build acts on every key.
+func hiddenConfigKey(string) bool { return false }
+
 // setInsecureFromConfig applies the "insecure" value from the config file or
 // environment variable when the flag was not explicitly provided on the command line.
 func setInsecureFromConfig() {

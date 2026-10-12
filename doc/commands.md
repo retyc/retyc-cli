@@ -44,8 +44,7 @@ supervisor restarting `retyc webdav serve` should stop on them rather than retry
 | `retyc config path` | Config directory, config file actually loaded, and token file in use      |
 
 Both accept `--json`. `config show` returns `{"items": [{"key", "value",
-"secret", "note"}]}`; a value the running build ignores carries a `note` (a
-prod binary always verifies TLS, so `insecure` is reported as ignored).
+"secret"}]}`.
 `config path` returns `{"config_dir", "config_file", "config_file_error",
 "token_file"}`: `config_file` is empty when no config file was loaded, and
 `config_file_error` (omitted otherwise) says why a config file that exists was
