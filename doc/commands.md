@@ -89,6 +89,7 @@ Glob patterns (`*`, `?`, `[...]`) are supported in remote paths.
 | `retyc dataroom info <id>`                                            | Show dataroom details, stats and members |
 | `retyc dataroom cp <local…> retyc://<id>/<dest>`                      | Upload files or directories              |
 | `retyc dataroom cp retyc://<id>/<path> <local-dir>`                   | Download a file                          |
+| `retyc dataroom cp retyc://<id>/<src> retyc://<id>/<dst>`             | Copy a file on the server (same dataroom, nothing downloaded) |
 | `retyc dataroom mv retyc://<id>/<src> retyc://<id>/<dst>`             | Rename or move a node                    |
 | `retyc dataroom rm retyc://<id>`                                      | Delete the entire dataroom               |
 | `retyc dataroom rm retyc://<id>/<path>`                               | Delete a node (supports globs)           |
@@ -195,7 +196,7 @@ retyc dataroom create --title "Project Alpha"
 # Upload a release directory
 retyc dataroom cp ./dist/ retyc://019d3de3-.../releases/
 
-# List contents
+# List contents (TYPE is DIR, FILE or LINK; a symlink shows as "name -> target")
 retyc dataroom ls retyc://019d3de3-.../releases/
 
 # Download a specific file

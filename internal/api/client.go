@@ -145,6 +145,26 @@ func (c *Client) Get(ctx context.Context, path string, dst any) error {
 	return c.do(req, dst)
 }
 
+// getIfNoneMatch is Get for a resource the API tags with an ETag: etag, when
+// not empty, is sent as If-None-Match, and the ETag of the answer is returned
+// ("" when the API sends none). A 304 answers ErrNotModified, dst untouched.
+func (c *Client) getIfNoneMatch(ctx context.Context, path, etag string, dst any) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	header, err := c.doHeader(req, dst)
+	if err != nil {
+		return "", err
+	}
+
+	return header.Get("ETag"), nil
+}
+
 // Post performs an authenticated POST request with a JSON body and decodes the response.
 func (c *Client) Post(ctx context.Context, path string, body io.Reader, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, body)
@@ -304,19 +324,26 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 // do executes the request and decodes the response body into dst (if non-nil).
 // It returns an error for non-2xx status codes.
 func (c *Client) do(req *http.Request, dst any) error {
+	_, err := c.doHeader(req, dst)
+
+	return err
+}
+
+// doHeader is do, also returning the headers of a 2xx response.
+func (c *Client) doHeader(req *http.Request, dst any) (http.Header, error) {
 	if c.debug {
 		fmt.Fprintf(os.Stderr, "> %s %s%s\n", req.Method, req.URL, ProxyLabel(req))
 	}
 
 	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: intentional outbound HTTP request from API client
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("reading response: %w", err)
+		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
 	if c.debug {
@@ -332,30 +359,88 @@ func (c *Client) do(req *http.Request, dst any) error {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return statusError(resp.StatusCode, body)
+		return nil, statusError(resp.StatusCode, body)
 	}
 
 	if dst != nil {
 		if err := json.Unmarshal(body, dst); err != nil {
-			return fmt.Errorf("decoding response: %w", err)
+			return nil, fmt.Errorf("decoding response: %w", err)
 		}
 	}
 
-	return nil
+	return resp.Header, nil
 }
 
-// statusError builds the error of a non-2xx response. The sentinels are
-// wrapped at the end so the message keeps its "API error <code>: " prefix;
-// a 410 matches both ErrGone and ErrNotFound (see ErrGone).
-func statusError(code int, body []byte) error {
-	switch code {
+// HTTPError is the error of a non-2xx response. It matches the sentinels of
+// its status through errors.Is (ErrConflict for 409, ErrNotFound for 404 and
+// 410, ErrGone for 410, ErrLocked for 423, ErrNotModified for 304) and exposes
+// the status and body for callers that need to tell apart two refusals with
+// the same status (see Detail).
+type HTTPError struct {
+	Status int
+	Body   string
+}
+
+// Error keeps the historical messages: "conflict: <body>" for a 409,
+// "API error <code>: <body>" otherwise.
+func (e *HTTPError) Error() string {
+	switch e.Status {
 	case http.StatusConflict:
-		return fmt.Errorf("%w: %s", ErrConflict, string(body))
+		return fmt.Sprintf("%s: %s", ErrConflict, e.Body)
 	case http.StatusNotFound:
-		return fmt.Errorf("API error %d: %s: %w", code, string(body), ErrNotFound)
+		return fmt.Sprintf("API error %d: %s: %s", e.Status, e.Body, ErrNotFound)
 	case http.StatusGone:
-		return fmt.Errorf("API error %d: %s: %w: %w", code, string(body), ErrGone, ErrNotFound)
+		return fmt.Sprintf("API error %d: %s: %s: %s", e.Status, e.Body, ErrGone, ErrNotFound)
 	default:
-		return fmt.Errorf("API error %d: %s", code, string(body))
+		return fmt.Sprintf("API error %d: %s", e.Status, e.Body)
 	}
+}
+
+// Is reports the sentinel(s) of the status, so errors.Is keeps working on an
+// HTTPError exactly as it did on the wrapped sentinels.
+func (e *HTTPError) Is(target error) bool {
+	switch target {
+	case ErrConflict:
+		return e.Status == http.StatusConflict
+	case ErrNotFound:
+		return e.Status == http.StatusNotFound || e.Status == http.StatusGone
+	case ErrGone:
+		return e.Status == http.StatusGone
+	case ErrLocked:
+		return e.Status == http.StatusLocked
+	case ErrNotModified:
+		return e.Status == http.StatusNotModified
+	default:
+		return false
+	}
+}
+
+// Detail returns the "detail" string of a JSON error body ({"detail": "..."}),
+// the form the API uses for its stable refusal codes (mime_type_unknown,
+// mime_types_limit, ...), or "" when the body has no such string.
+func (e *HTTPError) Detail() string {
+	var payload struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(e.Body), &payload); err != nil {
+		return ""
+	}
+
+	return payload.Detail
+}
+
+// ErrorDetail returns the detail code of the HTTPError in err's chain, or ""
+// when err is not an API refusal or carries no string detail.
+func ErrorDetail(err error) string {
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.Detail()
+	}
+
+	return ""
+}
+
+// statusError builds the error of a non-2xx response.
+func statusError(code int, body []byte) error {
+	return &HTTPError{Status: code, Body: string(body)}
 }
