@@ -7,6 +7,8 @@
 
 package config
 
+import "github.com/spf13/viper"
+
 // BuildMode identifies the active build configuration.
 const BuildMode = "dev"
 
@@ -20,4 +22,11 @@ func configDir() (string, error) {
 	}
 
 	return ".retyc", nil
+}
+
+// setBuildDefaults registers the keys that only a development build acts on.
+// The default is what makes "insecure" appear in viper.AllKeys(), hence in
+// `retyc config show` and in the documentation check.
+func setBuildDefaults() {
+	viper.SetDefault("insecure", false)
 }

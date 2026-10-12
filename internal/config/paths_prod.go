@@ -29,3 +29,7 @@ func configDir() (string, error) {
 	}
 	return filepath.Join(base, "retyc"), nil
 }
+
+// setBuildDefaults registers nothing: a production build has no key of its
+// own, and "insecure" does not exist there (see cmd/insecure_prod.go).
+func setBuildDefaults() {}

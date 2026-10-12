@@ -18,7 +18,7 @@ func TestConfigEntries_InsecureReflectsFlag(t *testing.T) {
 	t.Cleanup(func() { insecure = prev })
 	insecure = true // what -k leaves behind after initConfig
 
-	if e := entryFor(t, "insecure"); e.Value != "true" || e.Note != "" {
-		t.Errorf("insecure entry = %+v, want value \"true\" and no note", e)
+	if e := entryFor(t, "insecure"); e.Value != "true" {
+		t.Errorf("insecure entry = %+v, want value \"true\"", e)
 	}
 }

@@ -95,11 +95,7 @@ effective value is shown. Secrets are masked.`,
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		for _, e := range entries {
-			note := ""
-			if e.Note != "" {
-				note = "  (" + e.Note + ")"
-			}
-			fmt.Fprintf(w, "%s\t%s%s\n", e.Key, e.Value, note)
+			fmt.Fprintf(w, "%s\t%s\n", e.Key, e.Value)
 		}
 
 		return w.Flush()
@@ -114,13 +110,16 @@ func configEntries() []configEntryJSON {
 
 	entries := make([]configEntryJSON, 0, len(keys))
 	for _, k := range keys {
+		if hiddenConfigKey(k) {
+			continue
+		}
 		value := effectiveValue(k)
 		secret := secretKeys[k]
 		if secret && value != "" {
 			value = maskedValue
 		}
 		entries = append(entries, configEntryJSON{
-			Key: k, Value: value, Secret: secret, Note: entryNote(k),
+			Key: k, Value: value, Secret: secret,
 		})
 	}
 
@@ -131,8 +130,8 @@ func configEntries() []configEntryJSON {
 //
 // insecure is the one key a flag can override, and viper cannot see -k:
 // setInsecureFromConfig has already merged the flag, the environment and the
-// config file into the insecure variable. In a prod build that variable is a
-// const false (cmd/insecure_prod.go), which is precisely the effective value.
+// config file into the insecure variable. A prod build never gets here for
+// that key (hiddenConfigKey).
 func effectiveValue(key string) string {
 	if key == "insecure" {
 		return strconv.FormatBool(insecure)
@@ -145,16 +144,6 @@ func effectiveValue(key string) string {
 	}
 
 	return viper.GetString(key)
-}
-
-// entryNote explains an effective value that differs from what the
-// configuration asks for: a prod binary ignores insecure.
-func entryNote(key string) string {
-	if key == "insecure" && config.BuildMode == "prod" && viper.GetBool("insecure") {
-		return "set in the configuration, ignored: prod build always verifies TLS"
-	}
-
-	return ""
 }
 
 func init() {
