@@ -19,19 +19,15 @@ jobs:
     name: CI
     uses: ./.github/workflows/_ci.yml
 
-  docker-latest:
-    name: Docker latest
+  # Builds the image everywhere, pushes it (as `master`) from the default branch
+  # only. `latest` belongs to the release workflow.
+  docker:
+    name: Docker
     needs: ci
-    if: >-
-      github.event_name == 'push'
-      && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/_docker.yml
     with:
-      tags: |
-        ghcr.io/retyc/retyc-cli:latest
-        retyc/retyc-cli:latest
-      version: latest
+      push: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
     secrets: inherit
