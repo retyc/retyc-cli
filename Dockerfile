@@ -1,13 +1,20 @@
-FROM golang:1.26.9 AS builder
+# The builder always runs on the build host's architecture and cross-compiles
+# for the target one: no emulation, the arm64 image costs the same as amd64.
+FROM --platform=$BUILDPLATFORM golang:1.26.9 AS builder
 
 ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -tags prod \
     -ldflags "-s -w -X github.com/retyc/retyc-cli/cmd.Version=${VERSION}" \
     -o /retyc .

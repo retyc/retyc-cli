@@ -40,3 +40,10 @@ docker pull retyc/retyc-cli:latest
 # GitHub Container Registry
 docker pull ghcr.io/retyc/retyc-cli:latest
 ```
+
+| Tag | Content |
+|---|---|
+| `latest` | Latest stable release |
+| `vX.Y.Z` | That release; pre-releases (`vX.Y.Z-rc1`, `-beta1`) are published under their own tag only |
+| `master` | Head of the `master` branch, not released — for testing only |
+| `commit-<sha>` | One-off build of a single commit, GitHub Container Registry only — for testing only |

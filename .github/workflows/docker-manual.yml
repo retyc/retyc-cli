@@ -1,0 +1,23 @@
+name: Docker (manual)
+
+# Builds the image of any branch on demand — Actions tab, or
+#   gh workflow run docker-manual.yml --ref <branch> [-f push=true]
+# With `push`, the image goes to GHCR only, tagged commit-<short sha>.
+on:
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push the image to GHCR as commit-<short sha>"
+        type: boolean
+        default: false
+
+jobs:
+  docker:
+    name: Docker
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/_docker.yml
+    with:
+      push: ${{ inputs.push }}
+    secrets: inherit

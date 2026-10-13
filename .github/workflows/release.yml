@@ -17,13 +17,6 @@ jobs:
       packages: write
       id-token: write
     uses: ./.github/workflows/_docker.yml
-    with:
-      tags: |
-        ghcr.io/retyc/retyc-cli:${{ github.ref_name }}
-        ghcr.io/retyc/retyc-cli:latest
-        retyc/retyc-cli:${{ github.ref_name }}
-        retyc/retyc-cli:latest
-      version: ${{ github.ref_name }}
     secrets: inherit
 
   goreleaser:
