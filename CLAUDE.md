@@ -500,11 +500,21 @@ session public key, calls `PUT /dataroom/node/{id}`.
 ### `dataroom mkdir retyc://id/path`
 Creates directory node. Parent path must exist.
 
-### `dataroom create --title <title>`
+### `dataroom create --title <title> [--versioning=false] [--storage-capacity SIZE]`
 1. `GET /user/me/key/active` → user's public key
 2. Generate session keypair
 3. `EncryptStringForKeys(sessionPrivKey, [userPublicKey])` → `session_private_key_enc`
-4. `POST /dataroom` with title, session_private_key_enc, session_public_key
+4. `POST /dataroom` with title, session_private_key_enc, session_public_key, and
+   `versioning_enabled` / `storage_capacity` only when their flag is set (`api.DataroomOptions`)
+
+### `dataroom set <id|retyc://id> [--title T] [--versioning=true|false] [--storage-capacity SIZE] [-y]`
+`PATCH /dataroom/{id}` (`updateDataroom`, `api.DataroomUpdate`): only the flags set are
+sent, none → "nothing to update". `--versioning`/`--storage-capacity` are shared with
+`create` (`addDataroomOptionFlags` / `dataroomOptionsFromFlags`). Sizes go through
+`ui.ParseSize`: binary units only (`50G` = `50GiB` = 50×1024³), `GB`/`KB` refused.
+`--versioning=false` asks for confirmation (`confirm`, `-y`). The API refuses to shrink a
+capacity; the CLI does not pre-check. `session_private_key_enc` is not exposed (rekey is
+`dataroom user add/rm`). No crypto, no MCP tool.
 
 ### `dataroom info <id>`
 Parallel fetch of `GET /dataroom/{id}`, `GET /dataroom/{id}/stats`,

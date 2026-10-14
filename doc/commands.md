@@ -84,8 +84,9 @@ Glob patterns (`*`, `?`, `[...]`) are supported in remote paths.
 |-----------------------------------------------------------------------|------------------------------------------|
 | `retyc dataroom ls`                                                   | List all your datarooms                  |
 | `retyc dataroom ls retyc://<id>[/path]`                               | List nodes at a path (supports globs)    |
-| `retyc dataroom create --title <title>`                               | Create a new dataroom                    |
+| `retyc dataroom create --title <title> [--versioning=false] [--storage-capacity SIZE]` | Create a new dataroom |
 | `retyc dataroom info <id>`                                            | Show dataroom details, stats and members |
+| `retyc dataroom set <id> [--title T] [--versioning=true\|false] [--storage-capacity SIZE]` | Change title, versioning or storage capacity |
 | `retyc dataroom cp <local…> retyc://<id>/<dest>`                      | Upload files or directories              |
 | `retyc dataroom cp retyc://<id>/<path> <local-dir>`                   | Download a file                          |
 | `retyc dataroom cp retyc://<id>/<src> retyc://<id>/<dst>`             | Copy a file on the server (same dataroom, nothing downloaded) |
@@ -191,6 +192,12 @@ Requires `RETYC_KEY_PASSPHRASE`. Datarooms appear under `/dataroom`.
 ```sh
 # Create a dataroom (title is required)
 retyc dataroom create --title "Project Alpha"
+
+# Create one with a 50 GiB reservation and a single version per file
+retyc dataroom create --title "Scans" --storage-capacity 50G --versioning=false
+
+# Rename it, enlarge its reservation (sizes are binary: 100G = 100GiB)
+retyc dataroom set 019d3de3-... --title "Scans 2026" --storage-capacity 100G
 
 # Upload a release directory
 retyc dataroom cp ./dist/ retyc://019d3de3-.../releases/

@@ -1157,10 +1157,11 @@ func ListDatarooms(ctx context.Context, client *api.Client) (*ListDataroomsResul
 	return &ListDataroomsResult{Items: items, Total: len(items)}, nil
 }
 
-// CreateDataroom creates a new dataroom with the given title.
+// CreateDataroom creates a new dataroom with the given title and settings.
 // reader is used to obtain the user's AGE key passphrase.
 func CreateDataroom(
-	ctx context.Context, cfg *config.Config, client *api.Client, title string, reader PassphraseReader,
+	ctx context.Context, cfg *config.Config, client *api.Client, title string, opts api.DataroomOptions,
+	reader PassphraseReader,
 ) (*CreateDataroomResult, error) {
 	userKey, err := client.GetActiveKey(ctx)
 	if err != nil {
@@ -1192,12 +1193,25 @@ func CreateDataroom(
 		return nil, fmt.Errorf("encrypting name salt: %w", err)
 	}
 
-	dr, err := client.CreateDataroom(ctx, title, sessionPrivKeyEnc, sessionPubKey, &nameSaltEnc)
+	dr, err := client.CreateDataroom(ctx, title, sessionPrivKeyEnc, sessionPubKey, &nameSaltEnc, opts)
 	if err != nil {
 		return nil, fmt.Errorf("creating dataroom: %w", err)
 	}
 
 	return &CreateDataroomResult{ID: dr.ID, Title: dr.Title}, nil
+}
+
+// UpdateDataroom changes a dataroom's title or settings; only the fields set in
+// u are sent. It returns the dataroom as stored.
+func UpdateDataroom(
+	ctx context.Context, client *api.Client, dataroomID string, u api.DataroomUpdate,
+) (*api.Dataroom, error) {
+	dr, err := client.UpdateDataroom(ctx, dataroomID, u)
+	if err != nil {
+		return nil, fmt.Errorf("updating dataroom: %w", err)
+	}
+
+	return dr, nil
 }
 
 // GetDataroomInfo fetches metadata, stats, and users for a dataroom in parallel.

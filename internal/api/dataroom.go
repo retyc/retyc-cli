@@ -341,6 +341,20 @@ func (c *Client) GetDataroomStats(ctx context.Context, dataroomID string) (*Data
 	return &result, nil
 }
 
+// UpdateDataroom applies a partial update to a dataroom and returns it as stored.
+func (c *Client) UpdateDataroom(ctx context.Context, dataroomID string, u DataroomUpdate) (*Dataroom, error) {
+	data, err := json.Marshal(u)
+	if err != nil {
+		return nil, err
+	}
+	var result Dataroom
+	if err := c.Patch(ctx, "/dataroom/"+dataroomID, bytes.NewReader(data), &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 // GetDataroomUsers returns all members of a dataroom.
 func (c *Client) GetDataroomUsers(ctx context.Context, dataroomID string) ([]DataroomUser, error) {
 	var result []DataroomUser
@@ -351,10 +365,29 @@ func (c *Client) GetDataroomUsers(ctx context.Context, dataroomID string) ([]Dat
 	return result, nil
 }
 
+// DataroomOptions are the dataroom settings a creation or an update may set;
+// nil fields are not sent and keep the server default or current value.
+type DataroomOptions struct {
+	// VersioningEnabled false keeps one complete version per file, the last
+	// one written.
+	VersioningEnabled *bool `json:"versioning_enabled,omitempty"`
+	// StorageCapacity reserves bytes on the owner's plan (thick provisioning).
+	// An update can only enlarge it.
+	StorageCapacity *int64 `json:"storage_capacity,omitempty"`
+}
+
+// DataroomUpdate is a partial dataroom update (PATCH /dataroom/{id}); nil
+// fields are not sent.
+type DataroomUpdate struct {
+	Title *string `json:"title,omitempty"`
+	DataroomOptions
+}
+
 // CreateDataroom creates a new dataroom with the given title, session keypair, and
 // optionally an encrypted name salt (nodeNameSaltEnc). Pass nil to omit the salt.
 func (c *Client) CreateDataroom(
 	ctx context.Context, title, sessionPrivKeyEnc, sessionPubKey string, nodeNameSaltEnc *string,
+	opts DataroomOptions,
 ) (*Dataroom, error) {
 	body := map[string]any{
 		"title":                   title,
@@ -363,6 +396,12 @@ func (c *Client) CreateDataroom(
 	}
 	if nodeNameSaltEnc != nil {
 		body["node_name_salt_enc"] = *nodeNameSaltEnc
+	}
+	if opts.VersioningEnabled != nil {
+		body["versioning_enabled"] = *opts.VersioningEnabled
+	}
+	if opts.StorageCapacity != nil {
+		body["storage_capacity"] = *opts.StorageCapacity
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
