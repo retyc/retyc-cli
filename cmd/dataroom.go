@@ -15,6 +15,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var dataroomCmd = &cobra.Command{
@@ -49,7 +50,7 @@ var dataroomLsCmd = &cobra.Command{
 				return err
 			}
 			if jsonOutput {
-				return printJSON(newPagedJSON(result.Items, result.Total, result.Page, result.Pages))
+				return printJSON(newItemsJSON(result.Items))
 			}
 			if len(result.Items) == 0 {
 				fmt.Println("No datarooms found.")
@@ -57,18 +58,16 @@ var dataroomLsCmd = &cobra.Command{
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "DATAROOM ID\tTITLE\tCREATED")
+			fmt.Fprintln(w, "DATAROOM ID\tTITLE\tROLE\tCREATED")
 			for _, dr := range result.Items {
-				fmt.Fprintf(w, "%s\t%s\t%s\n",
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 					dr.ID,
 					ui.Escape(dr.Title),
+					dr.Role,
 					dr.CreatedAt.Format("2006-01-02 15:04"),
 				)
 			}
 			_ = w.Flush()
-			if result.Pages > 1 {
-				fmt.Printf("\nPage 1/%d · %d dataroom(s) total\n", result.Pages, result.Total)
-			}
 
 			return nil
 		}
@@ -117,10 +116,14 @@ var dataroomLsCmd = &cobra.Command{
 // — dataroom create ——————————————————————————————————————————————————————————
 
 var dataroomCreateCmd = &cobra.Command{
-	Use:   "create --title <title>",
+	Use:   "create --title <title> [--versioning=false] [--storage-capacity SIZE]",
 	Short: "Create a new dataroom",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		title, _ := cmd.Flags().GetString("title")
+		opts, err := dataroomOptionsFromFlags(cmd.Flags())
+		if err != nil {
+			return err
+		}
 
 		ctx := cmd.Context()
 		cfg, client, err := newAPIClient(ctx)
@@ -130,7 +133,7 @@ var dataroomCreateCmd = &cobra.Command{
 
 		s := ui.NewSpinner()
 		s.Start()
-		result, err := service.CreateDataroom(ctx, cfg, client, title, spinnerReader(s))
+		result, err := service.CreateDataroom(ctx, cfg, client, title, opts, spinnerReader(s))
 		s.Stop()
 		if err != nil {
 			return err
@@ -146,6 +149,123 @@ var dataroomCreateCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// — dataroom set —————————————————————————————————————————————————————————————
+
+var dataroomSetCmd = &cobra.Command{
+	Use:   "set <dataroom_id|retyc://dataroom_id> [--title T] [--versioning=true|false] [--storage-capacity SIZE]",
+	Short: "Change a dataroom's title, versioning or storage capacity (only the flags you set are sent)",
+	Long: `Change a dataroom's title, versioning or storage capacity. Only the flags you set are sent.
+
+--versioning=false keeps one complete version per file: nothing is purged at once,
+but the next completed upload of a file deletes its older versions.
+
+--storage-capacity reserves space on the owner's plan (binary units: 50G = 50GiB =
+50×1024³ bytes). A reservation can only be enlarged, never shrunk.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dataroomID, err := dataroomIDArg(args[0])
+		if err != nil {
+			return err
+		}
+		var update api.DataroomUpdate
+		if cmd.Flags().Changed("title") {
+			title, _ := cmd.Flags().GetString("title")
+			update.Title = &title
+		}
+		if update.DataroomOptions, err = dataroomOptionsFromFlags(cmd.Flags()); err != nil {
+			return err
+		}
+		if update.Title == nil && update.VersioningEnabled == nil && update.StorageCapacity == nil {
+			return fmt.Errorf("nothing to update: set at least one of --title, --versioning, --storage-capacity")
+		}
+		if update.VersioningEnabled != nil && !*update.VersioningEnabled {
+			yes, _ := cmd.Flags().GetBool("yes")
+			ok, err := confirm("Disable versioning? The next completed upload of each file deletes its older versions.", yes)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				fmt.Fprintln(os.Stderr, "Aborted.")
+
+				return nil
+			}
+		}
+
+		ctx := cmd.Context()
+		_, client, err := newAPIClient(ctx)
+		if err != nil {
+			return err
+		}
+		s := ui.NewSpinner()
+		s.Start()
+		dr, err := service.UpdateDataroom(ctx, client, dataroomID, update)
+		s.Stop()
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(dr)
+		}
+		fmt.Printf("Dataroom %s updated.\n", dr.ID)
+		fmt.Printf("Title: %s\n", ui.Escape(dr.Title))
+		if dr.Versioning() {
+			fmt.Println("Versioning: enabled")
+		} else {
+			fmt.Println("Versioning: disabled")
+		}
+		if dr.StorageCapacity != nil {
+			fmt.Printf("Storage capacity: %s\n", ui.FormatSize(*dr.StorageCapacity))
+		} else {
+			fmt.Println("Storage capacity: none (counts against the owner's plan)")
+		}
+
+		return nil
+	},
+}
+
+// addDataroomOptionFlags registers the dataroom settings shared by create and set.
+func addDataroomOptionFlags(flags *pflag.FlagSet) {
+	// Only read when set: no default shown, so set does not suggest it turns versioning on.
+	flags.Bool("versioning", false, "Keep every version of a file; --versioning=false keeps one complete version per file")
+	flags.String("storage-capacity", "", "Space reserved on the owner's plan, binary units (e.g. 50G, 50GiB, 1.5TiB)")
+}
+
+// dataroomOptionsFromFlags returns the dataroom settings whose flags were set.
+func dataroomOptionsFromFlags(flags *pflag.FlagSet) (api.DataroomOptions, error) {
+	var opts api.DataroomOptions
+	if flags.Changed("versioning") {
+		v, _ := flags.GetBool("versioning")
+		opts.VersioningEnabled = &v
+	}
+	if flags.Changed("storage-capacity") {
+		raw, _ := flags.GetString("storage-capacity")
+		size, err := ui.ParseSize(raw)
+		if err != nil {
+			return opts, fmt.Errorf("--storage-capacity: %w", err)
+		}
+		opts.StorageCapacity = &size
+	}
+
+	return opts, nil
+}
+
+// dataroomIDArg accepts a bare dataroom ID or its root URI retyc://<id>.
+func dataroomIDArg(arg string) (string, error) {
+	if !strings.HasPrefix(arg, "retyc://") {
+		return arg, nil
+	}
+	uri, err := service.ParseRetycURI(arg)
+	if err != nil {
+		return "", err
+	}
+	if !uri.IsRoot() {
+		return "", fmt.Errorf("%q names a path, expected a dataroom (retyc://<id>)", arg)
+	}
+
+	return uri.DataroomID, nil
 }
 
 // — dataroom info ————————————————————————————————————————————————————————————
@@ -646,6 +766,11 @@ var dataroomMkdirCmd = &cobra.Command{
 func init() {
 	dataroomCreateCmd.Flags().String("title", "", "Title of the dataroom")
 	_ = dataroomCreateCmd.MarkFlagRequired("title")
+	addDataroomOptionFlags(dataroomCreateCmd.Flags())
+
+	dataroomSetCmd.Flags().String("title", "", "New title of the dataroom")
+	addDataroomOptionFlags(dataroomSetCmd.Flags())
+	dataroomSetCmd.Flags().BoolP("yes", "y", false, "Skip the confirmation when disabling versioning")
 
 	dataroomUserAddCmd.Flags().String("role", "viewer", "Role: viewer, editor, or admin")
 
@@ -659,6 +784,7 @@ func init() {
 	dataroomCmd.AddCommand(dataroomLsCmd)
 	dataroomCmd.AddCommand(dataroomCreateCmd)
 	dataroomCmd.AddCommand(dataroomInfoCmd)
+	dataroomCmd.AddCommand(dataroomSetCmd)
 	dataroomCmd.AddCommand(dataroomCpCmd)
 	dataroomCmd.AddCommand(dataroomMvCmd)
 	dataroomCmd.AddCommand(dataroomRmCmd)

@@ -22,6 +22,20 @@ type Dataroom struct {
 	// the per-dataroom salt used as prefix for node name hashing. Nil when not set.
 	NodeNameSaltEnc *string   `json:"node_name_salt_enc"`
 	CreatedAt       time.Time `json:"created_at"`
+	// ExpiresAt and DeletedAt are nil when the dataroom has no expiry or is
+	// not deleted.
+	ExpiresAt *time.Time `json:"expires_at"`
+	DeletedAt *time.Time `json:"deleted_at"`
+	// Role is the current user's role: owner, admin, editor, contributor or
+	// viewer. Empty on an API that predates the field.
+	Role string `json:"role,omitempty"`
+	// Status is active, expired or deleted.
+	Status string `json:"status,omitempty"`
+	// Revision is bumped by every change a listing shows; the node listings
+	// answer it as their ETag.
+	Revision int64 `json:"revision"`
+	// Label is the organization label attached to the dataroom, nil when none.
+	Label *DataroomLabel `json:"label"`
 	// VersioningEnabled is false when the dataroom keeps a single complete
 	// version per file: every upload replaces the previous one, purged at
 	// once. Nil when the API predates the setting (versioning on).
@@ -29,7 +43,15 @@ type Dataroom struct {
 	// StorageCapacity is the reserved capacity in bytes (thick provisioning),
 	// nil when the dataroom draws on its owner's plan instead.
 	StorageCapacity *int64 `json:"storage_capacity,omitempty"`
-	StorageUsed     int64  `json:"storage_used,omitempty"`
+	StorageUsed     int64  `json:"storage_used"`
+}
+
+// DataroomLabel is the public shape of an organization label.
+type DataroomLabel struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Color       string  `json:"color"`
+	Description *string `json:"description"`
 }
 
 // Versioning reports whether the dataroom keeps every version of a file.
@@ -290,9 +312,9 @@ type DataroomNodePage struct {
 }
 
 // ListDatarooms returns a paginated list of datarooms.
-func (c *Client) ListDatarooms(ctx context.Context, page int) (*DataroomPage, error) {
+func (c *Client) ListDatarooms(ctx context.Context, page, size int) (*DataroomPage, error) {
 	var result DataroomPage
-	if err := c.Get(ctx, fmt.Sprintf("/dataroom?page=%d", page), &result); err != nil {
+	if err := c.Get(ctx, fmt.Sprintf("/dataroom?page=%d&size=%d", page, size), &result); err != nil {
 		return nil, err
 	}
 
@@ -319,6 +341,20 @@ func (c *Client) GetDataroomStats(ctx context.Context, dataroomID string) (*Data
 	return &result, nil
 }
 
+// UpdateDataroom applies a partial update to a dataroom and returns it as stored.
+func (c *Client) UpdateDataroom(ctx context.Context, dataroomID string, u DataroomUpdate) (*Dataroom, error) {
+	data, err := json.Marshal(u)
+	if err != nil {
+		return nil, err
+	}
+	var result Dataroom
+	if err := c.Patch(ctx, "/dataroom/"+dataroomID, bytes.NewReader(data), &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 // GetDataroomUsers returns all members of a dataroom.
 func (c *Client) GetDataroomUsers(ctx context.Context, dataroomID string) ([]DataroomUser, error) {
 	var result []DataroomUser
@@ -329,10 +365,29 @@ func (c *Client) GetDataroomUsers(ctx context.Context, dataroomID string) ([]Dat
 	return result, nil
 }
 
+// DataroomOptions are the dataroom settings a creation or an update may set;
+// nil fields are not sent and keep the server default or current value.
+type DataroomOptions struct {
+	// VersioningEnabled false keeps one complete version per file, the last
+	// one written.
+	VersioningEnabled *bool `json:"versioning_enabled,omitempty"`
+	// StorageCapacity reserves bytes on the owner's plan (thick provisioning).
+	// An update can only enlarge it.
+	StorageCapacity *int64 `json:"storage_capacity,omitempty"`
+}
+
+// DataroomUpdate is a partial dataroom update (PATCH /dataroom/{id}); nil
+// fields are not sent.
+type DataroomUpdate struct {
+	Title *string `json:"title,omitempty"`
+	DataroomOptions
+}
+
 // CreateDataroom creates a new dataroom with the given title, session keypair, and
 // optionally an encrypted name salt (nodeNameSaltEnc). Pass nil to omit the salt.
 func (c *Client) CreateDataroom(
 	ctx context.Context, title, sessionPrivKeyEnc, sessionPubKey string, nodeNameSaltEnc *string,
+	opts DataroomOptions,
 ) (*Dataroom, error) {
 	body := map[string]any{
 		"title":                   title,
@@ -341,6 +396,12 @@ func (c *Client) CreateDataroom(
 	}
 	if nodeNameSaltEnc != nil {
 		body["node_name_salt_enc"] = *nodeNameSaltEnc
+	}
+	if opts.VersioningEnabled != nil {
+		body["versioning_enabled"] = *opts.VersioningEnabled
+	}
+	if opts.StorageCapacity != nil {
+		body["storage_capacity"] = *opts.StorageCapacity
 	}
 	data, err := json.Marshal(body)
 	if err != nil {

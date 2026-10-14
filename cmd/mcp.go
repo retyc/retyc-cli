@@ -13,6 +13,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
@@ -708,7 +709,8 @@ func registerDataroomTools(srv *server.MCPServer) {
 			if err != nil {
 				return toolErr(ctx, err)
 			}
-			result, err := service.CreateDataroom(ctx, cfg, client, req.GetString("title", ""), mcpPassphraseReader)
+			result, err := service.CreateDataroom(ctx, cfg, client, req.GetString("title", ""), api.DataroomOptions{},
+				mcpPassphraseReader)
 			if err != nil {
 				return toolErr(ctx, err)
 			}

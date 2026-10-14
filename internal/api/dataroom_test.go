@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,7 +29,7 @@ func TestListDatarooms(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	page, err := newTestClient(srv).ListDatarooms(context.Background(), 1)
+	page, err := newTestClient(srv).ListDatarooms(context.Background(), 1, 100)
 	if err != nil {
 		t.Fatalf("ListDatarooms() error = %v", err)
 	}
@@ -37,6 +38,51 @@ func TestListDatarooms(t *testing.T) {
 	}
 	if len(page.Items) != 1 || page.Items[0].ID != "dr-1" {
 		t.Errorf("Items[0].ID = %q, want dr-1", page.Items[0].ID)
+	}
+}
+
+func TestListDataroomsDecodesAllFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[{
+			"id":"dr-1","title":"T","created_at":"2026-01-02T03:04:05Z",
+			"expires_at":"2027-01-02T03:04:05Z","deleted_at":null,
+			"session_private_key_enc":"enc","session_public_key":"pk",
+			"versioning_enabled":true,"storage_capacity":null,"storage_used":0,
+			"revision":42,"role":"editor","status":"active",
+			"label":{"id":"lb-1","name":"Confidential","color":"#ff0000","description":null}
+		}],"total":1,"page":1,"pages":1}`))
+	}))
+	defer srv.Close()
+
+	page, err := newTestClient(srv).ListDatarooms(context.Background(), 1, 100)
+	if err != nil {
+		t.Fatalf("ListDatarooms() error = %v", err)
+	}
+	dr := page.Items[0]
+	if dr.Role != "editor" || dr.Status != "active" || dr.Revision != 42 {
+		t.Errorf("Role/Status/Revision = %q/%q/%d, want editor/active/42", dr.Role, dr.Status, dr.Revision)
+	}
+	if dr.ExpiresAt == nil || dr.ExpiresAt.Year() != 2027 {
+		t.Errorf("ExpiresAt = %v, want 2027-01-02", dr.ExpiresAt)
+	}
+	if dr.DeletedAt != nil {
+		t.Errorf("DeletedAt = %v, want nil", dr.DeletedAt)
+	}
+	if dr.Label == nil || dr.Label.Name != "Confidential" || dr.Label.Color != "#ff0000" {
+		t.Errorf("Label = %+v, want Confidential/#ff0000", dr.Label)
+	}
+
+	// Re-encoded for --json: a zero storage_used and a null expiry stay visible.
+	out, err := json.Marshal(dr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"role":"editor"`, `"status":"active"`, `"revision":42`, `"storage_used":0`, `"deleted_at":null`,
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("json %s lacks %s", out, want)
+		}
 	}
 }
 
@@ -103,12 +149,18 @@ func TestCreateDataroom(t *testing.T) {
 		if body["node_name_salt_enc"] != "enc-salt" {
 			t.Errorf("body.node_name_salt_enc = %v, want enc-salt", body["node_name_salt_enc"])
 		}
+		for _, k := range []string{"versioning_enabled", "storage_capacity"} {
+			if _, ok := body[k]; ok {
+				t.Errorf("body.%s sent without options: %v", k, body[k])
+			}
+		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(Dataroom{ID: "new-dr", Title: "My DR"})
 	}))
 	defer srv.Close()
 
-	dr, err := newTestClient(srv).CreateDataroom(context.Background(), "My DR", "priv-enc", "pub-key", &saltEnc)
+	dr, err := newTestClient(srv).CreateDataroom(
+		context.Background(), "My DR", "priv-enc", "pub-key", &saltEnc, DataroomOptions{})
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
 	}
@@ -129,9 +181,56 @@ func TestCreateDataroom_NoSalt(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := newTestClient(srv).CreateDataroom(context.Background(), "My DR", "priv-enc", "pub-key", nil)
+	_, err := newTestClient(srv).CreateDataroom(
+		context.Background(), "My DR", "priv-enc", "pub-key", nil, DataroomOptions{})
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
+	}
+}
+
+func TestCreateDataroom_Options(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["versioning_enabled"] != false {
+			t.Errorf("body.versioning_enabled = %v, want false", body["versioning_enabled"])
+		}
+		if body["storage_capacity"] != float64(1<<30) {
+			t.Errorf("body.storage_capacity = %v, want %d", body["storage_capacity"], 1<<30)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(Dataroom{ID: "new-dr"})
+	}))
+	defer srv.Close()
+
+	off, capacity := false, int64(1<<30)
+	opts := DataroomOptions{VersioningEnabled: &off, StorageCapacity: &capacity}
+	if _, err := newTestClient(srv).CreateDataroom(context.Background(), "T", "p", "k", nil, opts); err != nil {
+		t.Fatalf("CreateDataroom() error = %v", err)
+	}
+}
+
+func TestUpdateDataroom(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch || r.URL.Path != "/dataroom/dr-abc" {
+			t.Errorf("request = %s %s, want PATCH /dataroom/dr-abc", r.Method, r.URL.Path)
+		}
+		raw, _ := io.ReadAll(r.Body)
+		// Only the fields that were set are sent.
+		if string(raw) != `{"title":"New"}` {
+			t.Errorf("body = %s, want {\"title\":\"New\"}", raw)
+		}
+		_ = json.NewEncoder(w).Encode(Dataroom{ID: "dr-abc", Title: "New"})
+	}))
+	defer srv.Close()
+
+	title := "New"
+	dr, err := newTestClient(srv).UpdateDataroom(context.Background(), "dr-abc", DataroomUpdate{Title: &title})
+	if err != nil {
+		t.Fatalf("UpdateDataroom() error = %v", err)
+	}
+	if dr.Title != "New" {
+		t.Errorf("Title = %q, want New", dr.Title)
 	}
 }
 

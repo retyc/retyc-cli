@@ -632,3 +632,31 @@ func TestUploadSmallFile_NoClientMtime(t *testing.T) {
 		t.Errorf("client_mtime = %q, want none", got[0]["client_mtime"])
 	}
 }
+
+func TestListDataroomsFetchesEveryPage(t *testing.T) {
+	const pages = 3
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("size"); got != "100" {
+			t.Errorf("size = %q, want 100", got)
+		}
+		var page int
+		if _, err := fmt.Sscan(r.URL.Query().Get("page"), &page); err != nil {
+			t.Errorf("page: %v", err)
+		}
+		fmt.Fprintf(w, `{"items":[{"id":"dr-%d","title":"T%d"}],"total":%d,"page":%d,"pages":%d}`,
+			page, page, pages, page, pages)
+	}))
+	defer srv.Close()
+
+	result, err := ListDatarooms(context.Background(), newKeyTestClient(srv))
+	if err != nil {
+		t.Fatalf("ListDatarooms() error = %v", err)
+	}
+	var ids []string
+	for _, dr := range result.Items {
+		ids = append(ids, dr.ID)
+	}
+	if got := strings.Join(ids, ","); got != "dr-1,dr-2,dr-3" {
+		t.Errorf("ids = %s, want dr-1,dr-2,dr-3 in page order", got)
+	}
+}
