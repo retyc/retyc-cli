@@ -4,7 +4,7 @@
 /main
 *.exe
 /dist
-/config.yaml
+/config*.yaml
 
 # Config
 /.retyc
@@ -31,3 +31,4 @@ Thumbs.db
 
 # Local design docs (superpowers specs/plans) — never committed
 /docs/superpowers/
+/.claude/worktrees/
