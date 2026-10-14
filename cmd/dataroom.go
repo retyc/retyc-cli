@@ -49,7 +49,7 @@ var dataroomLsCmd = &cobra.Command{
 				return err
 			}
 			if jsonOutput {
-				return printJSON(newPagedJSON(result.Items, result.Total, result.Page, result.Pages))
+				return printJSON(newItemsJSON(result.Items))
 			}
 			if len(result.Items) == 0 {
 				fmt.Println("No datarooms found.")
@@ -57,18 +57,16 @@ var dataroomLsCmd = &cobra.Command{
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "DATAROOM ID\tTITLE\tCREATED")
+			fmt.Fprintln(w, "DATAROOM ID\tTITLE\tROLE\tCREATED")
 			for _, dr := range result.Items {
-				fmt.Fprintf(w, "%s\t%s\t%s\n",
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 					dr.ID,
 					ui.Escape(dr.Title),
+					dr.Role,
 					dr.CreatedAt.Format("2006-01-02 15:04"),
 				)
 			}
 			_ = w.Flush()
-			if result.Pages > 1 {
-				fmt.Printf("\nPage 1/%d · %d dataroom(s) total\n", result.Pages, result.Total)
-			}
 
 			return nil
 		}

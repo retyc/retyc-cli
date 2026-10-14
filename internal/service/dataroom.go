@@ -1139,17 +1139,22 @@ func ensureFolder(
 
 // ListDatarooms returns a page of the authenticated user's datarooms.
 func ListDatarooms(ctx context.Context, client *api.Client) (*ListDataroomsResult, error) {
-	result, err := client.ListDatarooms(ctx, 1)
+	pages, err := fetchAllPages(ctx,
+		func(ctx context.Context, page int) ([]api.Dataroom, int, error) {
+			result, err := client.ListDatarooms(ctx, page, dataroomListPageSize)
+			if err != nil {
+				return nil, 0, err
+			}
+
+			return result.Items, result.Pages, nil
+		},
+		func(_ context.Context, items []api.Dataroom) []api.Dataroom { return items })
 	if err != nil {
 		return nil, fmt.Errorf("listing datarooms: %w", err)
 	}
+	items := slices.Concat(pages...)
 
-	return &ListDataroomsResult{
-		Items: result.Items,
-		Total: result.Total,
-		Pages: result.Pages,
-		Page:  result.Page,
-	}, nil
+	return &ListDataroomsResult{Items: items, Total: len(items)}, nil
 }
 
 // CreateDataroom creates a new dataroom with the given title.

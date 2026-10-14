@@ -28,7 +28,7 @@ func TestListDatarooms(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	page, err := newTestClient(srv).ListDatarooms(context.Background(), 1)
+	page, err := newTestClient(srv).ListDatarooms(context.Background(), 1, 100)
 	if err != nil {
 		t.Fatalf("ListDatarooms() error = %v", err)
 	}
@@ -37,6 +37,51 @@ func TestListDatarooms(t *testing.T) {
 	}
 	if len(page.Items) != 1 || page.Items[0].ID != "dr-1" {
 		t.Errorf("Items[0].ID = %q, want dr-1", page.Items[0].ID)
+	}
+}
+
+func TestListDataroomsDecodesAllFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[{
+			"id":"dr-1","title":"T","created_at":"2026-01-02T03:04:05Z",
+			"expires_at":"2027-01-02T03:04:05Z","deleted_at":null,
+			"session_private_key_enc":"enc","session_public_key":"pk",
+			"versioning_enabled":true,"storage_capacity":null,"storage_used":0,
+			"revision":42,"role":"editor","status":"active",
+			"label":{"id":"lb-1","name":"Confidential","color":"#ff0000","description":null}
+		}],"total":1,"page":1,"pages":1}`))
+	}))
+	defer srv.Close()
+
+	page, err := newTestClient(srv).ListDatarooms(context.Background(), 1, 100)
+	if err != nil {
+		t.Fatalf("ListDatarooms() error = %v", err)
+	}
+	dr := page.Items[0]
+	if dr.Role != "editor" || dr.Status != "active" || dr.Revision != 42 {
+		t.Errorf("Role/Status/Revision = %q/%q/%d, want editor/active/42", dr.Role, dr.Status, dr.Revision)
+	}
+	if dr.ExpiresAt == nil || dr.ExpiresAt.Year() != 2027 {
+		t.Errorf("ExpiresAt = %v, want 2027-01-02", dr.ExpiresAt)
+	}
+	if dr.DeletedAt != nil {
+		t.Errorf("DeletedAt = %v, want nil", dr.DeletedAt)
+	}
+	if dr.Label == nil || dr.Label.Name != "Confidential" || dr.Label.Color != "#ff0000" {
+		t.Errorf("Label = %+v, want Confidential/#ff0000", dr.Label)
+	}
+
+	// Re-encoded for --json: a zero storage_used and a null expiry stay visible.
+	out, err := json.Marshal(dr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"role":"editor"`, `"status":"active"`, `"revision":42`, `"storage_used":0`, `"deleted_at":null`,
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("json %s lacks %s", out, want)
+		}
 	}
 }
 

@@ -22,6 +22,20 @@ type Dataroom struct {
 	// the per-dataroom salt used as prefix for node name hashing. Nil when not set.
 	NodeNameSaltEnc *string   `json:"node_name_salt_enc"`
 	CreatedAt       time.Time `json:"created_at"`
+	// ExpiresAt and DeletedAt are nil when the dataroom has no expiry or is
+	// not deleted.
+	ExpiresAt *time.Time `json:"expires_at"`
+	DeletedAt *time.Time `json:"deleted_at"`
+	// Role is the current user's role: owner, admin, editor, contributor or
+	// viewer. Empty on an API that predates the field.
+	Role string `json:"role,omitempty"`
+	// Status is active, expired or deleted.
+	Status string `json:"status,omitempty"`
+	// Revision is bumped by every change a listing shows; the node listings
+	// answer it as their ETag.
+	Revision int64 `json:"revision"`
+	// Label is the organization label attached to the dataroom, nil when none.
+	Label *DataroomLabel `json:"label"`
 	// VersioningEnabled is false when the dataroom keeps a single complete
 	// version per file: every upload replaces the previous one, purged at
 	// once. Nil when the API predates the setting (versioning on).
@@ -29,7 +43,15 @@ type Dataroom struct {
 	// StorageCapacity is the reserved capacity in bytes (thick provisioning),
 	// nil when the dataroom draws on its owner's plan instead.
 	StorageCapacity *int64 `json:"storage_capacity,omitempty"`
-	StorageUsed     int64  `json:"storage_used,omitempty"`
+	StorageUsed     int64  `json:"storage_used"`
+}
+
+// DataroomLabel is the public shape of an organization label.
+type DataroomLabel struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Color       string  `json:"color"`
+	Description *string `json:"description"`
 }
 
 // Versioning reports whether the dataroom keeps every version of a file.
@@ -290,9 +312,9 @@ type DataroomNodePage struct {
 }
 
 // ListDatarooms returns a paginated list of datarooms.
-func (c *Client) ListDatarooms(ctx context.Context, page int) (*DataroomPage, error) {
+func (c *Client) ListDatarooms(ctx context.Context, page, size int) (*DataroomPage, error) {
 	var result DataroomPage
-	if err := c.Get(ctx, fmt.Sprintf("/dataroom?page=%d", page), &result); err != nil {
+	if err := c.Get(ctx, fmt.Sprintf("/dataroom?page=%d&size=%d", page, size), &result); err != nil {
 		return nil, err
 	}
 

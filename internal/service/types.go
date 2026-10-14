@@ -78,12 +78,10 @@ type DownloadTransferResult struct {
 
 // — Dataroom result types ————————————————————————————————————————————————————
 
-// ListDataroomsResult holds a paginated list of datarooms.
+// ListDataroomsResult holds every dataroom of the user, all pages fetched.
 type ListDataroomsResult struct {
 	Items []api.Dataroom
 	Total int
-	Pages int
-	Page  int
 }
 
 // CreateDataroomResult holds the result of a dataroom creation.

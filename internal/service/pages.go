@@ -10,6 +10,9 @@ import (
 // Every page is a round trip, so a listing costs as few pages as the API allows.
 const nodeListPageSize = 100
 
+// dataroomListPageSize is the largest page GET /dataroom accepts.
+const dataroomListPageSize = 100
+
 // fetchAllPages returns every page of a paginated listing, fetched then
 // processed, in page order.
 //
