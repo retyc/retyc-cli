@@ -255,7 +255,6 @@ variable, then the [configuration file](configuration.md#settings).
 | `--local-file pattern`      | `mount.local_files`, `RETYC_MOUNT_LOCAL_FILES` (separated by spaces)                 | `.*.swp .*.swx *~ 4913`    | See [Local files](#local-files).                                                                                                     |
 | `--unsafe-write`            | `api.unsafe_write`, `RETYC_API_UNSAFE_WRITE`                                         | `false`                    | Faster `close`, at the risk of an unreadable file. See [Configuration](configuration.md#acknowledge-uploads-before-they-are-stored). |
 | `--metrics-addr`            | `mount.metrics.addr`, `RETYC_MOUNT_METRICS_ADDR`                                     | — (off)                    | See [Metrics and probes](#metrics-and-probes).                                                                                       |
-| `--metrics-runtime`         | `mount.metrics.runtime`, `RETYC_MOUNT_METRICS_RUNTIME`                               | `true`                     | Include the `go_*` and `process_*` metrics.                                                                                          |
 | `--metrics-label key=value` | `mount.metrics.labels`, `RETYC_MOUNT_METRICS_LABELS` (separated by spaces)           | —                          | Constant label on every metric; repeatable.                                                                                          |
 
 The cache settings are under [Freshness](#freshness) and
@@ -268,27 +267,43 @@ mounting:
 
 | Path       | Response                                                                                       |
 |------------|------------------------------------------------------------------------------------------------|
-| `/metrics` | Prometheus metrics                                                                             |
+| `/metrics` | Prometheus metrics, Go runtime and process ones (`go_*`, `process_*`) included                  |
 | `/healthz` | `200` while the process answers                                                                |
 | `/readyz`  | `200` once mounted; `503` before, and as soon as the mount starts to stop (signal, lost login) |
 
-Labels never carry an identifier, a name or a path. Besides the metrics shared with
-WebDAV ([table](webdav.md#metrics)), the mount exports:
+`--metrics-label key=value` adds a constant label to every series, so a supervisor
+aggregating several mounts can tell them apart. The first `=` splits key and value;
+an invalid name, a reserved one (`le`, `quantile`, `__*`) or one a metric already
+uses (`method`, `route`, `status`, …) stops the mount at startup.
 
-| Metric                                    | Type      | Labels         | Meaning                                                             |
-|-------------------------------------------|-----------|----------------|---------------------------------------------------------------------|
-| `retyc_cli_fuse_ops_total`                | counter   | `op`, `result` | Filesystem operations, by result (`ok`, `ENOENT`, `EIO`, …)         |
-| `retyc_cli_fuse_op_duration_seconds`      | histogram | `op`           | Duration of an operation                                            |
-| `retyc_cli_fuse_bytes_total`              | counter   | `direction`    | Plaintext bytes read and written                                    |
-| `retyc_cli_fuse_open_handles`             | gauge     | `kind`         | Files open (`read`, `write`)                                        |
-| `retyc_cli_fuse_background_deletes_total` | counter   | `result`       | Background deletes; `error` means the file is still in the dataroom |
-| `retyc_cli_vfs_spool_bytes`               | gauge     |                | Bytes held in the spool directory                                   |
-| `retyc_cli_vfs_uploads_total`             | counter   | `result`       | Files sent to the API                                               |
-| `retyc_cli_vfs_locks_held`                | gauge     |                | API locks held (`--mirror-locks`)                                   |
-| `retyc_cli_vfs_store_op_duration_seconds` | histogram | `op`, `result` | Redis round trips (empty with `cache.store: memory`)                |
+Labels never carry an identifier, a name or a path. Every metric starts with
+`retycfs_` (the full list is on `/metrics`, with its `HELP` text). The ones to watch:
 
-Tracing (OpenTelemetry, `OTEL_EXPORTER_OTLP_ENDPOINT`) records one span per operation
-that reaches the API or Redis, with identifiers only.
+| Metric                                                    | Meaning                                                                 |
+|-----------------------------------------------------------|-------------------------------------------------------------------------|
+| `retycfs_ops_total{op,result}`                            | Filesystem operations, by result (`ok`, `ENOENT`, `EIO`, …)             |
+| `retycfs_op_duration_seconds{op}`                         | Duration of an operation                                                |
+| `retycfs_api_requests_total{method,route,status}`         | Calls to the Retyc API (`status="error"`: no response)                  |
+| `retycfs_api_request_duration_seconds{method,route}`      | API round-trip latency, the dominant cost of an operation               |
+| `retycfs_api_rate_limited_total{method}`                  | API requests given up on `429`                                          |
+| `retycfs_uploads_total{result}`                           | Files sent to the API                                                   |
+| `retycfs_spool_bytes`                                     | Bytes held in the spool directory                                       |
+| `retycfs_cache_lookups_total{result}`                     | Listing cache efficiency (`hit`, `stale`, `miss`)                       |
+| `retycfs_token_expiry_seconds`                            | Seconds left on the access token, 0 when unknown                        |
+
+Chunk counts are the `retycfs_api_requests_total` series of the chunk routes
+(`/dataroom/node/version/{id}/chunk/{n}`); files of at most 8 MiB are uploaded
+through `/dataroom/{id}/node/file` instead.
+
+### Traces
+
+With an OTLP endpoint in the environment (see
+[Tracing](configuration.md#tracing-opentelemetry)), the mount exports one startup
+span (`retyc fs mount init`: login check, key unlock, mount), parented to
+`TRACEPARENT` when set, then one new trace per filesystem operation that reached
+the API or Redis (`FUSE <op>`), with identifiers only. An operation answered from
+memory exports nothing. A request refused by the API rate limit shows one call per
+attempt, with an `api.throttle` event for each wait. No other command traces.
 
 ## Diagnosing: the access log
 

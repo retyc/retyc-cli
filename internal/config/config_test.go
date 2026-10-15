@@ -1,10 +1,10 @@
 package config
 
 import (
-	"reflect"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -353,79 +353,54 @@ func TestEnvVarsDocumented(t *testing.T) {
 	}
 }
 
-func TestWebdavMetricsAddr_DefaultDisabled(t *testing.T) {
+func TestMountMetricsAddr_DefaultDisabled(t *testing.T) {
 	resetViper(t)
 	SetDefaults()
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Webdav.Metrics.Addr != "" {
-		t.Errorf("Webdav.Metrics.Addr = %q, want empty (disabled)", cfg.Webdav.Metrics.Addr)
+	if cfg.Mount.Metrics.Addr != "" {
+		t.Errorf("Mount.Metrics.Addr = %q, want empty (disabled)", cfg.Mount.Metrics.Addr)
 	}
 }
 
-func TestWebdavMetricsAddr_EnvBinding(t *testing.T) {
+func TestMountMetricsAddr_EnvBinding(t *testing.T) {
 	resetViper(t)
-	t.Setenv("RETYC_WEBDAV_METRICS_ADDR", "127.0.0.1:9090")
+	t.Setenv("RETYC_MOUNT_METRICS_ADDR", "127.0.0.1:9090")
 	SetDefaults()
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Webdav.Metrics.Addr != "127.0.0.1:9090" {
-		t.Errorf("Webdav.Metrics.Addr = %q, want 127.0.0.1:9090", cfg.Webdav.Metrics.Addr)
+	if cfg.Mount.Metrics.Addr != "127.0.0.1:9090" {
+		t.Errorf("Mount.Metrics.Addr = %q, want 127.0.0.1:9090", cfg.Mount.Metrics.Addr)
 	}
 }
 
-func TestWebdavMetricsRuntime_DefaultEnabled(t *testing.T) {
-	resetViper(t)
-	SetDefaults()
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !cfg.Webdav.Metrics.Runtime {
-		t.Error("Webdav.Metrics.Runtime should be true by default")
-	}
-}
-
-func TestWebdavMetricsRuntime_EnvBinding(t *testing.T) {
-	resetViper(t)
-	t.Setenv("RETYC_WEBDAV_METRICS_RUNTIME", "false")
-	SetDefaults()
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.Webdav.Metrics.Runtime {
-		t.Error("Webdav.Metrics.Runtime = true, want false from env")
-	}
-}
-
-func TestWebdavMetricsLabels_DefaultEmpty(t *testing.T) {
+func TestMountMetricsLabels_DefaultEmpty(t *testing.T) {
 	resetViper(t)
 	SetDefaults()
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if len(cfg.Webdav.Metrics.Labels) != 0 {
-		t.Errorf("Webdav.Metrics.Labels = %v, want empty", cfg.Webdav.Metrics.Labels)
+	if len(cfg.Mount.Metrics.Labels) != 0 {
+		t.Errorf("Mount.Metrics.Labels = %v, want empty", cfg.Mount.Metrics.Labels)
 	}
 }
 
-func TestWebdavMetricsLabels_EnvBindingSplitsOnSpaces(t *testing.T) {
+func TestMountMetricsLabels_EnvBindingSplitsOnSpaces(t *testing.T) {
 	resetViper(t)
-	t.Setenv("RETYC_WEBDAV_METRICS_LABELS", "identity=abc pod=x")
+	t.Setenv("RETYC_MOUNT_METRICS_LABELS", "identity=abc pod=x")
 	SetDefaults()
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	want := []string{"identity=abc", "pod=x"}
-	if got := cfg.Webdav.Metrics.Labels; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("Webdav.Metrics.Labels = %v, want %v", got, want)
+	if got := cfg.Mount.Metrics.Labels; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Mount.Metrics.Labels = %v, want %v", got, want)
 	}
 }
 
@@ -805,7 +780,7 @@ func TestMount_Defaults(t *testing.T) {
 		KernelCache: true, UID: MountProcessID, GID: MountProcessID,
 		FileMode: "0644", DirMode: "0755", DrainTimeout: 5 * time.Minute,
 		LocalFiles: []string{".*.swp", ".*.swx", "*~", "4913"},
-		Metrics:    MetricsConfig{Runtime: true, Labels: []string{}},
+		Metrics:    MetricsConfig{Labels: []string{}},
 	}
 	if !reflect.DeepEqual(cfg.Mount, want) {
 		t.Errorf("Mount = %+v, want %+v", cfg.Mount, want)
@@ -824,8 +799,8 @@ func TestMount_FromEnv(t *testing.T) {
 		"RETYC_MOUNT_UID": "0", "RETYC_MOUNT_GID": "1000", "RETYC_MOUNT_FILE_MODE": "0600",
 		"RETYC_MOUNT_DIR_MODE": "700", "RETYC_MOUNT_READ_ONLY": "true", "RETYC_MOUNT_DRAIN_TIMEOUT": "2m",
 		"RETYC_MOUNT_MIRROR_LOCKS": "true", "RETYC_MOUNT_METRICS_ADDR": "127.0.0.1:9091",
-		"RETYC_MOUNT_METRICS_RUNTIME": "false", "RETYC_MOUNT_METRICS_LABELS": "pod=a volume=b",
-		"RETYC_MOUNT_LOCAL_FILES": ".*.swp  *.tmp",
+		"RETYC_MOUNT_METRICS_LABELS": "pod=a volume=b",
+		"RETYC_MOUNT_LOCAL_FILES":    ".*.swp  *.tmp",
 	} {
 		t.Setenv(name, value)
 	}
@@ -965,9 +940,9 @@ func TestMountLocalFiles_Emptied(t *testing.T) {
 // an empty one empties it.
 func TestMountLocalFiles_FromFile(t *testing.T) {
 	for content, want := range map[string][]string{
-		"mount:\n  local_files: []\n":                    {},
+		"mount:\n  local_files: []\n":                      {},
 		"mount:\n  local_files: [\"*.bak\", \"[a-c]~\"]\n": {"*.bak", "[a-c]~"},
-		"mount:\n  read_only: true\n":                    DefaultMountLocalFiles(),
+		"mount:\n  read_only: true\n":                      DefaultMountLocalFiles(),
 	} {
 		resetViper(t)
 		SetDefaults()

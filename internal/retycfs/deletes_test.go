@@ -124,7 +124,7 @@ func TestBackgroundDelete_Off(t *testing.T) {
 func TestBackgroundDelete_AnswersBeforeTheAPI(t *testing.T) {
 	m, dr := laterMount(t, nil)
 	held := m.holdDeletes(t)
-	before := testutil.ToFloat64(metrics.FuseBackgroundDeletes.WithLabelValues("ok"))
+	before := testutil.ToFloat64(metrics.BackgroundDeletes.WithLabelValues("ok"))
 
 	for _, name := range []string{"hello.txt", "link"} {
 		if err := os.Remove(filepath.Join(m.dir, name)); err != nil {
@@ -172,7 +172,7 @@ func TestBackgroundDelete_AnswersBeforeTheAPI(t *testing.T) {
 		return m.api.node(dr, "", "hello.txt") == nil && m.api.node(dr, "", "link") == nil && m.pendingDeletes() == 0
 	})
 	absent("once deleted")
-	if got := testutil.ToFloat64(metrics.FuseBackgroundDeletes.WithLabelValues("ok")) - before; got != 2 {
+	if got := testutil.ToFloat64(metrics.BackgroundDeletes.WithLabelValues("ok")) - before; got != 2 {
 		t.Errorf("deletes counted ok = %v, want 2", got)
 	}
 	if logs := m.logs.text(); logs != "" {
@@ -273,7 +273,7 @@ func TestBackgroundDelete_Failure(t *testing.T) {
 	m.api.mu.Lock()
 	m.api.undeletable = map[string]bool{node.id: true}
 	m.api.mu.Unlock()
-	before := testutil.ToFloat64(metrics.FuseBackgroundDeletes.WithLabelValues("error"))
+	before := testutil.ToFloat64(metrics.BackgroundDeletes.WithLabelValues("error"))
 
 	path := filepath.Join(m.dir, "hello.txt")
 	if err := os.Remove(path); err != nil {
@@ -295,7 +295,7 @@ func TestBackgroundDelete_Failure(t *testing.T) {
 	if !slices.Contains(walk(t, m.dir), "hello.txt") {
 		t.Error("the file is not listed again")
 	}
-	if got := testutil.ToFloat64(metrics.FuseBackgroundDeletes.WithLabelValues("error")) - before; got != 1 {
+	if got := testutil.ToFloat64(metrics.BackgroundDeletes.WithLabelValues("error")) - before; got != 1 {
 		t.Errorf("deletes counted error = %v, want 1", got)
 	}
 }

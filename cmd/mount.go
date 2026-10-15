@@ -61,9 +61,8 @@ func parseMountArgs(all bool, args []string) (mountTarget, error) {
 }
 
 var fsMountCmd = &cobra.Command{
-	Use:         "mount {retyc://<dataroom-id> | --all} <mountpoint>",
-	Annotations: map[string]string{annotationLongRunning: "true"},
-	Short:       "Mount your datarooms as a filesystem (Linux)",
+	Use:   "mount {retyc://<dataroom-id> | --all} <mountpoint>",
+	Short: "Mount your datarooms as a filesystem (Linux)",
 	Long: `Mount a dataroom, or all of them, as a local folder (RetycFS). Files are decrypted
 locally as they are read. A file being written is kept in a temporary file
 (mode 0600, removed when the file is closed) and sent, encrypted, as a new
@@ -140,7 +139,6 @@ var mountFlags = [][2]string{
 	{"local-file", "mount.local_files"},
 	{"unsafe-write", "api.unsafe_write"},
 	{"metrics-addr", "mount.metrics.addr"},
-	{"metrics-runtime", "mount.metrics.runtime"},
 	{"metrics-label", "mount.metrics.labels"},
 }
 
@@ -195,7 +193,7 @@ func newMountSettings(cfg *config.Config) (mountSettings, error) {
 		mirrorLocks:      m.MirrorLocks,
 		backgroundDelete: m.BackgroundDelete,
 		localFiles:       m.LocalFiles,
-		metrics:          metricsSettings{addr: m.Metrics.Addr, runtime: m.Metrics.Runtime, labels: m.Metrics.Labels},
+		metrics:          metricsSettings{addr: m.Metrics.Addr, labels: m.Metrics.Labels},
 		uid:              mountID(m.UID),
 		gid:              mountID(m.GID),
 	}
@@ -292,8 +290,6 @@ func addMountFlags(cmd *cobra.Command) {
 		"let the API acknowledge uploads before they are stored (faster; a failed background store is not reported)")
 	flags.String("metrics-addr", "",
 		"address for Prometheus metrics and health probes (e.g. 127.0.0.1:9090)")
-	flags.Bool("metrics-runtime", true,
-		"include Go runtime and process metrics on /metrics")
 	flags.StringArray("metrics-label", nil,
 		"constant label key=value added to every metric (repeatable)")
 }

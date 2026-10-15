@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
 )
@@ -139,7 +141,7 @@ func TestReadDataroomChunkBounded(t *testing.T) {
 	client := newKeyTestClient(srv)
 	sess := &DataroomSession{Identity: identity}
 
-	before := cryptoSamples(t, "decrypt")
+	exp := telemetrytest.Install(t)
 	got, err := ReadDataroomChunkBounded(context.Background(), client, "v1", 0, sess, limit)
 	if err != nil || len(got) != limit {
 		t.Fatalf("chunk of the limit: %d bytes, %v", len(got), err)
@@ -148,7 +150,13 @@ func TestReadDataroomChunkBounded(t *testing.T) {
 	if !errors.Is(err, api.ErrChunkTooLarge) {
 		t.Fatalf("chunk over the limit: error = %v, want api.ErrChunkTooLarge", err)
 	}
-	if n := cryptoSamples(t, "decrypt") - before; n != 1 {
+	n := 0
+	for _, span := range exp.GetSpans() {
+		if span.Name == "crypto.decrypt" {
+			n++
+		}
+	}
+	if n != 1 {
 		t.Errorf("%d chunks decrypted, want 1: the oversized one is refused before", n)
 	}
 }

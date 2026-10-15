@@ -17,9 +17,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/spf13/cobra"
-	"go.opentelemetry.io/otel/trace"
 )
 
 var mcpCmd = &cobra.Command{
@@ -48,9 +46,6 @@ Example configuration for Claude Desktop (claude_desktop_config.json):
       }
     }
   }`,
-	// Long-running: no command span (see annotationLongRunning). Each tool
-	// call opens its own root span instead, via mcpToolSpanMiddleware.
-	Annotations: map[string]string{annotationLongRunning: "true"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		srv := server.NewMCPServer(
 			"retyc",
@@ -62,7 +57,6 @@ Example configuration for Claude Desktop (claude_desktop_config.json):
 					"before any byte leaves the machine.",
 			),
 			server.WithInstructions(buildMCPInstructions()),
-			server.WithToolHandlerMiddleware(mcpToolSpanMiddleware),
 		)
 
 		registerMCPTools(srv)
@@ -74,26 +68,6 @@ Example configuration for Claude Desktop (claude_desktop_config.json):
 
 		return server.ServeStdio(srv)
 	},
-}
-
-// mcpToolSpanMiddleware opens one root SERVER span per tool call, named
-// "MCP <tool>". Arguments are never recorded: they carry local paths and
-// dataroom titles.
-func mcpToolSpanMiddleware(next server.ToolHandlerFunc) server.ToolHandlerFunc {
-	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		ctx, span := telemetry.Tracer().Start(ctx, "MCP "+req.Params.Name,
-			trace.WithNewRoot(),
-			trace.WithSpanKind(trace.SpanKindServer),
-			trace.WithAttributes(telemetry.AttrMCPTool.String(req.Params.Name)))
-		defer span.End()
-
-		res, err := next(ctx, req)
-		if err != nil {
-			telemetry.RecordError(span, err)
-		}
-
-		return res, err
-	}
 }
 
 // isWSL reports whether the current process runs inside Windows Subsystem for Linux.
@@ -207,11 +181,7 @@ func toJSON(v any) string {
 }
 
 // toolErr returns a structured JSON error result so agents can pattern-match on error_code.
-func toolErr(ctx context.Context, err error) (*mcp.CallToolResult, error) {
-	// The tools answer failures as JSON text with a nil Go error, so the
-	// middleware cannot see them; record the error type on the call's span here.
-	telemetry.RecordError(trace.SpanFromContext(ctx), err)
-
+func toolErr(err error) (*mcp.CallToolResult, error) {
 	code := "error"
 	switch {
 	case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrNoRefreshToken):
@@ -251,7 +221,7 @@ func registerAuthTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, err := config.Load()
 			if err != nil {
-				return toolErr(ctx, fmt.Errorf("loading config: %w", err))
+				return toolErr(fmt.Errorf("loading config: %w", err))
 			}
 			tok, err := mustGetToken(ctx, cfg)
 			if err != nil {
@@ -263,7 +233,7 @@ func registerAuthTools(srv *server.MCPServer) {
 			}
 			t, err := tok.Token()
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(map[string]any{
@@ -286,11 +256,11 @@ func registerAuthTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, err := config.Load()
 			if err != nil {
-				return toolErr(ctx, fmt.Errorf("loading config: %w", err))
+				return toolErr(fmt.Errorf("loading config: %w", err))
 			}
 			result, err := service.LoginStart(ctx, cfg.API.BaseURL, newHTTPClient(insecure, debug))
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			if result.AlreadyAuthenticated {
 				return mcp.NewToolResultText(toJSON(map[string]any{
@@ -326,15 +296,15 @@ func registerAuthTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			deviceCode := req.GetString("device_code", "")
 			if deviceCode == "" {
-				return toolErr(ctx, fmt.Errorf("device_code is required"))
+				return toolErr(fmt.Errorf("device_code is required"))
 			}
 			cfg, err := config.Load()
 			if err != nil {
-				return toolErr(ctx, fmt.Errorf("loading config: %w", err))
+				return toolErr(fmt.Errorf("loading config: %w", err))
 			}
 			result, err := service.LoginPoll(ctx, cfg.API.BaseURL, deviceCode, newHTTPClient(insecure, debug))
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			switch result.Status {
 			case service.PollDone:
@@ -364,11 +334,11 @@ func registerAuthTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, err := config.Load()
 			if err != nil {
-				return toolErr(ctx, fmt.Errorf("loading config: %w", err))
+				return toolErr(fmt.Errorf("loading config: %w", err))
 			}
 			warnings, err := service.Logout(ctx, cfg.API.BaseURL, newHTTPClient(insecure, debug))
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			warnStrs := make([]string, len(warnings))
 			for i, w := range warnings {
@@ -430,11 +400,11 @@ func registerUserTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			_, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			u, err := client.GetMe(ctx)
 			if err != nil {
-				return toolErr(ctx, fmt.Errorf("fetching user info: %w", err))
+				return toolErr(fmt.Errorf("fetching user info: %w", err))
 			}
 
 			return mcp.NewToolResultText(toJSON(u)), nil
@@ -450,11 +420,11 @@ func registerUserTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			_, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			q, err := client.GetQuota(ctx)
 			if err != nil {
-				return toolErr(ctx, fmt.Errorf("fetching quota: %w", err))
+				return toolErr(fmt.Errorf("fetching quota: %w", err))
 			}
 
 			return mcp.NewToolResultText(toJSON(q)), nil
@@ -492,11 +462,11 @@ func registerTransferTools(srv *server.MCPServer) {
 
 			_, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			result, err := service.ListTransfers(ctx, client, filter, page)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(result)), nil
@@ -514,11 +484,11 @@ func registerTransferTools(srv *server.MCPServer) {
 			id := req.GetString("id", "")
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			result, err := service.GetTransferInfo(ctx, cfg, client, id, mcpPassphraseReader)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(result)), nil
@@ -562,7 +532,7 @@ func registerTransferTools(srv *server.MCPServer) {
 			}
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			result, err := service.SendTransfer(ctx, cfg, client, service.SendTransferParams{
 				FilePaths:          req.GetStringSlice("files", nil),
@@ -574,7 +544,7 @@ func registerTransferTools(srv *server.MCPServer) {
 				ExpireSecs:         req.GetInt("expire", 3600),
 			}, mcpPassphraseReader, mcpProgressFn(srv, ctx, token))
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(result)), nil
@@ -604,11 +574,11 @@ func registerTransferTools(srv *server.MCPServer) {
 			}
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			outputDir := req.GetString("output_dir", "")
 			if outputDir == "" {
-				return toolErr(ctx, fmt.Errorf("output_dir is required"))
+				return toolErr(fmt.Errorf("output_dir is required"))
 			}
 			result, err := service.DownloadTransfer(ctx, cfg, client, service.DownloadTransferParams{
 				ShareID:    req.GetString("id", ""),
@@ -616,7 +586,7 @@ func registerTransferTools(srv *server.MCPServer) {
 				Passphrase: req.GetString("passphrase", ""),
 			}, mcpPassphraseReader, mcpProgressFn(srv, ctx, token))
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(result)), nil
@@ -634,10 +604,10 @@ func registerTransferTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			_, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			if err := service.DisableTransfer(ctx, client, req.GetString("id", "")); err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(`{"ok":true}`), nil
@@ -655,10 +625,10 @@ func registerTransferTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			_, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			if err := service.EnableTransfer(ctx, client, req.GetString("id", "")); err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(`{"ok":true}`), nil
@@ -685,11 +655,11 @@ func registerDataroomTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			_, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			result, err := service.ListDatarooms(ctx, client)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(result)), nil
@@ -707,12 +677,12 @@ func registerDataroomTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			result, err := service.CreateDataroom(ctx, cfg, client, req.GetString("title", ""), api.DataroomOptions{},
 				mcpPassphraseReader)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(result)), nil
@@ -729,11 +699,11 @@ func registerDataroomTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			_, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			result, err := service.GetDataroomInfo(ctx, client, req.GetString("id", ""))
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(result)), nil
@@ -753,11 +723,11 @@ func registerDataroomTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			nodes, err := service.ListNodes(ctx, cfg, client, req.GetString("uri", ""), mcpPassphraseReader)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(map[string]any{"nodes": nodes})), nil
@@ -794,7 +764,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 			}
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			localPaths := req.GetStringSlice("local_paths", nil)
 			if err := service.UploadToDataroom(
@@ -804,7 +774,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 				mcpPassphraseReader,
 				mcpProgressFn(srv, ctx, token),
 			); err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(`{"ok":true}`), nil
@@ -837,11 +807,11 @@ func registerDataroomTools(srv *server.MCPServer) {
 			}
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			localDir := req.GetString("local_dir", "")
 			if localDir == "" {
-				return toolErr(ctx, fmt.Errorf("local_dir is required"))
+				return toolErr(fmt.Errorf("local_dir is required"))
 			}
 			files, err := service.DownloadFromDataroom(
 				ctx, cfg, client,
@@ -851,7 +821,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 				mcpProgressFn(srv, ctx, token),
 			)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(map[string]any{"files": files})), nil
@@ -872,11 +842,11 @@ func registerDataroomTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			nodeID, err := service.MkdirDataroom(ctx, cfg, client, req.GetString("uri", ""), mcpPassphraseReader)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(map[string]string{"node_id": nodeID})), nil
@@ -899,11 +869,11 @@ func registerDataroomTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			count, err := service.DeleteDataroomNode(ctx, cfg, client, req.GetString("uri", ""), mcpPassphraseReader)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(toJSON(map[string]int{"deleted_count": count})), nil
@@ -928,7 +898,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			if err := service.MoveDataroomNode(
 				ctx, cfg, client,
@@ -936,7 +906,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 				req.GetString("dst_uri", ""),
 				mcpPassphraseReader,
 			); err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(`{"ok":true}`), nil
@@ -960,7 +930,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			if err := service.AddDataroomUser(
 				ctx, cfg, client,
@@ -969,7 +939,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 				req.GetString("role", "viewer"),
 				mcpPassphraseReader,
 			); err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(`{"ok":true}`), nil
@@ -988,7 +958,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, client, err := newAPIClient(ctx)
 			if err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 			if err := service.RemoveDataroomUser(
 				ctx, cfg, client,
@@ -996,7 +966,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 				req.GetString("user_id", ""),
 				mcpPassphraseReader,
 			); err != nil {
-				return toolErr(ctx, err)
+				return toolErr(err)
 			}
 
 			return mcp.NewToolResultText(`{"ok":true}`), nil

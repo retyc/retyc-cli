@@ -16,8 +16,6 @@ import (
 // a file or folder name, a dataroom title, a command argument, a header, a
 // body or an error message: the CLI exists to keep those encrypted.
 const (
-	AttrCommand    = attribute.Key("retyc.command")
-	AttrCLIVersion = attribute.Key("retyc.cli.version")
 	AttrPathParams = attribute.Key("retyc.path.params")
 	AttrDataroomID = attribute.Key("retyc.dataroom.id")
 	AttrNodeID     = attribute.Key("retyc.node.id")
@@ -43,7 +41,6 @@ const (
 	AttrCacheStale = attribute.Key("retyc.cache.stale")
 	AttrNodeCount  = attribute.Key("retyc.node.count")
 	AttrPathDepth  = attribute.Key("retyc.path.depth")
-	AttrMCPTool    = attribute.Key("retyc.mcp.tool")
 	// AttrFuseOp is the FUSE operation of a "FUSE <op>" span (lookup, readdir,
 	// open, read, statfs): a fixed vocabulary, never a name or a path.
 	AttrFuseOp = attribute.Key("retyc.fuse.op")

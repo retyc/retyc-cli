@@ -131,11 +131,11 @@ func (q *deleteQueue) end(j *deleteJob, err error) {
 
 	if err == nil {
 		// Deleted, even when the drain had given it up meanwhile.
-		metrics.FuseBackgroundDeletes.WithLabelValues("ok").Inc()
+		metrics.BackgroundDeletes.WithLabelValues("ok").Inc()
 
 		return
 	}
-	metrics.FuseBackgroundDeletes.WithLabelValues("error").Inc()
+	metrics.BackgroundDeletes.WithLabelValues("error").Inc()
 	// The kernel may hold that the name is missing.
 	d.notify.entry(j.dir.EmbeddedInode(), j.key.name)
 	if !lost {

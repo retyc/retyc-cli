@@ -431,7 +431,7 @@ func TestDataroomCache_ZeroOptionsUseDefaultTTL(t *testing.T) {
 }
 
 func TestDataroomCache_CountsRefreshes(t *testing.T) {
-	refreshes := metrics.VFSDataroomCacheRefreshes.WithLabelValues("ok")
+	refreshes := metrics.DataroomListRefreshes.WithLabelValues("ok")
 	before := testutil.ToFloat64(refreshes)
 	c := newTestCache(func(context.Context) ([]Dataroom, error) {
 		return []Dataroom{{ID: "dr1", Title: "A"}}, nil
@@ -451,7 +451,7 @@ func TestDataroomCache_CountsRefreshes(t *testing.T) {
 // A refresh that fails is counted apart, so a dashboard tells an API that
 // refuses the listing from a list that is merely refreshed often.
 func TestDataroomCache_CountsFailedRefreshes(t *testing.T) {
-	failed := metrics.VFSDataroomCacheRefreshes.WithLabelValues("error")
+	failed := metrics.DataroomListRefreshes.WithLabelValues("error")
 	before := testutil.ToFloat64(failed)
 	c := newTestCache(func(context.Context) ([]Dataroom, error) {
 		return nil, errors.New("boom")

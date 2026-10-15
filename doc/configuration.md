@@ -277,9 +277,6 @@ last request gives up prints its error only.
 | Redis of `cache.store: redis`: a `redis://` or `rediss://` URL, **password included** (a secret: masked by `config show`, never logged)                                            | `cache.redis.url`                             | `RETYC_CACHE_REDIS_URL`                                           | — (required with `redis`)                                                               |
 | Store in Redis the encrypted names the API sent, never the decrypted ones                                                                                                          | `cache.redis.high_confidentiality`            | `RETYC_CACHE_REDIS_HIGH_CONFIDENTIALITY`                          | `false`                                                                                 |
 | WebDAV bind address                                                                                                                                                                | `webdav.addr`                                 | `RETYC_WEBDAV_ADDR`                                               | `127.0.0.1:8888`                                                                        |
-| WebDAV metrics and probes listener                                                                                                                                                 | `webdav.metrics.addr`                         | `RETYC_WEBDAV_METRICS_ADDR`                                       | — (disabled), see [RetycFS](retycfs.md#metrics-and-probes)                              |
-| WebDAV runtime metrics (`go_*`, `process_*`)                                                                                                                                       | `webdav.metrics.runtime`                      | `RETYC_WEBDAV_METRICS_RUNTIME`                                    | `true`                                                                                  |
-| WebDAV constant metric labels                                                                                                                                                      | `webdav.metrics.labels` (list of `key=value`) | `RETYC_WEBDAV_METRICS_LABELS` (space-separated)                   | —                                                                                       |
 | `fs mount`: how long the kernel keeps a name (duration with a unit)                                                                                                                | `mount.entry_ttl`                             | `RETYC_MOUNT_ENTRY_TTL`                                           | `0`: follows `cache.ttl`, see [RetycFS](retycfs.md#options)                             |
 | `fs mount`: how long the kernel keeps the attributes of a file (duration with a unit)                                                                                              | `mount.attr_ttl`                              | `RETYC_MOUNT_ATTR_TTL`                                            | `0`: follows `cache.ttl`                                                                |
 | `fs mount`: the kernel keeps what it read of a file between two opens                                                                                                              | `mount.kernel_cache`                          | `RETYC_MOUNT_KERNEL_CACHE`                                        | `true`                                                                                  |
@@ -296,7 +293,6 @@ last request gives up prints its error only.
 | `fs mount`: answer the removal of a file at once and delete it at the API in the background                                                                                        | `mount.background_delete`                     | `RETYC_MOUNT_BACKGROUND_DELETE`                                   | `false`, see [RetycFS](retycfs.md#deleting-in-the-background)                           |
 | `fs mount`: name patterns of the files kept local and never sent (editor swap and backup files)                                                                                    | `mount.local_files` (list of glob patterns)   | `RETYC_MOUNT_LOCAL_FILES` (space-separated; `none`: no such file) | `.*.swp`, `.*.swx`, `*~`, `4913`, see [RetycFS](retycfs.md#local-files)                 |
 | `fs mount`: metrics and probes listener                                                                                                                                            | `mount.metrics.addr`                          | `RETYC_MOUNT_METRICS_ADDR`                                        | — (disabled), see [RetycFS](retycfs.md#metrics-and-probes)                              |
-| `fs mount`: runtime metrics (`go_*`, `process_*`)                                                                                                                                  | `mount.metrics.runtime`                       | `RETYC_MOUNT_METRICS_RUNTIME`                                     | `true`                                                                                  |
 | `fs mount`: constant metric labels                                                                                                                                                 | `mount.metrics.labels` (list of `key=value`)  | `RETYC_MOUNT_METRICS_LABELS` (space-separated)                    | —                                                                                       |
 | Config directory                                                                                                                                                                   | —                                             | `RETYC_CONFIG_DIR`                                                | see [above](#where-settings-live)                                                       |
 | Environment file                                                                                                                                                                   | — (`--env-file`)                              | `RETYC_ENV_FILE`                                                  | — (none), see [above](#keep-the-secrets-in-an-environment-file-boot-mounts-systemd-csi) |
@@ -324,14 +320,15 @@ refused by every command, with the name of the replacement.
 
 ## Tracing (OpenTelemetry)
 
-The CLI can export traces to an OpenTelemetry collector over OTLP. It is off
+`retyc fs mount` can export traces to an OpenTelemetry collector over OTLP; no
+other command traces (see [RetycFS](retycfs.md#traces) for the spans). It is off
 unless an endpoint is set, and only the environment can turn it on: there is
 no flag and no `config.yaml` key, so a workstation never exports anything by
 accident.
 
 ```sh
-OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318 retyc dataroom ls
-OTEL_EXPORTER_OTLP_PROTOCOL=grpc OTEL_EXPORTER_OTLP_ENDPOINT=collector:4317 retyc dataroom ls
+OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318 retyc fs mount --all ~/dr
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc OTEL_EXPORTER_OTLP_ENDPOINT=collector:4317 retyc fs mount --all ~/dr
 ```
 
 | Variable                                                            | Meaning                                                                                                                                             |
@@ -339,9 +336,9 @@ OTEL_EXPORTER_OTLP_PROTOCOL=grpc OTEL_EXPORTER_OTLP_ENDPOINT=collector:4317 rety
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Collector endpoint. Unset = tracing off (the OTel default of `localhost:4318` is deliberately not applied).                                         |
 | `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | `http/protobuf` (default) or `grpc`. Another value disables tracing with a message under `--debug`.                                                 |
 | `OTEL_SDK_DISABLED`                                                 | `true` turns tracing off even with an endpoint.                                                                                                     |
-| `TRACEPARENT`, `TRACESTATE`                                         | W3C trace context of the caller; the command span becomes its child. For `webdav serve` only the startup span is, each request is then a new trace. |
-| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`                     | Resource; `service.name` defaults to `retyc-cli`, `service.version` is the CLI version.                                                             |
-| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`                    | Sampling, e.g. `parentbased_traceidratio` / `0.1` for a busy WebDAV server.                                                                         |
+| `TRACEPARENT`, `TRACESTATE`                                         | W3C trace context of the caller; the startup span of the mount becomes its child, each operation is then a new trace. |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`                     | Resource; `service.name` defaults to `retycfs`, `service.version` is the CLI version.                                                                |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`                    | Sampling, e.g. `parentbased_traceidratio` / `0.1` for a busy mount.                                                                         |
 | Other `OTEL_EXPORTER_OTLP_*`                                        | Headers, TLS certificate, compression, timeout: standard OTLP exporter settings.                                                                    |
 
 Under `--debug`, exporter failures are printed to stderr and may include the
@@ -352,10 +349,10 @@ SDK's own logger, so do not put credentials in the endpoint and keep
 For a local look, `scripts/start-jaeger.sh` runs Jaeger with OTLP on
 `4318` (HTTP) and `4317` (gRPC) and the UI on `http://localhost:16686`.
 
-Traces are flushed at exit with a 2 s bound; a collector that is down never
-fails a command. Spans carry methods, status codes, sizes, counts, durations,
+Traces are flushed at the unmount with a 2 s bound; a collector that is down never
+fails the mount. Spans carry methods, status codes, sizes, counts, durations,
 normalized API routes and identifiers. They never carry file or folder names,
-dataroom titles, command arguments, request bodies, headers or error messages:
+dataroom titles, request bodies, headers or error messages:
 those are what the end-to-end encryption protects.
 
 ## Troubleshooting

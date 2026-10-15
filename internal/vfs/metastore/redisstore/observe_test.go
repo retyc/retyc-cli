@@ -23,7 +23,7 @@ import (
 // result.
 func observed(t *testing.T, op, result string) uint64 {
 	t.Helper()
-	h, ok := metrics.VFSStoreOpDuration.WithLabelValues(op, result).(prometheus.Histogram)
+	h, ok := metrics.StoreOpDuration.WithLabelValues(op, result).(prometheus.Histogram)
 	if !ok {
 		t.Fatal("not a histogram")
 	}

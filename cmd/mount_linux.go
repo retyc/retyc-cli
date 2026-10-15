@@ -166,10 +166,19 @@ func kernelNegativeTimeout(negativeTTL time.Duration) time.Duration {
 
 // runMount mounts the target and serves it until it is unmounted.
 func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
+	// The mount is the only command that traces. Tracing is decided by the
+	// environment only; a bad OTEL_* value is reported under --debug and the
+	// mount runs untraced. Shutdown flushes the spans once it is unmounted.
+	tel, err := telemetry.Init(cmd.Context(), telemetry.Options{Version: Version, Debug: debug})
+	if err != nil && debug {
+		fmt.Fprintln(os.Stderr, "Tracing disabled:", err)
+	}
+	defer tel.Shutdown(context.Background())
+
 	// The init span covers everything before the mount is in place, and is
 	// the only span parented to TRACEPARENT: a supervisor's trace closes once
 	// the filesystem is up. FUSE operations get their own roots.
-	initCtx, initSpan := telemetry.Tracer().Start(cmd.Context(), "retyc fs mount init")
+	initCtx, initSpan := telemetry.Tracer().Start(telemetry.ParentFromEnv(cmd.Context()), "retyc fs mount init")
 	initDone := false
 	defer func() {
 		if !initDone {

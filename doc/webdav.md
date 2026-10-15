@@ -39,7 +39,7 @@ retyc fs webdav serve [flags]
 ```
 
 > **Breaking changes.** The command used to be `retyc webdav serve`, the cache
-> settings lived under `webdav.cache`, and two metrics changed name: see
+> settings lived under `webdav.cache`: see
 > [Breaking changes](#breaking-changes) before upgrading a deployment.
 
 | Flag           | Short | Default     | Description                                                        |
@@ -53,9 +53,6 @@ retyc fs webdav serve [flags]
 | `--cache-redis-url` |  | *(empty)*   | `redis://` or `rediss://` URL of that Redis, password included (also `cache.redis.url` / `RETYC_CACHE_REDIS_URL`, to be preferred to the flag) |
 | `--cache-redis-high-confidentiality` | | `false` | Store in Redis the encrypted names the API sent, never the decrypted ones (also `cache.redis.high_confidentiality` / `RETYC_CACHE_REDIS_HIGH_CONFIDENTIALITY`) |
 | `--unsafe-write` |     | `false`     | Let the API acknowledge uploads before storing them (also `api.unsafe_write` / `RETYC_API_UNSAFE_WRITE`): faster, but a failed background store goes unreported, see [configuration](configuration.md#acknowledge-uploads-before-they-are-stored) |
-| `--metrics-addr` |     | *(empty)*   | Expose Prometheus metrics and health probes on this address (see [below](#metrics-probes-and-traces)) |
-| `--metrics-runtime` |  | `true`      | Include the Go runtime and process metrics on `/metrics` (`--metrics-runtime=false` to drop them) |
-| `--metrics-label` |    | *(none)*    | Constant label `key=value` added to every series; repeatable |
 
 ### Environment variables
 
@@ -208,8 +205,7 @@ A refresh is conditional when the API supports it: the listing is kept with the
 the dataroom the API answers `304`, and the listing is kept for another TTL at the
 cost of one round trip, with no page to fetch and no name to decrypt. The `ETag`
 is per dataroom, not per folder: any change anywhere in the dataroom makes the
-next refresh of each of its folders a full listing. These refreshes show as
-status `304` in `retyc_cli_api_requests_total`.
+next refresh of each of its folders a full listing.
 
 Mutations made through the server keep the cache exact. Changes made elsewhere
 (web app, another client, another `webdav serve`) appear once the listing is
@@ -307,112 +303,8 @@ rclone ls retyc:/dataroom
 
 ## Metrics, probes and traces
 
-`--metrics-addr` (or `webdav.metrics.addr` in `config.yaml`, or
-`RETYC_WEBDAV_METRICS_ADDR`) starts a second, unauthenticated HTTP listener meant
-for Prometheus and container orchestrators. It is off by default.
-
-```sh
-retyc fs webdav serve --auth --metrics-addr 127.0.0.1:9090
-```
-
-| Path       | Purpose   | Response                                                                 |
-|------------|-----------|--------------------------------------------------------------------------|
-| `/metrics` | Prometheus | Go runtime and process metrics (`go_*`, `process_*`) plus the CLI metrics below |
-| `/healthz` | Liveness  | `200` as long as the process answers                                      |
-| `/readyz`  | Readiness | `200` once the WebDAV port accepts connections, `503` before that and as soon as a shutdown starts (signal or expired login) |
-
-The listener is separate from the WebDAV port on purpose: scrapers and probes
-need neither the Basic auth password nor a path inside the WebDAV tree. Bind it
-to a loopback or private address; the metrics carry no dataroom content but do
-describe the process. A probe never calls the Retyc API, so probing at a high
-frequency costs nothing on the backend.
-
-### Metrics
-
-`--metrics-runtime=false` (or `webdav.metrics.runtime: false`,
-`RETYC_WEBDAV_METRICS_RUNTIME=false`) removes the `go_*` and `process_*`
-families. Use it when a parent process aggregates the `/metrics` of several
-instances and already exposes its own runtime metrics, such as the CSI driver:
-the same families with different labels and help strings do not merge. The
-setting only matters together with `--metrics-addr`.
-
-`--metrics-label key=value` (repeatable; `webdav.metrics.labels` as a list, or
-`RETYC_WEBDAV_METRICS_LABELS="identity=abc pod=x"` separated by spaces) adds
-constant labels to every series, runtime metrics included, so the parent can
-tell its instances apart. The first `=` separates key and value. A key that
-collides with a metric label (`method`, `route`, `status`, ...), a reserved
-name (`le`, `quantile`, anything starting with `__`) or an invalid label name
-stops the server at startup.
-
-```sh
-retyc fs webdav serve --metrics-addr 127.0.0.1:9090 --metrics-runtime=false \
-  --metrics-label identity=pvc-1234
-```
-
-Labels never carry identifiers or raw paths: API routes are normalized
-(`/dataroom/{id}/nodes`, `/file/{id}/{n}`), WebDAV methods outside the RFC set
-are folded into `OTHER`.
-
-| Metric | Type | Labels | Meaning |
-|---|---|---|---|
-| `retyc_cli_build_info` | gauge | `version`, `goos`, `goarch` | Constant 1, joins the version onto any series |
-| `retyc_cli_webdav_requests_total` | counter | `method`, `status` | WebDAV requests served |
-| `retyc_cli_webdav_request_duration_seconds` | histogram | `method` | WebDAV request latency |
-| `retyc_cli_webdav_inflight_requests` | gauge | | Requests being served right now |
-| `retyc_cli_webdav_bytes_total` | counter | `direction` (`upload`, `download`) | Plaintext bytes moved through the server |
-| `retyc_cli_vfs_node_cache_lookups_total` | counter | `result` (`hit`, `stale`, `miss`) | Efficiency of the tree caches: a folder listing, or the cached result of looking one name up (`stale`: expired listing served while refreshed; `miss`: the API is asked, for a listing or for one name) |
-| `retyc_cli_vfs_dataroom_cache_refreshes_total` | counter | `result` (`ok`, `error`) | Refreshes of the dataroom list (one API call each); `error`: the listing failed and the list held, if any, was kept |
-| `retyc_cli_vfs_spool_bytes` | gauge | | Bytes held on disk by the uploads of unknown length (chunked `PUT`) being received |
-| `retyc_cli_vfs_uploads_total` | counter | `result` (`ok`, `error`) | Files sent to the API (a new file or a new version) |
-| `retyc_cli_vfs_locks_held` | gauge | | Locks held at the API for the WebDAV `LOCK`s of the clients |
-| `retyc_cli_vfs_store_op_duration_seconds` | histogram | `op`, `result` (`ok`, `error`) | Time one operation of the [shared metadata cache](retycfs.md#shared-metadata-cache-redis) took: one round trip to Redis. `op` is the operation of the cache (`get_node`, `get_listing`, `put_listing`, `put_entry`, `generation`, …). Empty with `cache.store: memory` |
-| `retyc_cli_api_requests_total` | counter | `method`, `route`, `status` | Calls to the Retyc API (`status="error"` = no response) |
-| `retyc_cli_api_request_duration_seconds` | histogram | `method`, `route` | API round-trip latency, the dominant cost of every WebDAV operation |
-| `retyc_cli_api_throttle_episodes_total` | counter | | Times the API rate limit (`429`) made the server pause all its API requests; each refusal is already a `status="429"` request above |
-| `retyc_cli_api_throttle_wait_seconds` | histogram | | Time one API request was held back by the rate limit |
-| `retyc_cli_api_rate_limited_total` | counter | `method` | API requests given up after `api.retry.max_wait` / `api.retry.max_attempts`; the WebDAV client is answered `429` |
-| `retyc_cli_sessions_cached` | gauge | | Dataroom session keys held unlocked in memory |
-| `retyc_cli_token_refreshes_total` | counter | `result` (`ok`, `error`) | Keepalive checks of the login token (every 60 s) |
-| `retyc_cli_token_expiry_seconds` | gauge | | Seconds left on the access token, 0 when unknown |
-| `retyc_cli_crypto_duration_seconds` | histogram | `op` (`encrypt`, `decrypt`) | Per-chunk AGE operation time |
-
-`fs mount` exposes the same listener and the same metrics, plus the
-`retyc_cli_fuse_*` ones of the filesystem operations: see
-[RetycFS](retycfs.md#metrics-and-probes).
-
-Chunk counts are the `retyc_cli_api_requests_total` series of the chunk routes
-(`/dataroom/node/version/{id}/chunk/{n}` for uploads,
-`/dataroom/node/{id}/download/{n}` for downloads); files of at most 8 MiB are
-uploaded through `/dataroom/{id}/node/file` instead.
-
-### Traces
-
-With an OTLP endpoint in the environment (see
-[Tracing](configuration.md#tracing-opentelemetry)), `webdav serve` exports one
-startup span (`retyc fs webdav serve init`: login check, key unlock as a
-`crypto.unlock_key` child span, bind),
-parented to `TRACEPARENT` when set, then one new trace per request, named
-`WEBDAV <method>`, with the API calls, the per-chunk `crypto.encrypt` /
-`crypto.decrypt` spans and the cache events it caused (`cache.lookup`, with
-`retyc.cache.stale=true` for an expired listing served while refreshed). The
-background refresh of such a listing is not part of the request's trace: it
-runs after the request has answered, as a trace of its own, `cache.refresh`
-(`retyc.cache.name` `nodes` or `datarooms`, plus `retyc.dataroom.id` for a
-folder listing), carrying the API calls and a span link back to the request
-that triggered it. A listing the request fetches itself (nothing cached, or
-past `max_stale`) stays in the request's trace; when a request has to wait for a
-background refresh already running (a name missing from the expired listing),
-its span gets a link to that `cache.refresh` trace instead. Upload calls carry
-`retyc.upload.unsafe_write`, telling whether the API was asked to store the chunk
-in the background; a chunk download retried on a 404 shows as successive calls of
-the same route. A request the API rate limit refused (`429`) shows the same
-way, one call per attempt, with an `api.throttle` event on the request's span
-for each wait (`retyc.retry.attempt`, `retyc.retry.wait_ms`). Requests are
-never parented to the startup span, so a caller's trace closes once the server
-is up. WebDAV clients issue many `PROPFIND`s: set
-`OTEL_TRACES_SAMPLER=parentbased_traceidratio` and `OTEL_TRACES_SAMPLER_ARG`
-to keep the volume reasonable. Spans never contain a path, a file name or a
-dataroom title.
+`webdav serve` exposes none: no Prometheus metrics, no health probes, no
+OpenTelemetry traces. Only [`fs mount`](retycfs.md#metrics-and-probes) has them.
 
 ## Lifecycle & auth expiry
 
@@ -421,8 +313,7 @@ dataroom title.
   in-flight uploads) and exits with a message. Run `retyc auth login` and restart it.
 - A refresh that fails for another reason (the identity provider unreachable,
   answering a 5xx or `429`, timing out) does not stop the server: it is reported once
-  on stderr and tried again every minute, and `/readyz` keeps answering `200`.
-  Requests to the API fail meanwhile if the access token has expired.
+  on stderr and tried again every minute. Requests to the API fail meanwhile if the access token has expired.
 - A login that cannot recover, at startup or while serving (no stored token, refresh
   token expired or revoked), exits with code **77**; a missing or wrong key passphrase
   exits with **78**; any other failure exits with 1. A supervisor should stop restarting
@@ -469,8 +360,6 @@ Helm values, dashboards, alerts) must be updated together with the binary.
 | `retyc webdav serve` | `retyc fs webdav serve` | unknown command, the process exits at once |
 | `webdav.cache.ttl`, `RETYC_WEBDAV_CACHE_TTL` | `cache.ttl`, `RETYC_CACHE_TTL`, `--cache-ttl` | refused at startup: `webdav.cache.ttl was replaced by cache.ttl` |
 | `webdav.cache.max_stale`, `RETYC_WEBDAV_CACHE_MAX_STALE` | `cache.max_stale`, `RETYC_CACHE_MAX_STALE`, `--cache-max-stale` | refused at startup: `webdav.cache.max_stale was replaced by cache.max_stale` |
-| `retyc_cli_webdav_node_cache_lookups_total{result}` | `retyc_cli_vfs_node_cache_lookups_total{result}` | the old series is no longer exposed |
-| `retyc_cli_webdav_dataroom_cache_refreshes_total` | `retyc_cli_vfs_dataroom_cache_refreshes_total{result}` | the old series is no longer exposed; the new one has a `result` label (`ok`, `error`), so sum over it to get the former total |
 
 The old cache keys are refused by **every** command that reads the configuration,
 not only by the server: a `config.yaml` or an environment that still carries one
@@ -478,6 +367,6 @@ stops `retyc dataroom ls` too, until the key is renamed. The values and their
 meaning did not change. `cache.negative_ttl` (`1s`) is new and was a fixed second
 before.
 
-The cache settings and the two metrics moved because they belong to the tree both
+The cache settings moved because they belong to the tree both
 `retyc fs webdav serve` and `retyc fs mount` are built on. The other `webdav.*`
-keys, `RETYC_WEBDAV_*` variables and `retyc_cli_webdav_*` metrics are unchanged.
+keys and `RETYC_WEBDAV_*` variables are unchanged.

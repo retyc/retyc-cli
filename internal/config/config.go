@@ -101,17 +101,14 @@ type AdminConfig struct {
 	BaseURL        string `yaml:"base_url" mapstructure:"base_url"`
 }
 
-// MetricsConfig controls the observability listener of `webdav serve` and of
-// `fs mount` (Prometheus metrics and health probes), each under its own
-// section (webdav.metrics.*, mount.metrics.*). An empty address disables it.
-// Runtime toggles the go_* and process_* collectors on /metrics: a parent
-// process that aggregates several instances and already exposes its own
-// runtime metrics turns it off. Labels are constant "key=value" pairs added
-// to every series, so such a parent can tell its instances apart.
+// MetricsConfig controls the observability listener of `fs mount`
+// (Prometheus metrics and health probes, mount.metrics.*). An empty address
+// disables it. /metrics always carries the go_* and process_* collectors.
+// Labels are constant "key=value" pairs added to every series, so a parent
+// aggregating several instances can tell them apart.
 type MetricsConfig struct {
-	Addr    string   `yaml:"addr" mapstructure:"addr"`
-	Runtime bool     `yaml:"runtime" mapstructure:"runtime"`
-	Labels  []string `yaml:"labels" mapstructure:"labels"`
+	Addr   string   `yaml:"addr" mapstructure:"addr"`
+	Labels []string `yaml:"labels" mapstructure:"labels"`
 }
 
 // CacheConfig controls the caches of the tree both filesystem front ends
@@ -150,8 +147,7 @@ type CacheRedisConfig struct {
 // WebdavConfig holds the `webdav serve` settings. Addr is the host:port the
 // server binds; loopback by default since the tree is served in cleartext.
 type WebdavConfig struct {
-	Addr    string        `yaml:"addr" mapstructure:"addr"`
-	Metrics MetricsConfig `yaml:"metrics" mapstructure:"metrics"`
+	Addr string `yaml:"addr" mapstructure:"addr"`
 }
 
 // MountConfig holds the `fs mount` settings (the FUSE mount).
@@ -373,11 +369,6 @@ func SetDefaults() {
 	viper.SetDefault("cache.redis.url", "")
 	viper.SetDefault("cache.redis.high_confidentiality", false)
 	viper.SetDefault("webdav.addr", defaultWebdavAddr)
-	// Empty means no metrics/probes listener (see cmd/webdav_metrics.go).
-	viper.SetDefault("webdav.metrics.addr", "")
-	viper.SetDefault("webdav.metrics.runtime", true)
-	// "key=value" items; from the environment, separated by spaces.
-	viper.SetDefault("webdav.metrics.labels", []string{})
 	// Zero: each follows cache.ttl (see Config.KernelTTLs).
 	viper.SetDefault("mount.entry_ttl", time.Duration(0))
 	viper.SetDefault("mount.attr_ttl", time.Duration(0))
@@ -397,9 +388,9 @@ func SetDefaults() {
 	viper.SetDefault("mount.background_delete", false)
 	// Glob patterns; from the environment, separated by spaces.
 	viper.SetDefault("mount.local_files", DefaultMountLocalFiles())
-	// Same listener as webdav.metrics.*, for the mount (see cmd/observability.go).
+	// Empty means no metrics/probes listener (see cmd/observability.go).
+	// Labels are "key=value" items; from the environment, separated by spaces.
 	viper.SetDefault("mount.metrics.addr", "")
-	viper.SetDefault("mount.metrics.runtime", true)
 	viper.SetDefault("mount.metrics.labels", []string{})
 
 	viper.SetEnvPrefix(envPrefix)
@@ -425,7 +416,6 @@ func Load() (*Config, error) {
 	}
 	// Unmarshal keeps an environment value as a single item; GetStringSlice
 	// splits it on spaces, which is the documented environment syntax.
-	cfg.Webdav.Metrics.Labels = viper.GetStringSlice("webdav.metrics.labels")
 	cfg.Mount.Metrics.Labels = viper.GetStringSlice("mount.metrics.labels")
 	// Same for the patterns of the local files.
 	var err error

@@ -20,17 +20,14 @@ import (
 	"github.com/retyc/retyc-cli/internal/vfs"
 )
 
-// The observability listener of the long-running commands that serve
-// datarooms (`fs webdav serve`, `fs mount`): Prometheus exposition and health
-// probes, off unless the command is given an address (--metrics-addr). Each
-// command binds its own flags to its own keys (webdav.metrics.*,
-// mount.metrics.*) and flips its own readiness; everything else is here.
+// The observability listener of `fs mount`: Prometheus exposition and health
+// probes, off unless the mount is given an address (--metrics-addr, bound to
+// mount.metrics.* by resolveMountFlags). The mount flips the readiness.
 
-// serveHealth is the state behind the readiness probe of a long-running
-// command. Ready means it serves and is not shutting down: for `webdav serve`
-// the WebDAV listener is bound, for `fs mount` the filesystem is mounted. It
-// is flipped by the command, never by an API call from the probe itself, so a
-// probe stays cheap and cannot be the cause of load.
+// serveHealth is the state behind the readiness probe of the mount. Ready
+// means the filesystem is mounted and not shutting down. It is flipped by the
+// command, never by an API call from the probe itself, so a probe stays cheap
+// and cannot be the cause of load.
 type serveHealth struct {
 	ready atomic.Bool
 }
@@ -49,11 +46,7 @@ func (h *serveHealth) isReady() bool {
 
 // observabilityOptions selects what newObservabilityHandler registers.
 type observabilityOptions struct {
-	// runtime adds the go_* and process_* collectors. Off when a parent
-	// process aggregates several instances and reads their memory itself: the
-	// same families with different labels and HELP strings do not merge.
-	runtime bool
-	// extra holds the collectors that need a handle on the running server
+	// extra holds the collectors that need a handle on the running mount
 	// (sessionsCachedGauge).
 	extra []prometheus.Collector
 	// labels are added as constant labels to every series, runtime
@@ -63,13 +56,11 @@ type observabilityOptions struct {
 }
 
 // newObservabilityHandler serves the Prometheus exposition and the health
-// probes on a listener of their own: separate from the WebDAV one, so scrapers
-// and kubelet need neither the Basic auth credentials nor a path in the
-// WebDAV tree, and the only one `fs mount` has.
+// probes on the listener of the mount.
 //
-//	/metrics  Go runtime + process collectors and retyc_cli_build_info
+//	/metrics  Go runtime + process collectors and retycfs_build_info
 //	/healthz  liveness: 200 as long as the process answers
-//	/readyz   readiness: 200 while the command serves (see serveHealth), 503 otherwise
+//	/readyz   readiness: 200 while the mount serves (see serveHealth), 503 otherwise
 //
 // The options decide what /metrics carries besides internal/metrics. A
 // constant label whose name collides with a metric label (method, route,
@@ -80,14 +71,11 @@ func newObservabilityHandler(health *serveHealth, opts observabilityOptions) (ht
 	if len(opts.labels) > 0 {
 		registerer = prometheus.WrapRegistererWith(opts.labels, reg)
 	}
-	var cs []prometheus.Collector
-	if opts.runtime {
-		cs = append(cs,
-			collectors.NewGoCollector(),
-			collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		)
+	cs := []prometheus.Collector{
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		newBuildInfoCollector(),
 	}
-	cs = append(cs, newBuildInfoCollector())
 	cs = append(cs, metrics.All()...)
 	cs = append(cs, opts.extra...)
 	for _, c := range cs {
@@ -148,8 +136,8 @@ func parseMetricsLabels(items []string) (prometheus.Labels, error) {
 // in memory: each one cost a key fetch and a decryption.
 func sessionsCachedGauge(tree *vfs.FS) prometheus.Collector {
 	return prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Name: "retyc_cli_sessions_cached",
-		Help: "Dataroom sessions held unlocked in memory by the server.",
+		Name: "retycfs_sessions_cached",
+		Help: "Dataroom sessions held unlocked in memory by the mount.",
 	}, func() float64 { return float64(tree.SessionsCached()) })
 }
 
@@ -157,21 +145,19 @@ func sessionsCachedGauge(tree *vfs.FS) prometheus.Collector {
 // usual pattern to join a version label onto any other series in a query.
 func newBuildInfoCollector() prometheus.Collector {
 	g := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "retyc_cli_build_info",
-		Help: "Build information of the retyc CLI, constant 1.",
+		Name: "retycfs_build_info",
+		Help: "Build information of the retyc binary serving the mount, constant 1.",
 	}, []string{"version", "goos", "goarch"})
 	g.WithLabelValues(Version, runtime.GOOS, runtime.GOARCH).Set(1)
 
 	return g
 }
 
-// metricsSettings are the settings of the observability listener of one
-// command: webdav.metrics.* or mount.metrics.*.
+// metricsSettings are the settings of the observability listener of the
+// mount: mount.metrics.*.
 type metricsSettings struct {
 	// addr is the host:port to bind; empty, there is no listener.
 	addr string
-	// runtime adds the go_* and process_* collectors.
-	runtime bool
 	// labels are the constant labels, as "key=value" items.
 	labels []string
 }
@@ -192,9 +178,8 @@ func startObservability(settings metricsSettings, health *serveHealth, tree *vfs
 		return nil, err
 	}
 	handler, err := newObservabilityHandler(health, observabilityOptions{
-		runtime: settings.runtime,
-		extra:   []prometheus.Collector{sessionsCachedGauge(tree)},
-		labels:  labels,
+		extra:  []prometheus.Collector{sessionsCachedGauge(tree)},
+		labels: labels,
 	})
 	if err != nil {
 		return nil, err
@@ -210,7 +195,7 @@ func startObservability(settings metricsSettings, health *serveHealth, tree *vfs
 
 // startObservabilityServer binds addr and serves handler in the background.
 // The bind happens synchronously so a port already in use fails at startup,
-// like the WebDAV listener does (and before anything is mounted); srv.Addr holds the resolved address.
+// before anything is mounted; srv.Addr holds the resolved address.
 func startObservabilityServer(addr string, handler http.Handler) (*http.Server, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -229,4 +214,3 @@ func startObservabilityServer(addr string, handler http.Handler) (*http.Server, 
 
 	return srv, nil
 }
-

@@ -329,26 +329,18 @@ func (g *throttleGate) wait(
 	ctx context.Context, attempt int, budget time.Duration, counted *bool,
 ) (time.Duration, *HTTPError, error) {
 	var total time.Duration
-	waited := false
-	observe := func() {
-		if waited {
-			metrics.APIThrottleWait.Observe(total.Seconds())
-		}
-	}
 	for {
 		g.mu.Lock()
 		now := g.now()
 		until := g.notBefore
 		if !now.Before(until) {
 			g.mu.Unlock()
-			observe()
 
 			return total, nil, nil
 		}
 		if until.Sub(now) > budget-total {
 			refusal := g.last
 			g.mu.Unlock()
-			observe()
 			if refusal == nil {
 				refusal = &HTTPError{Status: http.StatusTooManyRequests}
 			}
@@ -361,13 +353,10 @@ func (g *throttleGate) wait(
 		}
 		g.mu.Unlock()
 
-		waited = true
 		telemetry.ThrottleEvent(ctx, attempt, until.Sub(now))
 		err := g.sleepUntil(ctx, until)
 		total += g.now().Sub(now)
 		if err != nil {
-			observe()
-
 			return total, nil, err
 		}
 	}

@@ -10,12 +10,12 @@ import (
 	"github.com/retyc/retyc-cli/internal/metrics"
 )
 
-// retyc_cli_vfs_spool_bytes follows what the spool files hold: nothing for a
+// retycfs_spool_bytes follows what the spool files hold: nothing for a
 // version not brought in yet, the size of the file once it is, nothing once
 // the spool is closed.
 func TestSpoolBytesGauge(t *testing.T) {
-	base := testutil.ToFloat64(metrics.VFSSpoolBytes)
-	held := func() float64 { return testutil.ToFloat64(metrics.VFSSpoolBytes) - base }
+	base := testutil.ToFloat64(metrics.SpoolBytes)
+	held := func() float64 { return testutil.ToFloat64(metrics.SpoolBytes) - base }
 
 	// A new file: what was written, then what a truncation leaves.
 	fs := newWriteFS(t, Options{}, emptyRoot())
@@ -52,11 +52,11 @@ func TestSpoolBytesGauge(t *testing.T) {
 	}
 }
 
-// retyc_cli_vfs_uploads_total counts each upload once, a Flush like a Create,
+// retycfs_uploads_total counts each upload once, a Flush like a Create,
 // by its outcome; a Flush with nothing to send is not one.
 func TestUploadsCounter(t *testing.T) {
-	ok := testutil.ToFloat64(metrics.VFSUploads.WithLabelValues("ok"))
-	failed := testutil.ToFloat64(metrics.VFSUploads.WithLabelValues("error"))
+	ok := testutil.ToFloat64(metrics.Uploads.WithLabelValues("ok"))
+	failed := testutil.ToFloat64(metrics.Uploads.WithLabelValues("error"))
 
 	fs := newWriteFS(t, Options{}, emptyRoot())
 	s := fs.spool(t, "/doc.txt", nil, false)
@@ -66,7 +66,7 @@ func TestUploadsCounter(t *testing.T) {
 	if _, err := fs.Create(context.Background(), "dr1", "/other.txt", 0, s.ModTime(), bytes.NewReader(nil)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if got := testutil.ToFloat64(metrics.VFSUploads.WithLabelValues("ok")) - ok; got != 2 {
+	if got := testutil.ToFloat64(metrics.Uploads.WithLabelValues("ok")) - ok; got != 2 {
 		t.Errorf("uploads ok moved by %v, want 2", got)
 	}
 
@@ -74,7 +74,7 @@ func TestUploadsCounter(t *testing.T) {
 	if _, err := fs.Create(context.Background(), "dr1", "/", 0, s.ModTime(), bytes.NewReader(nil)); err == nil {
 		t.Fatal("Create at the root succeeded")
 	}
-	if got := testutil.ToFloat64(metrics.VFSUploads.WithLabelValues("error")) - failed; got != 1 {
+	if got := testutil.ToFloat64(metrics.Uploads.WithLabelValues("error")) - failed; got != 1 {
 		t.Errorf("uploads error moved by %v, want 1", got)
 	}
 }

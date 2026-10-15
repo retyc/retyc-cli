@@ -290,7 +290,7 @@ func (d *driver) served(ctx context.Context, dataroomID string) error {
 }
 
 // call is one FUSE operation in progress: what the access log and the
-// retyc_cli_fuse_ops_* metrics say of it, and the recovery of a handler that
+// retycfs_ops_* metrics say of it, and the recovery of a handler that
 // panics.
 type call struct {
 	drv   *driver
@@ -330,8 +330,8 @@ func (c *call) end(errno *syscall.Errno) {
 	c.rec.duration = time.Since(c.start)
 	c.rec.errno = *errno
 	c.drv.log.record(c.rec)
-	metrics.FuseOps.WithLabelValues(c.rec.op, resultLabel(*errno)).Inc()
-	metrics.FuseOpDuration.WithLabelValues(c.rec.op).Observe(c.rec.duration.Seconds())
+	metrics.Ops.WithLabelValues(c.rec.op, resultLabel(*errno)).Inc()
+	metrics.OpDuration.WithLabelValues(c.rec.op).Observe(c.rec.duration.Seconds())
 }
 
 // startSpan opens the span of an operation that may reach the API: a root

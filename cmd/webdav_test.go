@@ -17,14 +17,12 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"golang.org/x/net/webdav"
 	"golang.org/x/oauth2"
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
-	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/vfs"
 	"github.com/retyc/retyc-cli/internal/vfs/metastore/memstore"
@@ -1636,8 +1634,6 @@ func TestWriteFileHandle_BufferedPutUsesCachedListings(t *testing.T) {
 		"retyc://dr1/a": {{ID: "f-1", Name: "doc.txt", Type: "file", VersionID: "v-1"}},
 	})
 
-	uploaded := metrics.WebdavBytes.WithLabelValues("upload")
-	uploadedBefore := testutil.ToFloat64(uploaded)
 	f, err := fs.OpenFile(withIsPut(context.Background()), "/dataroom/DR/a/doc.txt",
 		os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -1663,11 +1659,6 @@ func TestWriteFileHandle_BufferedPutUsesCachedListings(t *testing.T) {
 	want := []string{"POST /dataroom/dr1/node/file"}
 	if calls := log.list(); !slices.Equal(calls, want) {
 		t.Errorf("calls = %v, want %v", calls, want)
-	}
-	// The bytes were counted once, as they arrived; uploading the buffer must
-	// not count them again.
-	if got := counterDelta(t, uploaded, uploadedBefore); got != 10 {
-		t.Errorf("upload bytes counted = %v, want 10", got)
 	}
 	entry := cachedEntry(fs, "retyc://dr1/a")
 	if entry == nil || len(entry.nodes) != 1 || entry.nodes[0].VersionID != "v-2" || entry.nodes[0].Size != 10 {

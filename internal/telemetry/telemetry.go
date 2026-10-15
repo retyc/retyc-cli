@@ -1,8 +1,10 @@
-// Package telemetry sets up OpenTelemetry tracing for the CLI.
+// Package telemetry sets up OpenTelemetry tracing for `retyc fs mount`, the
+// only command that calls Init.
 //
 // Tracing is off unless an OTLP endpoint is configured in the environment;
 // then spans go to that collector over HTTP/protobuf or gRPC. Instrumentation
-// sites use Tracer() and pay a no-op span when tracing is off.
+// sites (shared with the other commands) use Tracer() and pay a no-op span
+// when no provider is installed.
 package telemetry
 
 import (
@@ -78,7 +80,7 @@ func Init(ctx context.Context, opts Options) (*Telemetry, error) {
 	// detector: process.command_args would export cleartext file names.
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
-			attribute.String("service.name", "retyc-cli"),
+			attribute.String("service.name", "retycfs"),
 			attribute.String("service.version", opts.Version),
 		),
 		resource.WithTelemetrySDK(),

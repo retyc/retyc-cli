@@ -48,9 +48,7 @@ func TestServeUntilDrained_WaitsForRequestsAndLocks(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	health := newServeHealth()
-	health.setReady(true)
-	shutdown := newWebdavShutdown(srv, nil, health, cancel, 5*time.Second)
+	shutdown := newWebdavShutdown(srv, cancel, 5*time.Second)
 	locksDone := make(chan struct{})
 	var released atomic.Bool
 	go func() {
@@ -81,10 +79,6 @@ func TestServeUntilDrained_WaitsForRequestsAndLocks(t *testing.T) {
 		t.Fatalf("the server lifecycle returned (%v) while a request was in flight", err)
 	case <-time.After(150 * time.Millisecond):
 	}
-	if health.isReady() {
-		t.Error("still ready while draining")
-	}
-
 	close(finish)
 	select {
 	case err := <-returned:
@@ -114,19 +108,17 @@ func TestServeUntilDrained_ServerFailure(t *testing.T) {
 	_ = ln.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	health := newServeHealth()
-	health.setReady(true)
 	locksDone := make(chan struct{})
 	go func() {
 		defer close(locksDone)
 		<-ctx.Done() // stands for the lock loop, which ends with the context
 	}()
 
-	err = serveUntilDrained(srv, ln, newWebdavShutdown(srv, nil, health, cancel, time.Second), locksDone)
+	err = serveUntilDrained(srv, ln, newWebdavShutdown(srv, cancel, time.Second), locksDone)
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
 		t.Errorf("serveUntilDrained = %v, want the failure of the listener", err)
 	}
-	if ctx.Err() == nil || health.isReady() {
+	if ctx.Err() == nil {
 		t.Error("the shutdown path did not run for a server that stopped on its own")
 	}
 }

@@ -9,11 +9,10 @@
 # the WebDAV client, and the trend line (first files vs last) shows whether the
 # per-file cost grows as the folder fills.
 #
-# Prerequisites: the server is already running (ideally with OTEL_EXPORTER_OTLP_ENDPOINT
-# pointed at a local collector) and the WebDAV mount is active.
+# Prerequisites: the server is already running and the WebDAV mount is active.
 #
 # - retyc dataroom create --title bench1
-# - OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 retyc fs webdav serve --addr 127.0.0.1:8888
+# - retyc fs webdav serve --addr 127.0.0.1:8888
 # - sudo mkdir -p /mnt/a && sudo mount -t davfs -o dir_mode=0777,file_mode=0666 http://127.0.0.1:8888/dataroom/bench1 /mnt/a
 #
 #
@@ -170,4 +169,4 @@ echo
 echo "per-file durations : $OUT/curl.ms  $OUT/davfs.ms"
 echo "full log           : $OUT/bench.log"
 echo
-echo "attach: this directory plus the server traces covering $(ts)"
+echo "attach: this directory (bench ended $(ts))"

@@ -29,9 +29,7 @@ import (
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/retyc/retyc-cli/internal/vfs"
 )
@@ -583,7 +581,6 @@ func (h *readFileHandle) Close() error {
 func (h *readFileHandle) Read(p []byte) (int, error) {
 	n, err := h.read(p)
 	h.pos += int64(n)
-	metrics.WebdavBytes.WithLabelValues("download").Add(float64(n))
 
 	return n, err
 }
@@ -747,8 +744,7 @@ func (h *readFileHandle) Readdir(_ int) ([]os.FileInfo, error) { return nil, os.
 // none, with or without a Content-Length.
 type writeFileHandle struct {
 	// ctx is the OpenFile (request) context: the upload from Close runs on
-	// it without its cancellation, so the API and crypto spans nest under the
-	// request span instead of becoming orphan traces.
+	// it without its cancellation.
 	ctx        context.Context
 	spool      vfs.Spool
 	drID       string
@@ -789,7 +785,6 @@ func (h *writeFileHandle) Read(_ []byte) (int, error) { return 0, os.ErrPermissi
 func (h *writeFileHandle) Write(p []byte) (int, error) {
 	n, err := h.spool.WriteAt(p, h.info.size)
 	h.info.size += int64(n)
-	metrics.WebdavBytes.WithLabelValues("upload").Add(float64(n))
 
 	return n, err
 }
@@ -1105,7 +1100,6 @@ func (h *createHandle) Write(p []byte) (int, error) {
 		return 0, os.ErrClosed
 	}
 	n, err := h.pw.Write(p)
-	metrics.WebdavBytes.WithLabelValues("upload").Add(float64(n))
 	h.written += int64(n)
 	h.keepComplete()
 
@@ -1338,8 +1332,9 @@ func bindUnsafeWrite(flags *pflag.FlagSet) {
 }
 
 // resolveWebdavAddr returns the host:port to bind, with the usual precedence
-// (flag > env > config file > default); same binding strategy as
-// resolveMetricsAddr. A value without a port ("0.0.0.0", the form --addr took
+// (flag > env > config file > default). Binding the flag to the viper key
+// here rather than in init() keeps the binding alive across the viper.Reset()
+// that the config tests perform. A value without a port ("0.0.0.0", the form --addr took
 // before it included the port) is an error.
 func resolveWebdavAddr(flags *pflag.FlagSet) (string, error) {
 	_ = viper.BindPFlag("webdav.addr", flags.Lookup("addr"))
@@ -1357,9 +1352,8 @@ var webdavCmd = &cobra.Command{
 }
 
 var webdavServeCmd = &cobra.Command{
-	Use:         "serve",
-	Annotations: map[string]string{annotationLongRunning: "true"},
-	Short:       "Start a local WebDAV server exposing your datarooms",
+	Use:   "serve",
+	Short: "Start a local WebDAV server exposing your datarooms",
 	Long: `Start a local WebDAV server on localhost that exposes all your RETYC datarooms.
 
 Datarooms are exposed under the /dataroom folder; other element types may be
@@ -1375,21 +1369,8 @@ Example:
   RETYC_KEY_PASSPHRASE=your-passphrase retyc fs webdav serve --addr 127.0.0.1:8888 --auth
   # Then mount http://localhost:8888 in your WebDAV client
   # Datarooms appear under /dataroom`,
-	RunE: func(cmd *cobra.Command, args []string) (retErr error) {
-		// The init span covers everything before the port is bound (token,
-		// API reachability, key unlock, listeners) and is the only span
-		// parented to TRACEPARENT: the driver's NodeStageVolume trace must
-		// close once the server is up. Requests get their own roots. It
-		// starts before the passphrase check so a missing passphrase is
-		// still recorded as a failed init.
-		initCtx, initSpan := telemetry.Tracer().Start(cmd.Context(), "retyc fs webdav serve init")
-		initDone := false
-		defer func() {
-			if !initDone {
-				telemetry.RecordError(initSpan, retErr)
-				initSpan.End()
-			}
-		}()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		initCtx := cmd.Context()
 
 		// Fail-fast: a malformed address would otherwise only surface once the
 		// token, the API and the key passphrase have all been checked.
@@ -1414,7 +1395,7 @@ Example:
 			return err
 		}
 		client := api.New(cfg.API.BaseURL, cliUserAgent(), tokSrc, insecure, debug,
-			apiTransport(), apiRetry(cfg), api.WithUnsafeWrite(cfg.API.UnsafeWrite))
+			apiRetry(cfg), api.WithUnsafeWrite(cfg.API.UnsafeWrite))
 
 		// Fail-fast before binding the port: auth + API reachability, then the
 		// key passphrase itself (a wrong one would otherwise only surface on the
@@ -1509,29 +1490,17 @@ Example:
 				"WARNING: binding to %s without authentication exposes all dataroom contents "+
 					"in cleartext to the network; consider --auth\n", addr)
 		}
-		// Outermost, so rejected credentials (401) are counted and traced too.
-		rootHandler = instrumentWebdav(rootHandler)
-
 		srv := &http.Server{ //nolint:gosec // G112: local-only server; Slowloris not a concern
 			Addr:              addr,
 			Handler:           rootHandler,
 			ReadHeaderTimeout: 30 * time.Second,
 		}
-		// Optional observability listener (Prometheus metrics + probes), bound
-		// before the WebDAV port so a bad address fails fast. /readyz answers
-		// 503 until the WebDAV listener is actually bound below.
-		health := newServeHealth()
-		metricsSrv, err := startObservability(resolveWebdavMetrics(cmd.Flags()), health, fs.tree)
-		if err != nil {
-			return err
-		}
-
 		ctx, cancel := context.WithCancel(cmd.Context())
 		defer cancel()
 
 		// Single shutdown path shared by SIGINT/SIGTERM and auth expiry, so the
 		// server always drains gracefully instead of being killed mid-request.
-		shutdown := newWebdavShutdown(srv, metricsSrv, health, cancel, webdavDrainTimeout)
+		shutdown := newWebdavShutdown(srv, cancel, webdavDrainTimeout)
 
 		// Renew the mirrored server locks while the WebDAV locks stand, and
 		// release them on shutdown. locksDone closes once they are released:
@@ -1562,8 +1531,8 @@ Example:
 			}
 		}()
 
-		// Bind explicitly rather than ListenAndServe so readiness flips only
-		// once the port really accepts connections.
+		// Bind explicitly rather than ListenAndServe so a port in use fails
+		// before anything is served.
 		ln, err := net.Listen("tcp", srv.Addr)
 		if err != nil {
 			shutdown()
@@ -1572,9 +1541,6 @@ Example:
 			return fmt.Errorf("WebDAV server: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "WebDAV server listening on http://%s\n", ln.Addr())
-		health.setReady(true)
-		initSpan.End()
-		initDone = true
 
 		if err := serveUntilDrained(srv, ln, shutdown, locksDone); err != nil {
 			return fmt.Errorf("WebDAV server: %w", err)
@@ -1601,23 +1567,15 @@ const webdavDrainTimeout = 15 * time.Second
 // by SIGINT/SIGTERM, auth expiry and a server that stopped on its own. It
 // runs once; every call returns when that run is over, the first as the
 // others, so a caller that needs the drain finished only has to call it.
-func newWebdavShutdown(
-	srv, metricsSrv *http.Server, health *serveHealth, cancel context.CancelFunc, drain time.Duration,
-) func() {
+func newWebdavShutdown(srv *http.Server, cancel context.CancelFunc, drain time.Duration) func() {
 	var once sync.Once
 
 	return func() {
 		once.Do(func() {
-			// Flip readiness first so an orchestrator stops routing to this
-			// instance while the in-flight requests drain.
-			health.setReady(false)
 			cancel()
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), drain)
 			defer shutdownCancel()
 			_ = srv.Shutdown(shutdownCtx)
-			if metricsSrv != nil {
-				_ = metricsSrv.Shutdown(shutdownCtx)
-			}
 		})
 	}
 }
@@ -1658,12 +1616,6 @@ func init() {
 	addCacheFlags(webdavServeCmd, true)
 	webdavServeCmd.Flags().Bool("auth", false,
 		"require HTTP Basic auth (password from RETYC_WEBDAV_PASSWORD or generated)")
-	webdavServeCmd.Flags().String("metrics-addr", "",
-		"address for Prometheus metrics and health probes (e.g. 127.0.0.1:9090)")
-	webdavServeCmd.Flags().Bool("metrics-runtime", true,
-		"include Go runtime and process metrics on /metrics")
-	webdavServeCmd.Flags().StringArray("metrics-label", nil,
-		"constant label key=value added to every metric (repeatable)")
 	webdavCmd.AddCommand(webdavServeCmd)
 	fsCmd.AddCommand(webdavCmd)
 }

@@ -189,7 +189,7 @@ func TestConfigFileLoaded_ReadableFile(t *testing.T) {
 func TestEffectiveValue_JoinsYAMLLists(t *testing.T) {
 	isolateConfig(t)
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	yaml := "webdav:\n  metrics:\n    labels:\n      - identity=abc\n      - pod=x\n"
+	yaml := "mount:\n  metrics:\n    labels:\n      - identity=abc\n      - pod=x\n"
 	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -197,16 +197,16 @@ func TestEffectiveValue_JoinsYAMLLists(t *testing.T) {
 
 	initConfig()
 
-	if got := effectiveValue("webdav.metrics.labels"); got != "identity=abc pod=x" {
+	if got := effectiveValue("mount.metrics.labels"); got != "identity=abc pod=x" {
 		t.Errorf("effectiveValue = %q, want %q", got, "identity=abc pod=x")
 	}
 }
 
 func TestEffectiveValue_JoinsLists(t *testing.T) {
 	isolateConfig(t)
-	t.Setenv("RETYC_WEBDAV_METRICS_LABELS", "identity=abc pod=x")
+	t.Setenv("RETYC_MOUNT_METRICS_LABELS", "identity=abc pod=x")
 	config.SetDefaults()
-	if got := effectiveValue("webdav.metrics.labels"); got != "identity=abc pod=x" {
+	if got := effectiveValue("mount.metrics.labels"); got != "identity=abc pod=x" {
 		t.Errorf("effectiveValue = %q, want %q", got, "identity=abc pod=x")
 	}
 }

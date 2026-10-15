@@ -8,12 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"filippo.io/age"
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
-	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/retyc/retyc-cli/internal/ui"
 	"go.opentelemetry.io/otel/trace"
@@ -168,9 +166,7 @@ readLoop:
 func encryptChunk(ctx context.Context, chunkID int, plain []byte, sessionPubKey string) ([]byte, error) {
 	_, span := telemetry.Tracer().Start(ctx, "crypto.encrypt", trace.WithAttributes(
 		telemetry.AttrChunkIndex.Int(chunkID), telemetry.AttrChunkPlaintextBytes.Int(len(plain))))
-	start := time.Now()
 	encrypted, err := crypto.EncryptBinaryForKey(plain, sessionPubKey)
-	metrics.CryptoDuration.WithLabelValues("encrypt").Observe(time.Since(start).Seconds())
 	telemetry.RecordError(span, err)
 	span.End()
 
@@ -183,9 +179,7 @@ func encryptChunk(ctx context.Context, chunkID int, plain []byte, sessionPubKey 
 func decryptChunk(ctx context.Context, chunkID int, encrypted []byte, identity *age.HybridIdentity) ([]byte, error) {
 	_, span := telemetry.Tracer().Start(ctx, "crypto.decrypt", trace.WithAttributes(
 		telemetry.AttrChunkIndex.Int(chunkID), telemetry.AttrChunkCiphertextBytes.Int(len(encrypted))))
-	start := time.Now()
 	plaintext, err := crypto.DecryptBinary(encrypted, identity)
-	metrics.CryptoDuration.WithLabelValues("decrypt").Observe(time.Since(start).Seconds())
 	telemetry.RecordError(span, err)
 	span.End()
 

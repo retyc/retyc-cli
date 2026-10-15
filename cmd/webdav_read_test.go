@@ -86,13 +86,6 @@ func await(t *testing.T, ch <-chan int, what string) int {
 // readPath is the WebDAV path of the file newReadFS serves.
 const readPath = "/dataroom/DR/big.bin"
 
-// contextReaderAt makes an *os.File the positionedFile of a readFileHandle.
-type contextReaderAt struct{ *os.File }
-
-func (f contextReaderAt) ReadAtContext(_ context.Context, p []byte, off int64) (int, error) {
-	return f.ReadAt(p, off)
-}
-
 // cutChunks returns data in chunks of size bytes, the last one shorter or
 // equal.
 func cutChunks(data []byte, size int) [][]byte {

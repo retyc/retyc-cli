@@ -70,10 +70,6 @@ func TestCommandTree_MountUnderFS(t *testing.T) {
 			t.Errorf("%q defines a PersistentPreRun(E) that masks the root one", c.CommandPath())
 		}
 	}
-	// A filesystem served for days gets no command span.
-	if fsMountCmd.Annotations[annotationLongRunning] != "true" {
-		t.Error("fs mount is not annotated long-running")
-	}
 	// What is mounted, the two cache durations that apply to a mount (it
 	// never serves an expired listing, so it has no --cache-max-stale), where
 	// the cache is kept, and one flag per mount.* key.
@@ -167,7 +163,7 @@ func TestResolveMountFlags(t *testing.T) {
 				"uid": "4242", "gid": "4343", "file-mode": "0640", "dir-mode": "0750", "drain-timeout": "1m",
 				"kernel-cache": "true", "entry-ttl": "3s", "attr-ttl": "4s", "spool-dir": spool,
 				"allow-other": "true", "read-only": "true", "mirror-locks": "true",
-				"metrics-addr": "127.0.0.1:9191", "metrics-runtime": "false",
+				"metrics-addr": "127.0.0.1:9191",
 			},
 			want: mountSettings{
 				entryTTL: 3 * time.Second, attrTTL: 4 * time.Second, kernelCache: true, spoolDir: spool,
@@ -184,7 +180,7 @@ func TestResolveMountFlags(t *testing.T) {
 			want: mountSettings{
 				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute, mirrorLocks: true,
-				metrics: metricsSettings{addr: "127.0.0.1:9192", runtime: true, labels: []string{"pod=a", "volume=b"}},
+				metrics: metricsSettings{addr: "127.0.0.1:9192", labels: []string{"pod=a", "volume=b"}},
 			},
 		},
 		"background delete from the environment": {
@@ -290,9 +286,8 @@ func TestResolveMountFlags(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.want.metrics.labels == nil {
-				// The cases that say nothing of the listener: off, with the
-				// runtime collectors it would carry.
-				tc.want.metrics = metricsSettings{runtime: true, labels: []string{}}
+				// The cases that say nothing of the listener: off.
+				tc.want.metrics = metricsSettings{labels: []string{}}
 			}
 			if tc.want.localFiles == nil {
 				// The cases that say nothing of the local files: the default.
@@ -364,10 +359,10 @@ func TestMountFlags_UnsafeWrite(t *testing.T) {
 		env, flag string
 		want      bool
 	}{
-		"default":            {want: false},
-		"flag":               {flag: "true", want: true},
-		"env":                {env: "true", want: true},
-		"flag over the env":  {env: "true", flag: "false", want: false},
+		"default":           {want: false},
+		"flag":              {flag: "true", want: true},
+		"env":               {env: "true", want: true},
+		"flag over the env": {env: "true", flag: "false", want: false},
 	}
 	for label, tc := range cases {
 		t.Run(label, func(t *testing.T) {

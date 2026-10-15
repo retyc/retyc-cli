@@ -259,7 +259,6 @@ Stays in the foreground; unmount with Ctrl-C or `fusermount3 -u <mountpoint>`.
 | `--local-file pattern`                                                     | Name pattern of the files kept on this machine and never sent (repeatable; default `.*.swp`, `.*.swx`, `*~`, `4913`; `none`: no such file)                                     |
 | `--unsafe-write`                                                           | Let the API acknowledge uploads before they are stored (faster; a failed background store is not reported)                                                                     |
 | `--metrics-addr`                                                           | Address for Prometheus metrics and health probes (`/metrics`, `/healthz`, `/readyz`); off by default                                                                           |
-| `--metrics-runtime`                                                        | Include Go runtime and process metrics (default `true`)                                                                                                                        |
 | `--metrics-label key=value`                                                | Constant label added to every metric (repeatable)                                                                                                                              |
 
 Each has a `mount.*` key and a `RETYC_MOUNT_*` variable: see [RetycFS](retycfs.md#options).
@@ -274,7 +273,7 @@ On Linux, [RetycFS](retycfs.md) is the main way.
 The command belongs to the `fs` group (filesystem access to datarooms). It was
 `retyc webdav serve` before; that path has been removed, without an alias. Its
 cache settings were renamed too (`webdav.cache.ttl` → `cache.ttl`, `webdav.cache.max_stale` →
-`cache.max_stale`), and two of its metrics moved to `retyc_cli_vfs_*`.
+`cache.max_stale`).
 
 | Command                                     | Description                                                                                                                                                                               |
 |---------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|

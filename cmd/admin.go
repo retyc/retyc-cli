@@ -39,7 +39,7 @@ func newAdminClient() (*config.Config, *api.Client, error) {
 	}
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: cfg.Admin.APIKey, TokenType: "Bearer"})
 
-	return cfg, api.New(cfg.AdminBaseURL(), cliUserAgent(), ts, insecure, debug, apiTransport(), apiRetry(cfg)), nil
+	return cfg, api.New(cfg.AdminBaseURL(), cliUserAgent(), ts, insecure, debug, apiRetry(cfg)), nil
 }
 
 // adminIdentity loads the organization AGE identity from the

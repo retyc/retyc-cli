@@ -78,14 +78,14 @@ func (m *LockManager) Take(ctx context.Context, key, nodeID, label string, expir
 // held follows it. The caller holds mu.
 func (m *LockManager) setLocked(key string, held *heldLock) {
 	if _, known := m.locks[key]; !known {
-		metrics.VFSLocksHeld.Inc()
+		metrics.LocksHeld.Inc()
 	}
 	m.locks[key] = held
 }
 
 func (m *LockManager) dropLocked(key string) {
 	if _, known := m.locks[key]; known {
-		metrics.VFSLocksHeld.Dec()
+		metrics.LocksHeld.Dec()
 		delete(m.locks, key)
 	}
 }
