@@ -349,9 +349,10 @@ func TestBaseTransport_Insecure(t *testing.T) {
 func TestNew_TransportUsesEnvironmentProxyAndRoots(t *testing.T) {
 	client := New("https://example.test", "retyc-test/1.0", staticTokenSource(), false, false)
 
-	ua, ok := client.httpClient.Transport.(*UserAgentTransport)
+	// The retry transport is outermost; the chain under test starts below it.
+	ua, ok := client.retry.base.(*UserAgentTransport)
 	if !ok {
-		t.Fatalf("transport = %T, want *UserAgentTransport", client.httpClient.Transport)
+		t.Fatalf("transport = %T, want *UserAgentTransport", client.retry.base)
 	}
 
 	oauthTransport, ok := ua.Base.(*oauth2.Transport)
@@ -532,9 +533,10 @@ func TestNew_TransportUsesLoadedRoots(t *testing.T) {
 
 	client := New("https://example.test", "retyc-test/1.0", staticTokenSource(), false, false)
 
-	ua, ok := client.httpClient.Transport.(*UserAgentTransport)
+	// The retry transport is outermost; the chain under test starts below it.
+	ua, ok := client.retry.base.(*UserAgentTransport)
 	if !ok {
-		t.Fatalf("transport = %T, want *UserAgentTransport", client.httpClient.Transport)
+		t.Fatalf("transport = %T, want *UserAgentTransport", client.retry.base)
 	}
 
 	oauthTransport, ok := ua.Base.(*oauth2.Transport)

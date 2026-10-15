@@ -96,12 +96,15 @@ func TestParseIfHeader(t *testing.T) {
 }
 
 // A WebDAV lock that lapsed without UNLOCK stops being renewed on the API:
-// its server lock is released.
+// its server lock is released. The lapse is read from the timeout of the LOCK
+// response (lockExpiry); the renewal and the release are the tree's
+// (vfs.LockManager, whose own tests set the expiry directly).
 func TestLockMirror_ReleasesLapsedLocks(t *testing.T) {
 	fake := &lot2API{t: t}
 	fs := newLot2FS(t, fake)
 	handler, mirror := newLockedHandler(fs)
-	handler.ServeHTTP(httptest.NewRecorder(), lockRequest("/dataroom/DR/locked.txt", ""))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", ""))
 	if mirror.held() != 1 {
 		t.Fatalf("held = %d", mirror.held())
 	}
@@ -111,29 +114,31 @@ func TestLockMirror_ReleasesLapsedLocks(t *testing.T) {
 		t.Fatalf("a standing lock: held = %d, calls = %v, want it renewed", mirror.held(), fake.calls)
 	}
 
-	mirror.mu.Lock()
-	for _, ml := range mirror.locks {
-		if ml.expires.IsZero() {
-			t.Error("the Second-3600 timeout of the LOCK was not recorded")
-		}
-		ml.expires = time.Now().Add(-time.Second)
+	// The client refreshes its lock for zero seconds: the WebDAV lock lapses
+	// at once, and the mirror learns it from the response.
+	r := lockRequest("/dataroom/DR/locked.txt", "("+w.Header().Get("Lock-Token")+")")
+	r.Header.Set("Timeout", "Second-0")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("LOCK refresh: status = %d (%s)", w.Code, w.Body.String())
 	}
-	mirror.mu.Unlock()
+	time.Sleep(2 * time.Millisecond)
 	mirror.refreshAll(context.Background())
 	if mirror.held() != 0 || fake.count("DELETE /dataroom/node/lock/l-1") != 1 {
 		t.Errorf("a lapsed lock: held = %d, calls = %v, want it released", mirror.held(), fake.calls)
 	}
 }
 
-// The periodic renewal never takes a server lock for a token unlocked since
-// it was read.
-func TestLockMirror_BackgroundRefreshSkipsReleasedToken(t *testing.T) {
-	fake := &lot2API{t: t}
-	fs := newLot2FS(t, fake)
-	_, mirror := newLockedHandler(fs)
-
-	mirror.refresh(context.Background(), "urn:uuid:gone", "n-doc", "/dataroom/DR/locked.txt", time.Time{}, true)
-	if mirror.held() != 0 || fake.count("POST") != 0 {
-		t.Errorf("held = %d, calls = %v, want nothing taken", mirror.held(), fake.calls)
+// lockExpiry reads the timeout x/net/webdav grants in a LOCK response.
+func TestLockExpiry(t *testing.T) {
+	now := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	if got := lockExpiry([]byte(`<D:timeout>Second-3600</D:timeout>`), now); !got.Equal(now.Add(time.Hour)) {
+		t.Errorf("Second-3600 = %v, want an hour from now", got)
+	}
+	for _, body := range []string{`<D:timeout>Infinite</D:timeout>`, ``} {
+		if got := lockExpiry([]byte(body), now); !got.IsZero() {
+			t.Errorf("lockExpiry(%q) = %v, want no expiry", body, got)
+		}
 	}
 }

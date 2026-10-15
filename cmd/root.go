@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
@@ -21,6 +22,17 @@ import (
 var (
 	cfgFile string
 	debug   bool
+
+	// envFileFlag is --env-file; RETYC_ENV_FILE applies when it is empty.
+	envFileFlag string
+
+	// envFileLoaded describes the environment file whose variables were
+	// applied, nil when none was designated or when it failed to load.
+	envFileLoaded *config.EnvFile
+
+	// envFileErr is why the designated environment file was not loaded. It is
+	// fatal for every command but the offline ones (PersistentPreRunE).
+	envFileErr error
 
 	// configFileLoaded is the config file that was actually read, or "" when
 	// none was. It is not viper.ConfigFileUsed(): with --config, viper records
@@ -73,7 +85,20 @@ var rootCmd = &cobra.Command{
 	// silently skip this.
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		if cmd.Annotations[annotationOffline] == "true" {
+			// An offline command needs no secret, and `config path` is what
+			// someone runs to find out why the file does not load.
+			if envFileErr != nil {
+				fmt.Fprintln(os.Stderr, "warning:", envFileErr)
+			}
+
 			return nil
+		}
+
+		// A designated environment file that does not load is fatal: running
+		// without the secrets it was meant to bring would fail later, less
+		// clearly, or prompt on a terminal nobody watches.
+		if envFileErr != nil {
+			return envFileErr
 		}
 
 		source, err := api.InitTLSRoots()
@@ -113,23 +138,42 @@ var rootCmd = &cobra.Command{
 // cannot recover without a new token: none stored, or a refresh token the
 // identity provider rejected (expired or revoked, invalid_grant). It is
 // sysexits.h EX_NOPERM and a stable contract: a supervisor restarting
-// `retyc webdav serve` stops on it instead of hammering the API and the
+// `retyc fs webdav serve` stops on it instead of hammering the API and the
 // identity provider. A transient failure (network, 5xx) keeps exit code 1.
 const exitAuthRequired = 77
 
 // exitConfig is the exit code of a command stopped by a key passphrase that
-// is missing (RETYC_KEY_PASSPHRASE unset, no TTY to prompt) or wrong. It is
+// is missing (RETYC_KEY_PASSPHRASE unset, no TTY to prompt) or wrong, or by an
+// environment file (--env-file) that does not load. It is
 // sysexits.h EX_CONFIG and, like exitAuthRequired, tells a supervisor that a
 // restart with the same environment will fail again.
 const exitConfig = 78
 
+// exitLostWrites is the exit code of `retyc fs mount` when files being
+// written, or removed in the background, did not reach the API before the
+// filesystem went away. It is sysexits.h EX_TEMPFAIL: the mount itself
+// worked, data written through it is lost, and a supervisor can tell it apart
+// from a failure to start (1). A login lost at the same time keeps 77.
+const exitLostWrites = 75
+
+// lostWritesError marks the error of a mount that lost writes (see
+// exitLostWrites) without changing its message. It is declared here, built
+// everywhere, while the driver's own error exists on Linux only.
+type lostWritesError struct{ error }
+
+func (e lostWritesError) Unwrap() error { return e.error }
+
 // exitCode maps the error a command returned to the process exit code.
 func exitCode(err error) int {
+	var lost lostWritesError
 	switch {
 	case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrNoRefreshToken):
 		return exitAuthRequired
-	case errors.Is(err, config.ErrNoKeyPassphrase), errors.Is(err, service.ErrWrongKeyPassphrase):
+	case errors.Is(err, config.ErrNoKeyPassphrase), errors.Is(err, service.ErrWrongKeyPassphrase),
+		errors.Is(err, config.ErrEnvFile):
 		return exitConfig
+	case errors.As(err, &lost):
+		return exitLostWrites
 	}
 
 	return 1
@@ -160,7 +204,9 @@ func run(ctx context.Context, args []string) error {
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
+	// The environment file comes first: its variables must be in the
+	// environment before viper, or anything else, reads a RETYC_ variable.
+	cobra.OnInitialize(loadEnvFile, initConfig)
 
 	// Build the default config path hint from the active build mode so the
 	// help text always reflects the real default location.
@@ -171,6 +217,9 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "",
 		"config file (default: "+defaultCfgHint+"); does not move token.json")
+	rootCmd.PersistentFlags().StringVar(&envFileFlag, "env-file", "",
+		"file of RETYC_* variables (NAME=value lines), applied unless already set in the\n"+
+			"environment; must be mode 0600 (default: $"+config.EnvFileName+")")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false,
 		"print every HTTP request and raw response to stderr")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false,
@@ -194,6 +243,25 @@ func applyServiceConfig() {
 		return
 	}
 	service.SetConcurrency(cfg.API.Concurrency)
+}
+
+// loadEnvFile applies the environment file designated by --env-file or
+// RETYC_ENV_FILE. The outcome is kept for PersistentPreRunE, which decides
+// whether a failure stops the command: cobra.OnInitialize cannot return one.
+//
+// --debug names the file and the variables, never a value.
+func loadEnvFile() {
+	envFileLoaded, envFileErr = config.LoadEnvFile(envFileFlag)
+	if !debug || envFileLoaded == nil {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "Using environment file:", envFileLoaded.Path)
+	if len(envFileLoaded.Applied) > 0 {
+		fmt.Fprintln(os.Stderr, "  applied:", strings.Join(envFileLoaded.Applied, " "))
+	}
+	if len(envFileLoaded.Kept) > 0 {
+		fmt.Fprintln(os.Stderr, "  already in the environment, kept:", strings.Join(envFileLoaded.Kept, " "))
+	}
 }
 
 // initConfig reads the configuration file and environment variables.

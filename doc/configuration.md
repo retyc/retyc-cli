@@ -16,11 +16,11 @@ Settings come from a `config.yaml` file in the config directory, or from
 environment variables. The config directory also holds your login token
 (`token.json`).
 
-| System  | Config directory                        |
-|---------|-----------------------------------------|
-| Linux   | `~/.config/retyc/`                      |
-| macOS   | `~/Library/Application Support/retyc/`  |
-| Windows | `%AppData%\retyc\`                      |
+| System  | Config directory                                                       |
+|---------|------------------------------------------------------------------------|
+| Linux   | `~/.config/retyc/`                                                     |
+| macOS   | `~/Library/Application Support/retyc/`                                 |
+| Windows | `%AppData%\retyc\`                                                     |
 | Docker  | `/home/retyc/.config/retyc/` (mount a volume, see [Docker](docker.md)) |
 
 - `RETYC_CONFIG_DIR=/some/path` moves the whole directory: config **and** token.
@@ -28,6 +28,8 @@ environment variables. The config directory also holds your login token
   the default directory.
 
 An environment variable wins over `config.yaml`, which wins over the default.
+Variables can also come from an [environment file](#keep-the-secrets-in-an-environment-file-boot-mounts-systemd-csi)
+(`--env-file`), which the real environment wins over.
 
 ## Common tasks
 
@@ -47,6 +49,61 @@ Set `RETYC_TOKEN` (an offline token from `retyc auth login --offline`) and
 `RETYC_KEY_PASSPHRASE`, and pass `-y` to commands that ask for confirmation.
 See [CI / CD](ci-cd.md). The MCP server and the Claude Desktop bundle use the
 same two variables, see [MCP](mcp.md).
+
+### Keep the secrets in an environment file (boot mounts, systemd, CSI)
+
+A service that starts without a terminal reads its secrets from a file,
+designated with `--env-file` or `RETYC_ENV_FILE` (the flag wins). It works on
+every system and for every command.
+
+```sh
+# /etc/retyc/env    (chmod 600, owned by the user the service runs as)
+# The offline token and the passphrase of the key
+RETYC_TOKEN=eyJhbGciOi...
+RETYC_KEY_PASSPHRASE="correct horse battery staple"
+RETYC_API_BASE_URL=https://api.example.com
+```
+
+```bash
+retyc --env-file /etc/retyc/env fs mount retyc://019d3de3-... /mnt/dataroom
+retyc --env-file /etc/retyc/env fs webdav serve
+```
+
+```ini
+# /etc/systemd/system/retyc-mount.service
+[Service]
+Environment = RETYC_ENV_FILE=/etc/retyc/env
+ExecStart = /usr/local/bin/retyc fs mount retyc://019d3de3-... /mnt/dataroom
+Restart = on-failure
+RestartPreventExitStatus = 77 78
+```
+
+The same file also works as a systemd `EnvironmentFile=/etc/retyc/env`, as long
+as its values need no quotes; `--env-file` has the advantage of being the same
+on every system and of refusing a file other users can read.
+
+- **Format**: one `NAME=value` per line; `export NAME=value` is accepted; blank
+  lines and lines starting with `#` are ignored. A value is the rest of the
+  line, or the content of a pair of single or double quotes (use them for a
+  value with leading or trailing spaces; a comment may follow the closing
+  quote). Nothing is expanded: `$HOME` stays `$HOME`. Between double quotes
+  `\"` and `\\` stand for `"` and `\`; an unquoted value keeps its `#`.
+- **Only `RETYC_*` variables** are accepted, all of them: the secrets and any
+  setting of the [reference](#settings), `RETYC_CONFIG_DIR` included. Any
+  other name (`HTTPS_PROXY`, `SSL_CERT_FILE`, ...) is an error, and so is
+  `RETYC_ENV_FILE` itself.
+- **The environment wins**: a variable the process already has, even empty, is
+  not replaced by the file. Then come `config.yaml` and the defaults, as usual.
+- **Permissions**: on Linux and macOS the file must not be accessible by group
+  or others (`chmod 600`), or the command refuses to start. Windows is not
+  checked: protect the file with its ACL.
+- A file that is missing, unreadable, too open or malformed stops the command
+  with exit code `78` (configuration), like a missing passphrase. The message
+  gives the line number and never the content of the line. `retyc version`,
+  `retyc config path` and `retyc config show` still run and print a warning.
+- `retyc config path` shows the file in use and the names of the variables it
+  brought; `retyc config show` lists their effective values like any
+  environment value, secrets masked.
 
 ### Behind a corporate proxy
 
@@ -144,7 +201,8 @@ api:
   unsafe_write: true
 ```
 
-or `RETYC_API_UNSAFE_WRITE=true`, or `retyc webdav serve --unsafe-write`.
+or `RETYC_API_UNSAFE_WRITE=true`, or `--unsafe-write` on `retyc fs webdav serve` and
+`retyc fs mount`.
 
 The cost is durability: a background store that fails (the object store
 unreachable, the API worker killed) is never reported. The upload has
@@ -159,44 +217,109 @@ A download meeting such a chunk retries it twice within a second (it may still
 be on its way to the store), then fails with "chunk missing on the server: the
 file version is incomplete or corrupted".
 
+### When the API rate-limits you
+
+The API accepts a bounded number of requests per second from one IP address,
+shared by everything behind that address: every `retyc` process of a machine,
+of an office, of a Kubernetes node. Above it, a request is refused with
+`429 Too Many Requests` before it reaches the API. The CLI handles that by
+itself: it stops sending for the pause the server asks for (`Retry-After`,
+one second in practice), then sends the refused requests again. A command is
+slowed down, not failed, and one line on stderr reports each pause:
+
+```
+API rate limit: throttled from 10:42:07 to 10:42:08 (1.02s), 12 refusal(s), 12 request(s) held back
+```
+
+A request gives up, with `API rate limit, gave up after 30s (10 attempts)`,
+once it has been sent `max_attempts` times or would be held back for more than
+`max_wait` in total:
+
+```yaml
+# config.yaml
+api:
+  retry:
+    max_wait: 30s      # with a unit; 1s to 10m
+    max_attempts: 10   # 1 to 100
+```
+
+With `max_attempts: 1` a refused request is not sent again and fails at once,
+but the CLI still observes the pause: the requests that follow wait for it.
+`max_wait` is also the longest a single refusal keeps all the requests of the
+process waiting, whatever pause the server asks for. The line on stderr is
+printed by the first request that succeeds after a pause, so a command whose
+last request gives up prints its error only.
+
+`retyc fs webdav serve` then answers its own client `429` with `Retry-After`.
+
 ## Reference
 
 ### Settings
 
-| Setting | `config.yaml` key | Environment variable | Default |
-|---|---|---|---|
-| API endpoint | `api.base_url` | `RETYC_API_BASE_URL` | `https://api.retyc.com` |
-| Listing pages fetched at once | `api.concurrency.list` | `RETYC_API_CONCURRENCY_LIST` | `4`, see [below](#tune-parallel-requests) |
-| Chunks uploaded at once per file | `api.concurrency.upload` | `RETYC_API_CONCURRENCY_UPLOAD` | `4` |
-| Chunks downloaded at once per file | `api.concurrency.download` | `RETYC_API_CONCURRENCY_DOWNLOAD` | `4` |
-| Acknowledge uploads before they are stored | `api.unsafe_write` | `RETYC_API_UNSAFE_WRITE` | `false`, see [below](#acknowledge-uploads-before-they-are-stored) |
-| Key cache | `keyring.enabled` | `RETYC_KEYRING_ENABLED` | `true` (Linux only) |
-| Key cache lifetime, seconds | `keyring.ttl` | `RETYC_KEYRING_TTL` | `60` |
-| Organization API key | `admin.api_key` | `RETYC_ADMIN_API_KEY` | — |
-| Organization private key file | `admin.private_key_file` | `RETYC_ADMIN_PRIVATE_KEY_FILE` | — |
-| Admin API endpoint | `admin.base_url` | `RETYC_ADMIN_BASE_URL` | API endpoint + `/v1` |
-| WebDAV bind address | `webdav.addr` | `RETYC_WEBDAV_ADDR` | `127.0.0.1:8888` |
-| WebDAV listing cache lifetime (duration with a unit: `90s`, `2m`) | `webdav.cache.ttl` | `RETYC_WEBDAV_CACHE_TTL` | `1m`, see [WebDAV](webdav.md#caching) |
-| WebDAV expired listings served while refreshed (duration with a unit) | `webdav.cache.max_stale` | `RETYC_WEBDAV_CACHE_MAX_STALE` | `5m` (`0` disables) |
-| WebDAV metrics and probes listener | `webdav.metrics.addr` | `RETYC_WEBDAV_METRICS_ADDR` | — (disabled), see [WebDAV](webdav.md#metrics-probes-and-traces) |
-| WebDAV runtime metrics (`go_*`, `process_*`) | `webdav.metrics.runtime` | `RETYC_WEBDAV_METRICS_RUNTIME` | `true` |
-| WebDAV constant metric labels | `webdav.metrics.labels` (list of `key=value`) | `RETYC_WEBDAV_METRICS_LABELS` (space-separated) | — |
-| Config directory | — | `RETYC_CONFIG_DIR` | see [above](#where-settings-live) |
-| Offline token | *secret, environment only* | `RETYC_TOKEN` | stored login |
-| Key passphrase | *secret, environment only* | `RETYC_KEY_PASSPHRASE` | prompted |
-| WebDAV password | *secret, environment only* | `RETYC_WEBDAV_PASSWORD` | generated at startup |
+| Setting                                                                                                                                                                            | `config.yaml` key                             | Environment variable                                              | Default                                                                                 |
+|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------|-------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| API endpoint                                                                                                                                                                       | `api.base_url`                                | `RETYC_API_BASE_URL`                                              | `https://api.retyc.com`                                                                 |
+| Listing pages fetched at once                                                                                                                                                      | `api.concurrency.list`                        | `RETYC_API_CONCURRENCY_LIST`                                      | `4`, see [below](#tune-parallel-requests)                                               |
+| Chunks uploaded at once per file; also the files `fs mount` and `fs webdav serve` upload at once, all files together, and the deletes `fs mount --background-delete` sends at once | `api.concurrency.upload`                      | `RETYC_API_CONCURRENCY_UPLOAD`                                    | `4`                                                                                     |
+| Chunks downloaded at once per file                                                                                                                                                 | `api.concurrency.download`                    | `RETYC_API_CONCURRENCY_DOWNLOAD`                                  | `4`                                                                                     |
+| Acknowledge uploads before they are stored                                                                                                                                         | `api.unsafe_write`                            | `RETYC_API_UNSAFE_WRITE`                                          | `false`, see [below](#acknowledge-uploads-before-they-are-stored)                       |
+| Longest wait on a rate-limited request (duration with a unit)                                                                                                                      | `api.retry.max_wait`                          | `RETYC_API_RETRY_MAX_WAIT`                                        | `30s` (`1s` to `10m`), see [below](#when-the-api-rate-limits-you)                       |
+| Attempts at a rate-limited request                                                                                                                                                 | `api.retry.max_attempts`                      | `RETYC_API_RETRY_MAX_ATTEMPTS`                                    | `10` (`1`: a refused request is not sent again)                                         |
+| Key cache                                                                                                                                                                          | `keyring.enabled`                             | `RETYC_KEYRING_ENABLED`                                           | `true` (Linux only)                                                                     |
+| Key cache lifetime, seconds                                                                                                                                                        | `keyring.ttl`                                 | `RETYC_KEYRING_TTL`                                               | `60`                                                                                    |
+| Organization API key                                                                                                                                                               | `admin.api_key`                               | `RETYC_ADMIN_API_KEY`                                             | —                                                                                       |
+| Organization private key file                                                                                                                                                      | `admin.private_key_file`                      | `RETYC_ADMIN_PRIVATE_KEY_FILE`                                    | —                                                                                       |
+| Admin API endpoint                                                                                                                                                                 | `admin.base_url`                              | `RETYC_ADMIN_BASE_URL`                                            | API endpoint + `/v1`                                                                    |
+| Listing cache lifetime of `fs webdav serve` and `fs mount` (duration with a unit: `90s`, `2m`)                                                                                     | `cache.ttl`                                   | `RETYC_CACHE_TTL`                                                 | `1m`, see [RetycFS](retycfs.md#freshness)                                               |
+| Expired listings served while refreshed (duration with a unit); **`fs webdav serve` only**, `fs mount` never serves an expired listing                                             | `cache.max_stale`                             | `RETYC_CACHE_MAX_STALE`                                           | `5m` (`0` disables)                                                                     |
+| How long a name found missing is answered missing, `fs webdav serve` and `fs mount` (duration with a unit)                                                                         | `cache.negative_ttl`                          | `RETYC_CACHE_NEGATIVE_TTL`                                        | `1s` (`0` disables)                                                                     |
+| Where `fs webdav serve` and `fs mount` keep listings and names looked up: `memory`, or `redis` to share them between instances                                                     | `cache.store`                                 | `RETYC_CACHE_STORE`                                               | `memory`, see [Shared metadata cache](retycfs.md#shared-metadata-cache-redis)           |
+| Redis of `cache.store: redis`: a `redis://` or `rediss://` URL, **password included** (a secret: masked by `config show`, never logged)                                            | `cache.redis.url`                             | `RETYC_CACHE_REDIS_URL`                                           | — (required with `redis`)                                                               |
+| Store in Redis the encrypted names the API sent, never the decrypted ones                                                                                                          | `cache.redis.high_confidentiality`            | `RETYC_CACHE_REDIS_HIGH_CONFIDENTIALITY`                          | `false`                                                                                 |
+| WebDAV bind address                                                                                                                                                                | `webdav.addr`                                 | `RETYC_WEBDAV_ADDR`                                               | `127.0.0.1:8888`                                                                        |
+| WebDAV metrics and probes listener                                                                                                                                                 | `webdav.metrics.addr`                         | `RETYC_WEBDAV_METRICS_ADDR`                                       | — (disabled), see [RetycFS](retycfs.md#metrics-and-probes)                              |
+| WebDAV runtime metrics (`go_*`, `process_*`)                                                                                                                                       | `webdav.metrics.runtime`                      | `RETYC_WEBDAV_METRICS_RUNTIME`                                    | `true`                                                                                  |
+| WebDAV constant metric labels                                                                                                                                                      | `webdav.metrics.labels` (list of `key=value`) | `RETYC_WEBDAV_METRICS_LABELS` (space-separated)                   | —                                                                                       |
+| `fs mount`: how long the kernel keeps a name (duration with a unit)                                                                                                                | `mount.entry_ttl`                             | `RETYC_MOUNT_ENTRY_TTL`                                           | `0`: follows `cache.ttl`, see [RetycFS](retycfs.md#options)                             |
+| `fs mount`: how long the kernel keeps the attributes of a file (duration with a unit)                                                                                              | `mount.attr_ttl`                              | `RETYC_MOUNT_ATTR_TTL`                                            | `0`: follows `cache.ttl`                                                                |
+| `fs mount`: the kernel keeps what it read of a file between two opens                                                                                                              | `mount.kernel_cache`                          | `RETYC_MOUNT_KERNEL_CACHE`                                        | `true`                                                                                  |
+| `fs mount`: directory of the files being written, until they are sent                                                                                                              | `mount.spool_dir`                             | `RETYC_MOUNT_SPOOL_DIR`                                           | — (the system's temporary directory)                                                    |
+| `fs mount`: let other users into the mount (`-o allow_other`)                                                                                                                      | `mount.allow_other`                           | `RETYC_MOUNT_ALLOW_OTHER`                                         | `false`                                                                                 |
+| `fs mount`: user the files are presented as owned by                                                                                                                               | `mount.uid`                                   | `RETYC_MOUNT_UID`                                                 | `-1` (the user running the command)                                                     |
+| `fs mount`: group the files are presented as owned by                                                                                                                              | `mount.gid`                                   | `RETYC_MOUNT_GID`                                                 | `-1` (the group running the command)                                                    |
+| `fs mount`: permissions of a file that has none stored (octal, **quoted** in YAML)                                                                                                 | `mount.file_mode`                             | `RETYC_MOUNT_FILE_MODE`                                           | `"0644"`                                                                                |
+| `fs mount`: permissions of a folder that has none stored (octal, **quoted** in YAML)                                                                                               | `mount.dir_mode`                              | `RETYC_MOUNT_DIR_MODE`                                            | `"0755"`                                                                                |
+| `fs mount`: mount read-only                                                                                                                                                        | `mount.read_only`                             | `RETYC_MOUNT_READ_ONLY`                                           | `false`                                                                                 |
+| `fs mount`: how long the files being sent are waited for when the mount is stopped (duration with a unit)                                                                          | `mount.drain_timeout`                         | `RETYC_MOUNT_DRAIN_TIMEOUT`                                       | `5m` (`0`: not at all)                                                                  |
+| `fs mount`: take an API lock on a file while it is open for writing                                                                                                                | `mount.mirror_locks`                          | `RETYC_MOUNT_MIRROR_LOCKS`                                        | `false`, see [RetycFS](retycfs.md#locks)                                                |
+| `fs mount`: answer the removal of a file at once and delete it at the API in the background                                                                                        | `mount.background_delete`                     | `RETYC_MOUNT_BACKGROUND_DELETE`                                   | `false`, see [RetycFS](retycfs.md#deleting-in-the-background)                           |
+| `fs mount`: name patterns of the files kept local and never sent (editor swap and backup files)                                                                                    | `mount.local_files` (list of glob patterns)   | `RETYC_MOUNT_LOCAL_FILES` (space-separated; `none`: no such file) | `.*.swp`, `.*.swx`, `*~`, `4913`, see [RetycFS](retycfs.md#local-files)                 |
+| `fs mount`: metrics and probes listener                                                                                                                                            | `mount.metrics.addr`                          | `RETYC_MOUNT_METRICS_ADDR`                                        | — (disabled), see [RetycFS](retycfs.md#metrics-and-probes)                              |
+| `fs mount`: runtime metrics (`go_*`, `process_*`)                                                                                                                                  | `mount.metrics.runtime`                       | `RETYC_MOUNT_METRICS_RUNTIME`                                     | `true`                                                                                  |
+| `fs mount`: constant metric labels                                                                                                                                                 | `mount.metrics.labels` (list of `key=value`)  | `RETYC_MOUNT_METRICS_LABELS` (space-separated)                    | —                                                                                       |
+| Config directory                                                                                                                                                                   | —                                             | `RETYC_CONFIG_DIR`                                                | see [above](#where-settings-live)                                                       |
+| Environment file                                                                                                                                                                   | — (`--env-file`)                              | `RETYC_ENV_FILE`                                                  | — (none), see [above](#keep-the-secrets-in-an-environment-file-boot-mounts-systemd-csi) |
+| Offline token                                                                                                                                                                      | *secret, environment only*                    | `RETYC_TOKEN`                                                     | stored login                                                                            |
+| Key passphrase                                                                                                                                                                     | *secret, environment only*                    | `RETYC_KEY_PASSPHRASE`                                            | prompted                                                                                |
+| WebDAV password                                                                                                                                                                    | *secret, environment only*                    | `RETYC_WEBDAV_PASSWORD`                                           | generated at startup                                                                    |
 
 Environment variables must carry the `RETYC_` prefix; an empty variable counts
 as unset. Proxy and CA variables (`HTTPS_PROXY`, `SSL_CERT_FILE`, ...) are the
 standard ones, [see above](#behind-a-corporate-proxy).
 
+`webdav.cache.ttl` and `webdav.cache.max_stale` (`RETYC_WEBDAV_CACHE_TTL`,
+`RETYC_WEBDAV_CACHE_MAX_STALE`) no longer exist: they are `cache.ttl` and
+`cache.max_stale`. A config file or an environment that still carries one is
+refused by every command, with the name of the replacement.
+
 ### Global flags
 
-| Flag | Description |
-|---|---|
-| `--config <file>` | Read another config file (the token stays in the config directory) |
-| `--debug`, `-d` | Print every HTTP request and its response to stderr, with the proxy and CAs in use |
-| `--json` | Results as JSON on stdout, errors as `{"error": "..."}` on stderr (see [JSON output](commands.md#json-output)) |
+| Flag                | Description                                                                                                                                                                  |
+|---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--config <file>`   | Read another config file (the token stays in the config directory)                                                                                                           |
+| `--env-file <file>` | Read `RETYC_*` variables from a file of mode `0600`; the environment wins over it (see [environment file](#keep-the-secrets-in-an-environment-file-boot-mounts-systemd-csi)) |
+| `--debug`, `-d`     | Print every HTTP request and its response to stderr, with the proxy and CAs in use                                                                                           |
+| `--json`            | Results as JSON on stdout, errors as `{"error": "..."}` on stderr (see [JSON output](commands.md#json-output))                                                               |
 
 ## Tracing (OpenTelemetry)
 
@@ -210,15 +333,15 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318 retyc dataroom ls
 OTEL_EXPORTER_OTLP_PROTOCOL=grpc OTEL_EXPORTER_OTLP_ENDPOINT=collector:4317 retyc dataroom ls
 ```
 
-| Variable | Meaning |
-|---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Collector endpoint. Unset = tracing off (the OTel default of `localhost:4318` is deliberately not applied). |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | `http/protobuf` (default) or `grpc`. Another value disables tracing with a message under `--debug`. |
-| `OTEL_SDK_DISABLED` | `true` turns tracing off even with an endpoint. |
-| `TRACEPARENT`, `TRACESTATE` | W3C trace context of the caller; the command span becomes its child. For `webdav serve` only the startup span is, each request is then a new trace. |
-| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | Resource; `service.name` defaults to `retyc-cli`, `service.version` is the CLI version. |
-| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | Sampling, e.g. `parentbased_traceidratio` / `0.1` for a busy WebDAV server. |
-| Other `OTEL_EXPORTER_OTLP_*` | Headers, TLS certificate, compression, timeout: standard OTLP exporter settings. |
+| Variable                                                            | Meaning                                                                                                                                             |
+|---------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Collector endpoint. Unset = tracing off (the OTel default of `localhost:4318` is deliberately not applied).                                         |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | `http/protobuf` (default) or `grpc`. Another value disables tracing with a message under `--debug`.                                                 |
+| `OTEL_SDK_DISABLED`                                                 | `true` turns tracing off even with an endpoint.                                                                                                     |
+| `TRACEPARENT`, `TRACESTATE`                                         | W3C trace context of the caller; the command span becomes its child. For `webdav serve` only the startup span is, each request is then a new trace. |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`                     | Resource; `service.name` defaults to `retyc-cli`, `service.version` is the CLI version.                                                             |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`                    | Sampling, e.g. `parentbased_traceidratio` / `0.1` for a busy WebDAV server.                                                                         |
+| Other `OTEL_EXPORTER_OTLP_*`                                        | Headers, TLS certificate, compression, timeout: standard OTLP exporter settings.                                                                    |
 
 Under `--debug`, exporter failures are printed to stderr and may include the
 collector URL, and a malformed `OTEL_EXPORTER_OTLP_HEADERS` is echoed by the

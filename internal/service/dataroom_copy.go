@@ -20,10 +20,15 @@ var ErrCopyDiscarded = errors.New("the server discarded the copy before it compl
 // chunks were still being duplicated.
 var ErrCopyTargetDeleted = errors.New("the copied node was deleted before the copy completed")
 
-// copyPollInterval paces the polling of a copy's version. The storage
-// duplicates about 1 GiB per second, so a second is a round trip on a small
-// file and a negligible lag on a large one.
-var copyPollInterval = time.Second
+// copyPollInterval is the longest wait between two polls of a copy's version,
+// and copyPollFirst the wait before the first one, doubled at each poll. The
+// storage duplicates about 1 GiB per second: a small file is copied by the
+// time the first poll is made, where a flat second made every copy last one,
+// and a large one is polled every second.
+var (
+	copyPollInterval = time.Second
+	copyPollFirst    = 50 * time.Millisecond
+)
 
 // CopyDataroomNodeByID copies the file srcNodeID into a new node named
 // newName under dstParentID (nil for the dataroom root), in the same
@@ -67,12 +72,14 @@ func CopyDataroomNodeByID(
 func waitForVersion(
 	ctx context.Context, client *api.Client, version *api.DataroomNodeVersion,
 ) (*api.DataroomNodeVersion, error) {
+	wait := min(copyPollFirst, copyPollInterval)
 	for !version.Complete() {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(copyPollInterval):
+		case <-time.After(wait):
 		}
+		wait = min(2*wait, copyPollInterval)
 		fresh, err := client.GetDataroomNodeVersion(ctx, version.ID)
 		switch {
 		case errors.Is(err, api.ErrGone):

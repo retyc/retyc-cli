@@ -2,7 +2,7 @@
 //
 // Convention: stdout carries command results only; prompts, spinners,
 // progress bars and warnings always go to stderr. With --json, results are
-// encoded as JSON on stdout and errors as {"error": "..."} on stderr, so a
+// encoded as JSON on stdout and errors as {"error": "...", "kind": "..."} on stderr, so a
 // script can rely on stdout being valid JSON whenever the exit code is 0.
 //
 // The JSON view types below are CLI-only. They are deliberately separate
@@ -39,7 +39,9 @@ func printJSON(v any) error {
 	return enc.Encode(v)
 }
 
-// printError writes err on stderr, as {"error": "..."} when --json is set.
+// printError writes err on stderr; with --json, as the object of
+// newErrorJSON ({"error", "kind"}, plus "status" and "detail" for an API
+// refusal).
 func printError(err error) {
 	if !jsonOutput {
 		// Errors quote names and server messages: escape them, keeping line breaks.
@@ -47,9 +49,7 @@ func printError(err error) {
 
 		return
 	}
-	b, mErr := json.Marshal(struct {
-		Error string `json:"error"`
-	}{err.Error()})
+	b, mErr := json.Marshal(newErrorJSON(err))
 	if mErr != nil {
 		fmt.Fprintln(os.Stderr, err)
 
@@ -105,12 +105,17 @@ func newItemsJSON[T any](items []T) itemsJSON[T] {
 }
 
 // configPathJSON is the JSON shape of `retyc config path`. ConfigFileError
-// explains why a config file exists but was not loaded.
+// explains why a config file exists but was not loaded. EnvFile is the
+// environment file whose variables were applied, EnvFileVariables their names
+// (never a value), EnvFileError why a designated file was not loaded.
 type configPathJSON struct {
-	ConfigDir       string `json:"config_dir"`
-	ConfigFile      string `json:"config_file"`
-	ConfigFileError string `json:"config_file_error,omitempty"`
-	TokenFile       string `json:"token_file"`
+	ConfigDir        string   `json:"config_dir"`
+	ConfigFile       string   `json:"config_file"`
+	ConfigFileError  string   `json:"config_file_error,omitempty"`
+	TokenFile        string   `json:"token_file"`
+	EnvFile          string   `json:"env_file"`
+	EnvFileVariables []string `json:"env_file_variables,omitempty"`
+	EnvFileError     string   `json:"env_file_error,omitempty"`
 }
 
 // configEntryJSON is one effective configuration key in `retyc config show`.

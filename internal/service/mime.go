@@ -32,7 +32,7 @@ func guessMIMEType(fileName string) string {
 // not know yet.
 //
 // The table is loaded on first use. An API that predates it answers 404 on
-// the route: the session is then "legacy", files carry their MIME type as
+// the route, without an error code: the session is then "legacy", files carry their MIME type as
 // the per-node ciphertext type_enc, and nodes are not looked up by name hash
 // (the lookup arrived with the table, and an older API would ignore the
 // parameter and answer the folder's first page). A load that fails for any
@@ -53,7 +53,9 @@ type mimeCache struct {
 func (c *mimeCache) load(ctx context.Context, client *api.Client, dataroomID string, sess *dataroomSession) error {
 	rows, err := client.ListDataroomMimeTypes(ctx, dataroomID)
 	switch {
-	case errors.Is(err, api.ErrNotFound) && !errors.Is(err, api.ErrGone):
+	case errors.Is(err, api.ErrNotFound) && !errors.Is(err, api.ErrGone) && api.ErrorCode(err) == "":
+		// A 404 with a code (DATAROOM_NOT_FOUND, NOT_A_MEMBER…) is the new
+		// API refusing the request, not an older API without the route.
 		c.loaded, c.legacy = true, true
 
 		return nil
@@ -99,20 +101,55 @@ func (s *dataroomSession) mimeTable(ctx context.Context, client *api.Client, dat
 	return c, nil
 }
 
-// supportsNodeTypes reports whether the dataroom's API has the MIME table,
-// and with it the explicit node type and the lookup by name hash. False when
-// the API is older, or when that could not be determined.
-func (s *dataroomSession) supportsNodeTypes(ctx context.Context, client *api.Client, dataroomID string) bool {
+// nodeTypesSupport reports whether the dataroom's API has the MIME table, and
+// with it the explicit node type, the lookup by name hash and the replace
+// field of a rename. False without an error is an API known to be older (it
+// answered 404 on the table). An error is a probe that failed: nothing is
+// known, and the error is the API's, as it is (a rate limit, a 5xx).
+func (s *dataroomSession) nodeTypesSupport(
+	ctx context.Context, client *api.Client, dataroomID string,
+) (bool, error) {
 	if client == nil {
-		return false
+		return false, nil
 	}
 	c, err := s.mimeTable(ctx, client, dataroomID)
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer c.mu.Unlock()
 
-	return !c.legacy
+	return !c.legacy, nil
+}
+
+// supportsNodeTypes is nodeTypesSupport for a caller that has a way around
+// the newer API: a probe that failed counts as an older API for this call, so
+// the caller takes the path both APIs accept.
+func (s *dataroomSession) supportsNodeTypes(ctx context.Context, client *api.Client, dataroomID string) bool {
+	supported, _ := s.nodeTypesSupport(ctx, client, dataroomID)
+
+	return supported
+}
+
+// SupportsNameLookup reports whether a node of the dataroom can be looked up
+// by its name (LookupNodeByName): the lookup arrived with the MIME table, so
+// the same probe answers. False without an error is an older API; an error is
+// a probe that failed, which says nothing of the API and is tried again on
+// the next call.
+func (s *DataroomSession) SupportsNameLookup(
+	ctx context.Context, client *api.Client, dataroomID string,
+) (bool, error) {
+	return s.nodeTypesSupport(ctx, client, dataroomID)
+}
+
+// AssumeLegacyAPI records that the dataroom's API predates the MIME table and
+// the lookup by name, as the probe does on a 404, and returns the session. A
+// test uses it to stand for that API without answering the probe.
+func (s *DataroomSession) AssumeLegacyAPI() *DataroomSession {
+	s.mime.mu.Lock()
+	defer s.mime.mu.Unlock()
+	s.mime.loaded, s.mime.legacy = true, true
+
+	return s
 }
 
 // mimeTypeOf returns the MIME type of a file node: the row of the MIME table
@@ -161,6 +198,21 @@ func (s *dataroomSession) mimeTypeByID(ctx context.Context, client *api.Client, 
 	c.missing[id] = true
 
 	return ""
+}
+
+// mimeTypeHeld resolves a MIME table row from the table as the session holds
+// it, without ever loading or reloading it: "" for a table not loaded yet, a
+// legacy API, or a row added since the load. It makes no request and waits
+// for none: mimeCache.mu is held across a load, so a table being loaded is
+// one not loaded yet.
+func (s *dataroomSession) mimeTypeHeld(id string) string {
+	c := &s.mime
+	if !c.mu.TryLock() {
+		return ""
+	}
+	defer c.mu.Unlock()
+
+	return c.byID[id]
 }
 
 // mimeFor prepares the MIME type of a file about to be written, in the form
@@ -227,8 +279,8 @@ func (s *dataroomSession) withMIME(
 		return err
 	}
 	node, err := op(m)
-	switch api.ErrorDetail(err) {
-	case api.DetailMimeTypeUnknown:
+	switch mimeRefusal(err) {
+	case api.CodeMimeTypeUnknown:
 		if m.Hash == "" || m.NameEnc != "" {
 			break
 		}
@@ -238,7 +290,7 @@ func (s *dataroomSession) withMIME(
 		}
 		m.NameEnc = enc
 		node, err = op(m)
-	case api.DetailMimeTypesLimit:
+	case api.CodeMimeTypesLimit:
 		if m.TypeEnc != "" {
 			break
 		}
@@ -255,6 +307,23 @@ func (s *dataroomSession) withMIME(
 	s.learnMIME(m.Hash, mimeType, node)
 
 	return nil
+}
+
+// mimeRefusal returns the code of a refusal of the MIME fields:
+// CodeMimeTypeUnknown, CodeMimeTypesLimit, or anything else. An API without
+// codes put them in the detail, which is read only when no code came.
+func mimeRefusal(err error) string {
+	if code := api.ErrorCode(err); code != "" {
+		return code
+	}
+	switch api.ErrorDetail(err) {
+	case api.DetailMimeTypeUnknown:
+		return api.CodeMimeTypeUnknown
+	case api.DetailMimeTypesLimit:
+		return api.CodeMimeTypesLimit
+	}
+
+	return ""
 }
 
 // learnMIME records that the dataroom knows hash, and its row ID when node

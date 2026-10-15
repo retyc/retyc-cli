@@ -85,6 +85,29 @@ func TestCopyDataroomNodeByID_WaitsForSeal(t *testing.T) {
 	}
 }
 
+// A small file is copied by the time the first poll is made: the copy must not
+// last the full polling interval (it lasted a second, whatever the size).
+func TestCopyDataroomNodeByID_FirstPollIsEarly(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &copyAPI{polls: 1}
+	srv := httptest.NewServer(http.HandlerFunc(fake.handle))
+	defer srv.Close()
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String(), NameSalt: "s"}
+
+	start := time.Now()
+	if _, err := CopyDataroomNodeByID(
+		context.Background(), newExportTestClient(srv), "dr-1", "n-src", nil, "copy.bin", sess,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > copyPollInterval/2 {
+		t.Errorf("the copy took %v with a version complete at its first poll", took)
+	}
+}
+
 // A version that disappears while polled means a discarded copy (404) or a
 // deleted target (410).
 func TestCopyDataroomNodeByID_Vanishes(t *testing.T) {

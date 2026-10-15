@@ -97,6 +97,16 @@ func (c *SessionCache) put(drID string, sess *DataroomSession) {
 	c.sessions[drID] = sess
 }
 
+// Peek returns the session cached for drID, if any. It never waits for a
+// resolution in flight and never starts one.
+func (c *SessionCache) Peek(drID string) (*DataroomSession, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sess, ok := c.sessions[drID]
+
+	return sess, ok
+}
+
 // Len returns the number of cached sessions.
 func (c *SessionCache) Len() int {
 	c.mu.Lock()

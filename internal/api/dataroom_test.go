@@ -659,6 +659,12 @@ func TestUpdateDataroomNode_OnlySetFields(t *testing.T) {
 			update: NodeUpdate{NameEnc: ptr("e"), NameHash: ptr("h")},
 			want:   map[string]any{"name_enc": "e", "name_hash": "h"},
 		},
+		// replace is sent only when asked: the API refuses a field it does
+		// not know, and false is its default.
+		"rename replacing the holder of the name": {
+			update: NodeUpdate{NameEnc: ptr("e"), NameHash: ptr("h"), Replace: true},
+			want:   map[string]any{"name_enc": "e", "name_hash": "h", "replace": true},
+		},
 	}
 	for label, tc := range cases {
 		t.Run(label, func(t *testing.T) {
@@ -1071,9 +1077,9 @@ func TestDownloadChunk_RetriesMissingChunk(t *testing.T) {
 func TestDataroomNode_Kinds(t *testing.T) {
 	enc := "-----BEGIN AGE ENCRYPTED FILE-----"
 	cases := []struct {
-		name                     string
-		node                     DataroomNode
-		folder, file, symlink    bool
+		name                  string
+		node                  DataroomNode
+		folder, file, symlink bool
 	}{
 		{"typed file", DataroomNode{Type: NodeTypeFile}, false, true, false},
 		{"typed folder", DataroomNode{Type: NodeTypeFolder}, true, false, false},

@@ -16,8 +16,10 @@ import (
 
 	"golang.org/x/net/webdav"
 
+	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/internal/vfs"
 )
 
 // lot2API fakes the copy, lock and stats routes of one dataroom.
@@ -33,8 +35,12 @@ type lot2API struct {
 	// copyConflicts is the number of copies answered 409 before one is
 	// accepted: a destination deleted and not purged yet.
 	copyConflicts int
-	calls      []string
-	statsCalls int
+	// copyGone, when set, is the status every copy is answered, with
+	// copyGoneCode as its X-Error-Code ("" for none).
+	copyGone     int
+	copyGoneCode string
+	calls        []string
+	statsCalls   int
 }
 
 func (a *lot2API) handle(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +49,14 @@ func (a *lot2API) handle(w http.ResponseWriter, r *http.Request) {
 	a.calls = append(a.calls, r.Method+" "+r.URL.Path)
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/n-src/copy":
+		if a.copyGone != 0 {
+			if a.copyGoneCode != "" {
+				w.Header().Set(api.ErrorCodeHeader, a.copyGoneCode)
+			}
+			http.Error(w, `{"detail":"gone"}`, a.copyGone)
+
+			return
+		}
 		if a.copyConflicts > 0 {
 			a.copyConflicts--
 			http.Error(w, `{"detail":"Duplicate node name hash in the same folder"}`, http.StatusConflict)
@@ -125,10 +139,8 @@ func newLot2FS(t *testing.T, fake *lot2API) *webdavFS {
 		t.Fatal(err)
 	}
 	fs := newWebdavTestFS(srv)
-	fs.cache = newDataroomCache(func(_ context.Context) ([]dataroomCacheItem, error) {
-		return []dataroomCacheItem{{id: "dr1", title: "DR"}}, nil
-	})
-	fs.nodeCache = map[string]*nodeCacheEntry{
+	fs.tree.SeedDatarooms([]vfs.Dataroom{{ID: "dr1", Title: "DR"}})
+	setNodeCache(fs, map[string]*nodeCacheEntry{
 		"retyc://dr1/": {
 			nodes: []service.DataroomNodeInfo{
 				{ID: "n-src", Name: "doc.txt", Type: "file", VersionID: "v-src", Size: 9, ChunkCount: 2},
@@ -139,8 +151,8 @@ func newLot2FS(t *testing.T, fake *lot2API) *webdavFS {
 			fetchedAt: time.Now(),
 		},
 		"retyc://dr1/sub": {nodes: []service.DataroomNodeInfo{}, fetchedAt: time.Now()},
-	}
-	fs.sessions.Store("dr1", &service.DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()})
+	})
+	fs.tree.SeedSession("dr1", &service.DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()})
 
 	return fs
 }
@@ -170,7 +182,7 @@ func TestHandleCopy_File(t *testing.T) {
 	if fake.count("POST /dataroom/node/n-src/copy") != 1 {
 		t.Errorf("calls = %v, want one copy", fake.calls)
 	}
-	nodes, err := fs.listNodes(context.Background(), "dr1", "/sub")
+	nodes, err := fs.tree.ReadDir(context.Background(), "dr1", "/sub")
 	if err != nil || len(nodes) != 1 || nodes[0].Name != "copy.txt" || nodes[0].ID != "n-copy" || nodes[0].Size != 9 {
 		t.Errorf("destination listing = %+v, %v; want the copy", nodes, err)
 	}
@@ -207,6 +219,31 @@ func TestHandleCopy_Refusals(t *testing.T) {
 				t.Errorf("old node deleted %d times, want %d", got, tc.deletes)
 			}
 		})
+	}
+}
+
+// A copy the API refuses for a resource gone answers by the resource the code
+// names: the destination folder is a 409 (RFC 4918 §9.8.5), the source a 404.
+// Without a code it cannot tell, and stays a 404.
+func TestHandleCopy_GoneResource(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		code   string
+		want   int
+	}{
+		{http.StatusGone, api.CodeParentDeleted, http.StatusConflict},
+		{http.StatusNotFound, api.CodeParentNotFound, http.StatusConflict},
+		{http.StatusGone, api.CodeNodeDeleted, http.StatusNotFound},
+		{http.StatusNotFound, "", http.StatusNotFound},
+	} {
+		fake := &lot2API{t: t, copyGone: tc.status, copyGoneCode: tc.code}
+		fs := newLot2FS(t, fake)
+		w := httptest.NewRecorder()
+		fs.handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/sub/copy.txt", ""))
+		if w.Code != tc.want {
+			t.Errorf("%d %q: status = %d (%s), want %d", tc.status, tc.code, w.Code,
+				strings.TrimSpace(w.Body.String()), tc.want)
+		}
 	}
 }
 
@@ -275,7 +312,7 @@ func TestDirHandle_QuotaProps(t *testing.T) {
 // newLockedHandler wires a WebDAV handler with the lock mirror over fs.
 func newLockedHandler(fs *webdavFS) (http.Handler, *lockMirror) {
 	ls := webdav.NewMemLS()
-	handler := &webdav.Handler{FileSystem: fs, LockSystem: ls}
+	handler := newWebdavHandler(fs, ls, nil)
 	mirror := newLockMirror(fs, ls)
 
 	return mirror.middleware(handler), mirror
@@ -391,8 +428,7 @@ func TestLockMirror_ReleaseAllOnShutdown(t *testing.T) {
 // exist for Stat, so no client takes it for a file or writes a version to it.
 func TestWebdav_SymlinksHidden(t *testing.T) {
 	fs := newLot2FS(t, &lot2API{t: t})
-	fs.nodeCache["retyc://dr1/"].nodes = append(fs.nodeCache["retyc://dr1/"].nodes,
-		service.DataroomNodeInfo{ID: "n-link", Name: "link", Type: "symlink", Size: 6})
+	addCachedNode(fs, "retyc://dr1/", vfs.Node{ID: "n-link", Name: "link", Type: "symlink", Size: 6})
 	ctx := context.Background()
 
 	f, err := fs.OpenFile(ctx, "/dataroom/DR/", 0, 0)

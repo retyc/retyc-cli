@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -84,6 +86,92 @@ func nodeNameHash(name, salt string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// NameHash returns the name hash of v in the dataroom: SHA-256(salt + v), the
+// hash the API holds for a node name, applied to any string. A dataroom
+// without name salt hashes v alone, as its nodes were.
+func (s *DataroomSession) NameHash(v string) string { return nodeNameHash(v, s.NameSalt) }
+
+// sealedOf returns the encrypted fields of an API node as it answered them.
+func sealedOf(node *api.DataroomNode) SealedNode {
+	sealed := SealedNode{NameEnc: node.NameEnc}
+	if node.TargetEnc != nil {
+		sealed.TargetEnc = *node.TargetEnc
+	}
+	if node.MimeTypeID != nil {
+		sealed.MIMETypeID = *node.MimeTypeID
+	}
+	if node.TypeEnc != nil {
+		sealed.TypeEnc = *node.TypeEnc
+	}
+
+	return sealed
+}
+
+// OpenSealed decrypts what a listing decrypts of a node, from its sealed
+// form: the name, a symlink's target, a file's MIME type (its row of the
+// dataroom's MIME table, or its own ciphertext). A name or a target that does
+// not decrypt is an error.
+//
+// It never makes a request: its callers hold a lock every operation of a
+// mount waits for (see vfs.FS). The row is read from the MIME table as the
+// session holds it; a table not loaded yet, or one that predates the row,
+// gives "" where a listing would load it. The MIME type of a node is
+// cosmetic, and the listings, which run outside that lock, load the table.
+func (s *DataroomSession) OpenSealed(sealed SealedNode) (name, target, mimeType string, err error) {
+	if name, err = s.OpenSealedName(sealed.NameEnc); err != nil {
+		return "", "", "", err
+	}
+	if sealed.TargetEnc != "" {
+		if target, err = s.OpenSealedTarget(sealed.TargetEnc); err != nil {
+			return "", "", "", err
+		}
+	}
+
+	return name, target, s.SealedMIMEType(sealed.MIMETypeID, sealed.TypeEnc), nil
+}
+
+// OpenSealedName decrypts the name_enc of a node: the name part of
+// OpenSealed, for a caller that remembers what it opened. One AGE decryption.
+//
+// Like OpenSealedTarget and the type_enc of SealedMIMEType, it takes the
+// payload armored, as the API sends it, or binary, the same bytes without the
+// armor, as a store may hand it back (see crypto.DecryptPayloadToString).
+func (s *DataroomSession) OpenSealedName(nameEnc string) (string, error) {
+	if nameEnc == "" {
+		return "", errors.New("opening a sealed node: no encrypted name")
+	}
+	name, err := crypto.DecryptPayloadToString(nameEnc, s.Identity)
+	if err != nil {
+		return "", fmt.Errorf("decrypting node name: %w", err)
+	}
+
+	return name, nil
+}
+
+// OpenSealedTarget decrypts the target_enc of a symlink, like OpenSealedName.
+func (s *DataroomSession) OpenSealedTarget(targetEnc string) (string, error) {
+	target, err := crypto.DecryptPayloadToString(targetEnc, s.Identity)
+	if err != nil {
+		return "", fmt.Errorf("decrypting symlink target: %w", err)
+	}
+
+	return target, nil
+}
+
+// SealedMIMEType is the MIME part of OpenSealed: the row mimeTypeID of the
+// table when the session holds it, else the type_enc of a file that carries
+// its own, "" when neither tells. It makes no request.
+func (s *DataroomSession) SealedMIMEType(mimeTypeID, typeEnc string) (mimeType string) {
+	if mimeTypeID != "" {
+		mimeType = s.mimeTypeHeld(mimeTypeID)
+	}
+	if mimeType == "" && typeEnc != "" {
+		mimeType, _ = crypto.DecryptPayloadToString(typeEnc, s.Identity)
+	}
+
+	return mimeType
+}
+
 // isConflict reports whether err is an API 409 Conflict response.
 func isConflict(err error) bool {
 	return errors.Is(err, api.ErrConflict)
@@ -100,6 +188,9 @@ type dataroomSession struct {
 	// mime is the dataroom's MIME table, loaded on first use (see mimeCache).
 	// Sessions are shared by pointer (SessionCache), never copied.
 	mime mimeCache
+	// envelope is what a chunk encrypted for this session holds besides its
+	// payload, measured on first use (see chunkEnvelope).
+	envelope chunkEnvelope
 }
 
 // resolveDataroomSession returns the session for dataroomID, through the
@@ -191,13 +282,6 @@ func buildDataroomSession(dr *api.Dataroom, userIdentity *age.HybridIdentity) (*
 // Callers should cache it (see SessionCache): resolving it requires two API
 // calls and AGE crypto.
 type DataroomSession = dataroomSession
-
-// GetDataroomSession resolves and returns the cryptographic session for a dataroom.
-func GetDataroomSession(
-	ctx context.Context, cfg *config.Config, client *api.Client, dataroomID string, reader PassphraseReader,
-) (*DataroomSession, error) {
-	return resolveDataroomSession(ctx, cfg, client, dataroomID, reader)
-}
 
 // GetDataroomSessionWithIdentity resolves the cryptographic session for a
 // dataroom using an already unlocked user identity (see UnlockUserIdentity):
@@ -296,9 +380,16 @@ func nodeFromItem(
 	if decErr != nil {
 		name = "(encrypted)"
 	}
-	info := DataroomNodeInfo{ID: item.Node.ID, Name: name, Type: "dir", modTime: item.Node.CreatedAt}
+	info := DataroomNodeInfo{
+		ID: item.Node.ID, Name: name, Type: "dir",
+		modTime: item.Node.CreatedAt, createdAt: item.Node.CreatedAt,
+		sealed: sealedOf(&item.Node),
+	}
+	if item.Node.ParentID != nil {
+		info.parentID = *item.Node.ParentID
+	}
 	if mode, ok := api.ParseAccessMode(item.Node.AccessMode); ok {
-		info.mode = mode
+		info.mode, info.modeSet = mode, true
 	}
 	if item.Node.IsFolder() {
 		return info
@@ -373,6 +464,24 @@ func ListNodesByIDWithSession(
 func ListNodesByIDIfChanged(
 	ctx context.Context, client *api.Client, dataroomID string, parentID *string, sess *DataroomSession, etag string,
 ) ([]DataroomNodeInfo, string, error) {
+	return ListNodesByIDWithin(ctx, client, dataroomID, parentID, sess, etag, 0)
+}
+
+// ErrFolderTooLarge is what ListNodesByIDWithin answers for a folder that
+// holds more nodes than its caller accepts to list.
+var ErrFolderTooLarge = errors.New("the folder holds too many nodes to be listed")
+
+// ListNodesByIDWithin is ListNodesByIDIfChanged for a caller that only wants
+// the listing of a folder of at most limit nodes (0 for no limit): a larger
+// one answers ErrFolderTooLarge. Every page reports the size of the folder
+// (total, pages), so this is known from the first page, which is the only
+// round trip made then, and nothing is decrypted. A folder that grows past
+// limit while it is listed is refused by the page that reports it, which
+// cancels the pages still on their way.
+func ListNodesByIDWithin(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string, sess *DataroomSession,
+	etag string, limit int,
+) ([]DataroomNodeInfo, string, error) {
 	// Only the first page is conditional, and its ETag is the one kept: it is
 	// fetched alone, before the others, so a change landing between two pages
 	// leaves an ETag older than the listing, which the next call refreshes.
@@ -386,6 +495,11 @@ func ListNodesByIDIfChanged(
 			ctx, dataroomID, parentID, page, nodeListPageSize, condition)
 		if err != nil {
 			return nil, 0, err
+		}
+		// The page count says as much as the total, for an API that would
+		// report none: every page but the last is full.
+		if limit > 0 && (pg.Total > limit || (pg.Pages-1)*nodeListPageSize >= limit) {
+			return nil, 0, ErrFolderTooLarge
 		}
 		if page == 1 {
 			newETag = pageETag
@@ -659,6 +773,18 @@ func resolveGlob(
 var ErrNameBeingDeleted = errors.New(
 	"a node of that name was deleted and the server has not released the name yet; retry in a moment")
 
+// isNameHolderDeleted reports the 410 of a name held by a node pending
+// deletion. With a code only NAME_HOLDER_DELETED is: PARENT_DELETED and the
+// other 410s are returned as they are. An API without codes answers 410 on
+// that route for the name alone.
+func isNameHolderDeleted(err error) bool {
+	if code := api.ErrorCode(err); code != "" {
+		return code == api.CodeNameHolderDeleted
+	}
+
+	return errors.Is(err, api.ErrGone)
+}
+
 // findNodeByName finds the node named name in a folder: by name hash when
 // the API supports the lookup, by listing and decrypting the folder otherwise.
 // Callers tell a file from a folder or a symlink with the node's IsFile and
@@ -695,6 +821,49 @@ func findNodeByName(
 	return nil, fmt.Errorf("%q: %w", name, ErrNameBeingDeleted)
 }
 
+// ErrNoNameLookup reports an API that cannot look a node up by its name: one
+// that predates the name-hash index, or one whose kind could not be told for
+// this call (see mimeCache). The caller lists the folder instead.
+var ErrNoNameLookup = errors.New("the API has no lookup by name")
+
+// LookupNodeByName returns the child named name of the folder parentID (nil
+// for the dataroom root), found by its name hash: one request whatever the
+// size of the folder, and nothing decrypted but the node found. found is
+// false when the folder holds no such name.
+//
+// It holds no cache and decides nothing about one: that is the caller's (see
+// internal/vfs). A dataroom without name salt is looked up by the unsalted
+// hash, the one its nodes were created with (resolvePathItemWithSession does
+// the same). On an API without the lookup it answers ErrNoNameLookup and
+// sends nothing but the probe that tells the API apart.
+//
+// A node the hash names but whose name does not decrypt to name is not
+// reported: a listing would not show it under that name either. Nor is a node
+// that says it belongs to another folder than the one asked: the root is
+// asked by leaving parent_id out, and an API that took that for "any folder"
+// would answer a node of the same name from anywhere in the dataroom.
+func LookupNodeByName(
+	ctx context.Context, client *api.Client, dataroomID string,
+	parentID *string, name string, sess *DataroomSession,
+) (node DataroomNodeInfo, found bool, err error) {
+	if !sess.supportsNodeTypes(ctx, client, dataroomID) {
+		return DataroomNodeInfo{}, false, ErrNoNameLookup
+	}
+	item, err := client.FindDataroomNodeByHash(ctx, dataroomID, parentID, nodeNameHash(name, sess.NameSalt))
+	if err != nil || item == nil {
+		return DataroomNodeInfo{}, false, err
+	}
+	if got := item.Node.ParentID; got != nil && (parentID == nil || *got != *parentID) {
+		return DataroomNodeInfo{}, false, nil
+	}
+	node = nodesFromItems(ctx, client, dataroomID, []api.DataroomNodeItem{*item}, sess)[0]
+	if node.Name != name {
+		return DataroomNodeInfo{}, false, nil
+	}
+
+	return node, true, nil
+}
+
 // — Upload / download helpers —————————————————————————————————————————————————
 
 // InitStreamUpload resolves the parent directory, creates the dataroom node and version,
@@ -727,7 +896,18 @@ type StreamUploadInit struct {
 	VersionID string
 	MIMEType  string    // MIME type stored with the node
 	CreatedAt time.Time // version creation time, as ListNodes will report it
-	NewNode   bool      // node created here; callers delete it on upload failure
+	// ModTime is the modification time a listing will report for the version:
+	// the client_mtime it was declared with, CreatedAt without one.
+	ModTime time.Time
+	// NodeCreatedAt is the creation time of the node, zero when the call did
+	// not learn it (a version added to a node known by its ID only).
+	NodeCreatedAt time.Time
+	// NodeMode is the mode of the node as its creation answered it, zero when
+	// the call did not learn it (same case) or the API stores none.
+	NodeMode os.FileMode
+	// NodeModeSet tells that NodeMode was answered, an explicit 0 included.
+	NodeModeSet bool
+	NewNode     bool // node created here; callers delete it on upload failure
 }
 
 // DiscardFailedUpload removes what a failed upload left behind: the whole node
@@ -739,11 +919,18 @@ type StreamUploadInit struct {
 // It runs detached from the upload context, which is usually cancelled by then,
 // on its own short timeout. It is best-effort: deleting requires the can_delete
 // capability, which contributors lack, so the caller only reports its error.
+//
+// A node that is already gone is not an error: the API deletes a node itself
+// when it refuses, for lack of storage, the first version it would have had.
 func DiscardFailedUpload(client *api.Client, nodeID, versionID string, newNode bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if newNode {
-		return client.DeleteDataroomNode(ctx, nodeID)
+		if err := client.DeleteDataroomNode(ctx, nodeID); err != nil && !errors.Is(err, api.ErrNotFound) {
+			return err
+		}
+
+		return nil
 	}
 
 	return client.DeleteDataroomNodeVersion(ctx, versionID)
@@ -783,6 +970,15 @@ func AddVersionToNodeIn(
 	return addVersionToNode(ctx, client, dataroomID, nodeID, fileName, totalSize, nil, sess)
 }
 
+// AddVersionToNodeInWithMtime is AddVersionToNodeIn declaring mtime as the
+// client_mtime of the version; nil declares none.
+func AddVersionToNodeInWithMtime(
+	ctx context.Context, client *api.Client, dataroomID, nodeID, fileName string,
+	totalSize int64, mtime *time.Time, sess *DataroomSession,
+) (StreamUploadInit, error) {
+	return addVersionToNode(ctx, client, dataroomID, nodeID, fileName, totalSize, mtime, sess)
+}
+
 // dataroomIDUnknown marks a call that has no dataroom ID at hand for the MIME
 // table (AddVersionToNode's route is keyed by node only): the session then
 // uses the table it already loaded, if any, and the legacy ciphertext
@@ -813,35 +1009,83 @@ func addVersionToNode(
 		VersionID: version.ID,
 		MIMEType:  mimeType,
 		CreatedAt: version.CreatedAt,
+		ModTime:   version.ModTime(),
 		NewNode:   false,
 	}, nil
 }
 
-// UploadSmallFile uploads a file that fits in one chunk (len(data) at most
-// UploadChunkSize, nil or empty for an empty file) in a single request: the
-// node, its version and the content together, instead of three round trips
-// that each wait for the previous one's ID. A file already holding the name
-// gets the upload as its next version. parentID is nil for the dataroom root.
+// UploadSmallFile uploads a small file (len(data) at most SmallUploadMaxSize,
+// nil or empty for an empty file) in a single request: the node, its version
+// and the content together, instead of three round trips that each wait for
+// the previous one's ID. A file already holding the name gets the upload as
+// its next version. parentID is nil for the dataroom root.
+//
+// The route takes one chunk (see SmallUploadMaxSize). Should a proxy still
+// answer 413, the same content is sent
+// once through a version and its chunks, as a larger file is.
 //
 // It returns the node as a listing would report it, and whether this upload
-// created it. The server discards what a failed request created, so there is
-// nothing for the caller to clean up.
+// created it. The server discards what a failed request created, and the
+// fallback cleans up after itself, so there is nothing for the caller to
+// clean up.
 func UploadSmallFile(
 	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
 	fileName string, data []byte, sess *DataroomSession,
 ) (node DataroomNodeInfo, newNode bool, err error) {
-	return uploadSmallFile(ctx, client, dataroomID, parentID, fileName, data, nil, sess)
+	return uploadSmallFile(ctx, client, dataroomID, parentID, fileName, data, nil, nil, sess)
+}
+
+// UploadSmallFileWithMtime is UploadSmallFile declaring mtime as the
+// client_mtime of the version; nil declares none.
+func UploadSmallFileWithMtime(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
+	fileName string, data []byte, mtime *time.Time, sess *DataroomSession,
+) (node DataroomNodeInfo, newNode bool, err error) {
+	return uploadSmallFile(ctx, client, dataroomID, parentID, fileName, data, mtime, nil, sess)
+}
+
+// UploadSmallFileWithAttrs is UploadSmallFileWithMtime declaring mode as the
+// access mode of the node, in the same request; nil declares none and the
+// server gives a new file its default (0 is "0000"). The mode is for a file the upload
+// creates: what the API does with it for a file that exists is its own
+// business, and the node answered tells.
+func UploadSmallFileWithAttrs(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
+	fileName string, data []byte, mtime *time.Time, mode *os.FileMode, sess *DataroomSession,
+) (node DataroomNodeInfo, newNode bool, err error) {
+	return uploadSmallFile(ctx, client, dataroomID, parentID, fileName, data, mtime, mode, sess)
+}
+
+// accessModeField formats mode for the access_mode field of a creation, ""
+// (the server default) for nil. An explicit 0 is "0000".
+func accessModeField(mode *os.FileMode) string {
+	if mode == nil {
+		return ""
+	}
+
+	return api.FormatAccessMode(*mode)
+}
+
+// statusTooLarge is the HTTP status of a request body refused for its size.
+const statusTooLarge = 413
+
+// isTooLarge reports a 413: a request body above what the route, or the proxy
+// in front of it, accepts.
+func isTooLarge(err error) bool {
+	var httpErr *api.HTTPError
+
+	return errors.As(err, &httpErr) && httpErr.Status == statusTooLarge
 }
 
 // uploadSmallFile is UploadSmallFile with the source's modification time,
 // declared to the API when known.
 func uploadSmallFile(
 	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
-	fileName string, data []byte, mtime *time.Time, sess *DataroomSession,
+	fileName string, data []byte, mtime *time.Time, mode *os.FileMode, sess *DataroomSession,
 ) (node DataroomNodeInfo, newNode bool, err error) {
-	if len(data) > UploadChunkSize {
+	if len(data) > SmallUploadMaxSize {
 		return DataroomNodeInfo{}, false, fmt.Errorf(
-			"%d bytes do not fit in a single %d-byte chunk", len(data), UploadChunkSize)
+			"%d bytes are more than the %d a single request may carry", len(data), SmallUploadMaxSize)
 	}
 	mimeType := guessMIMEType(fileName)
 	nameEnc, err := crypto.EncryptStringForKeys(fileName, []string{sess.PublicKey})
@@ -856,20 +1100,34 @@ func uploadSmallFile(
 	}
 
 	var item *api.DataroomNodeItem
-	err = sess.withMIME(ctx, client, dataroomID, mimeType, func(m api.NodeMIME) (*api.DataroomNode, error) {
-		var err error
-		item, err = client.CreateDataroomFileNode(ctx, dataroomID, api.FileNodeCreate{
-			ParentID: parentID, NameEnc: nameEnc, NameHash: nodeNameHash(fileName, sess.NameSalt), MIME: m,
-			OriginalSize: int64(len(data)), Overwrite: true, ClientMtime: mtime, Chunk: chunk,
-		})
-		if err != nil {
-			return nil, err
-		}
+	send := func() error {
+		return sess.withMIME(ctx, client, dataroomID, mimeType, func(m api.NodeMIME) (*api.DataroomNode, error) {
+			var err error
+			item, err = client.CreateDataroomFileNode(ctx, dataroomID, api.FileNodeCreate{
+				ParentID: parentID, NameEnc: nameEnc, NameHash: nodeNameHash(fileName, sess.NameSalt), MIME: m,
+				OriginalSize: int64(len(data)), Overwrite: true, ClientMtime: mtime, Chunk: chunk,
+				AccessMode: accessModeField(mode),
+			})
+			if err != nil {
+				return nil, err
+			}
 
-		return &item.Node, nil
-	})
+			return &item.Node, nil
+		})
+	}
+	err = send()
+	if isConflict(err) && api.ErrorCode(err) == api.CodeConcurrentUpdate {
+		// Another request wrote the same file at the same instant: the API
+		// asks for the request again.
+		err = send()
+	}
 	switch {
-	case errors.Is(err, api.ErrGone):
+	case isTooLarge(err):
+		// The request weighed more than a proxy in front of the route takes
+		// (an older limit than SmallUploadMaxSize assumes): the content is in
+		// memory, send it the other way.
+		return uploadSmallFileChunked(ctx, client, dataroomID, parentID, fileName, data, mtime, mode, sess)
+	case isNameHolderDeleted(err):
 		// 410: the name is held by a node pending deletion — not a missing
 		// parent, which is a plain 404.
 		return DataroomNodeInfo{}, false, fmt.Errorf("%q: %w", fileName, ErrNameBeingDeleted)
@@ -890,12 +1148,58 @@ func uploadSmallFile(
 		Size:       int64(len(data)),
 		VersionID:  item.Version.ID,
 		ChunkCount: ChunkCount(int64(len(data))),
+		createdAt:  item.Node.CreatedAt,
+		sealed:     sealedOf(&item.Node),
 	}.WithModTime(item.Version.ModTime())
+	// The folder asked for, not the one answered: the request is what placed
+	// the node, and not every API echoes parent_id on this route.
+	if parentID != nil {
+		info.parentID = *parentID
+	}
 	if mode, ok := api.ParseAccessMode(item.Node.AccessMode); ok {
-		info.mode = mode
+		info.mode, info.modeSet = mode, true
 	}
 
 	return info, item.Version.VersionNumber <= 1, nil
+}
+
+// uploadSmallFileChunked sends data as a version and its chunks: what
+// uploadSmallFile falls back to when the single request is refused as too
+// large. It discards what it created when the chunks fail.
+func uploadSmallFileChunked(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
+	fileName string, data []byte, mtime *time.Time, mode *os.FileMode, sess *DataroomSession,
+) (node DataroomNodeInfo, newNode bool, err error) {
+	size := int64(len(data))
+	init, err := initStreamUploadInto(ctx, client, dataroomID, parentID, fileName, size, mtime, mode, sess)
+	if err != nil {
+		return DataroomNodeInfo{}, false, err
+	}
+	err = UploadChunks(ctx, bytes.NewReader(data), size, fileName, sess.PublicKey, nil,
+		func(ctx context.Context, chunkID int, chunk []byte) error {
+			return client.UploadDataroomChunk(ctx, init.VersionID, chunkID, chunk)
+		})
+	if err != nil {
+		_ = DiscardFailedUpload(client, init.NodeID, init.VersionID, init.NewNode)
+
+		return DataroomNodeInfo{}, false, err
+	}
+	info := DataroomNodeInfo{
+		ID:         init.NodeID,
+		Name:       fileName,
+		Type:       "file",
+		MIMEType:   init.MIMEType,
+		Size:       size,
+		VersionID:  init.VersionID,
+		ChunkCount: ChunkCount(size),
+		createdAt:  init.NodeCreatedAt,
+	}.WithModTime(init.ModTime)
+	info.mode, info.modeSet = init.NodeMode, init.NodeModeSet
+	if parentID != nil {
+		info.parentID = *parentID
+	}
+
+	return info, init.NewNode, nil
 }
 
 // InitStreamUploadInto is InitStreamUpload with the parent directory already
@@ -918,14 +1222,33 @@ func InitStreamUploadInto(
 	totalSize int64,
 	sess *DataroomSession,
 ) (StreamUploadInit, error) {
-	return initStreamUploadInto(ctx, client, dataroomID, parentID, fileName, totalSize, nil, sess)
+	return initStreamUploadInto(ctx, client, dataroomID, parentID, fileName, totalSize, nil, nil, sess)
+}
+
+// InitStreamUploadIntoWithMtime is InitStreamUploadInto declaring mtime as
+// the client_mtime of the version; nil declares none.
+func InitStreamUploadIntoWithMtime(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
+	fileName string, totalSize int64, mtime *time.Time, sess *DataroomSession,
+) (StreamUploadInit, error) {
+	return initStreamUploadInto(ctx, client, dataroomID, parentID, fileName, totalSize, mtime, nil, sess)
+}
+
+// InitStreamUploadIntoWithAttrs is InitStreamUploadIntoWithMtime declaring
+// mode as the access mode of the node when the call creates it; nil declares
+// none (0 is "0000"). A node that already holds the name keeps its mode.
+func InitStreamUploadIntoWithAttrs(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
+	fileName string, totalSize int64, mtime *time.Time, mode *os.FileMode, sess *DataroomSession,
+) (StreamUploadInit, error) {
+	return initStreamUploadInto(ctx, client, dataroomID, parentID, fileName, totalSize, mtime, mode, sess)
 }
 
 // initStreamUploadInto is InitStreamUploadInto with the source's modification
 // time, declared to the API when known.
 func initStreamUploadInto(
 	ctx context.Context, client *api.Client, dataroomID string, parentID *string,
-	fileName string, totalSize int64, mtime *time.Time, sess *DataroomSession,
+	fileName string, totalSize int64, mtime *time.Time, mode *os.FileMode, sess *DataroomSession,
 ) (StreamUploadInit, error) {
 	mimeType := guessMIMEType(fileName)
 	nameEnc, err := crypto.EncryptStringForKeys(fileName, []string{sess.PublicKey})
@@ -938,11 +1261,15 @@ func initStreamUploadInto(
 		var err error
 		node, err = client.CreateDataroomNode(ctx, dataroomID, api.NodeCreate{
 			ParentID: parentID, NameEnc: nameEnc, NameHash: nodeNameHash(fileName, sess.NameSalt), MIME: m,
+			AccessMode: accessModeField(mode),
 		})
 
 		return node, err
 	})
 	var targetNodeID string
+	var nodeCreatedAt time.Time
+	var nodeMode os.FileMode
+	var nodeModeSet bool
 	isNewNode := createErr == nil
 
 	if createErr != nil {
@@ -960,9 +1287,10 @@ func initStreamUploadInto(
 			return StreamUploadInit{}, fmt.Errorf(
 				"cannot upload file %q: a folder or a symlink with that name already exists", fileName)
 		}
-		targetNodeID = existing.ID
+		targetNodeID, nodeCreatedAt = existing.ID, existing.CreatedAt
 	} else {
-		targetNodeID = node.ID
+		targetNodeID, nodeCreatedAt = node.ID, node.CreatedAt
+		nodeMode, nodeModeSet = api.ParseAccessMode(node.AccessMode)
 	}
 
 	init, err := addVersionToNode(ctx, client, dataroomID, targetNodeID, fileName, totalSize, mtime, sess)
@@ -976,6 +1304,8 @@ func initStreamUploadInto(
 		return StreamUploadInit{}, err
 	}
 	init.NewNode = isNewNode
+	init.NodeCreatedAt = nodeCreatedAt
+	init.NodeMode, init.NodeModeSet = nodeMode, nodeModeSet
 
 	return init, nil
 }
@@ -1001,12 +1331,12 @@ func uploadDataroomFile(
 		displayName = name
 	}
 	mtime := info.ModTime()
-	if info.Size() <= UploadChunkSize {
+	if info.Size() <= SmallUploadMaxSize {
 		return uploadSmallDataroomFile(ctx, client, dataroomID, f, info.Size(), parentID, sess,
 			name, displayName, &mtime, progress)
 	}
 
-	init, err := initStreamUploadInto(ctx, client, dataroomID, parentID, name, info.Size(), &mtime, sess)
+	init, err := initStreamUploadInto(ctx, client, dataroomID, parentID, name, info.Size(), &mtime, nil, sess)
 	if err != nil {
 		return err
 	}
@@ -1029,8 +1359,8 @@ func uploadDataroomFile(
 	return uploadErr
 }
 
-// uploadSmallDataroomFile sends a local file that fits in one chunk through
-// uploadSmallFile. The file must yield exactly size bytes, as for UploadChunks.
+// uploadSmallDataroomFile sends a local file of at most SmallUploadMaxSize
+// bytes through uploadSmallFile. The file must yield exactly size bytes, as for UploadChunks.
 func uploadSmallDataroomFile(
 	ctx context.Context, client *api.Client, dataroomID string, f io.Reader, size int64,
 	parentID *string, sess *DataroomSession, name, displayName string, mtime *time.Time, progress ProgressFn,
@@ -1044,7 +1374,7 @@ func uploadSmallDataroomFile(
 	case int64(len(data)) < size:
 		return fmt.Errorf("source ended after %d of its declared %d bytes", len(data), size)
 	}
-	_, newNode, err := uploadSmallFile(ctx, client, dataroomID, parentID, name, data, mtime, sess)
+	_, newNode, err := uploadSmallFile(ctx, client, dataroomID, parentID, name, data, mtime, nil, sess)
 	if err != nil {
 		return err
 	}
@@ -1498,6 +1828,65 @@ func MkdirDataroomInto(
 	return node.ID, nil
 }
 
+// ErrSymlinkUnsupported reports an API that has no symbolic links: one that
+// predates the node types, or the symlink route.
+var ErrSymlinkUnsupported = errors.New("symbolic links are not supported by the API")
+
+// SymlinkDataroomInto creates the symbolic link name under parentID (nil for
+// the dataroom root), pointing at target, and returns its node: type
+// "symlink", Size the length of target, as a listing reports it. The target
+// is stored as it is given (relative or absolute, dangling or not), encrypted
+// for the session key like the name.
+//
+// The route arrived after the node types: an API known to be older is not
+// asked and ErrSymlinkUnsupported returned, as it is when the route answers
+// 405. When the probe that tells the APIs apart fails, its error is returned
+// as it is (a rate limit stays one) and nothing is created.
+func SymlinkDataroomInto(
+	ctx context.Context, client *api.Client, dataroomID string, parentID *string, name, target string,
+	sess *DataroomSession,
+) (DataroomNodeInfo, error) {
+	supported, err := sess.nodeTypesSupport(ctx, client, dataroomID)
+	if err != nil {
+		return DataroomNodeInfo{}, err
+	}
+	if !supported {
+		return DataroomNodeInfo{}, ErrSymlinkUnsupported
+	}
+	nameEnc, err := crypto.EncryptStringForKeys(name, []string{sess.PublicKey})
+	if err != nil {
+		return DataroomNodeInfo{}, fmt.Errorf("encrypting symlink name: %w", err)
+	}
+	targetEnc, err := crypto.EncryptStringForKeys(target, []string{sess.PublicKey})
+	if err != nil {
+		return DataroomNodeInfo{}, fmt.Errorf("encrypting symlink target: %w", err)
+	}
+
+	node, err := client.CreateDataroomSymlink(ctx, dataroomID, api.SymlinkCreate{
+		ParentID: parentID, NameEnc: nameEnc, NameHash: nodeNameHash(name, sess.NameSalt), TargetEnc: targetEnc,
+	})
+	var httpErr *api.HTTPError
+	if errors.As(err, &httpErr) && httpErr.Status == http.StatusMethodNotAllowed {
+		return DataroomNodeInfo{}, fmt.Errorf("creating symlink: %w: %w", ErrSymlinkUnsupported, err)
+	}
+	if err != nil {
+		return DataroomNodeInfo{}, fmt.Errorf("creating symlink: %w", err)
+	}
+	info := DataroomNodeInfo{
+		ID: node.ID, Name: name, Type: "symlink", Size: int64(len(target)), target: target,
+		modTime: node.CreatedAt, createdAt: node.CreatedAt,
+		sealed: sealedOf(node),
+	}
+	if parentID != nil {
+		info.parentID = *parentID
+	}
+	if mode, ok := api.ParseAccessMode(node.AccessMode); ok {
+		info.mode, info.modeSet = mode, true
+	}
+
+	return info, nil
+}
+
 // DeleteDataroomNode deletes a node (or whole dataroom) at the given retyc:// URI.
 // Glob patterns expand to multiple deletions. Returns the count of deleted items.
 func DeleteDataroomNode(
@@ -1627,14 +2016,55 @@ func MoveDataroomNodeWithSession(
 func MoveDataroomNodeByID(
 	ctx context.Context, client *api.Client, nodeID string, dstParentID *string, newName string, sess *DataroomSession,
 ) error {
+	return moveNodeByID(ctx, client, nodeID, dstParentID, newName, sess, false)
+}
+
+// ErrReplaceUnsupported is returned by ReplaceDataroomNodeByID against an API
+// that predates the replace field of the node update.
+var ErrReplaceUnsupported = errors.New("the API does not support replacing a file on rename")
+
+// ReplaceDataroomNodeByID is MoveDataroomNodeByID replacing a live file that
+// holds newName under dstParentID: one request, in which the API deletes that
+// file and renames the node (api.NodeUpdate.Replace). A folder holding the
+// name answers api.ErrConflict with the code REPLACE_TARGET_IS_FOLDER (the
+// detail "Cannot replace a folder" from an API without codes); a file the
+// user may not delete, a 403 REPLACE_FORBIDDEN.
+//
+// The field exists on the API that has the node types only: an older one
+// would ignore it and rename without replacing, so it is not asked and
+// ErrReplaceUnsupported is returned. When the probe that tells the two apart
+// fails, nothing is known of the API: its error is returned as it is (a rate
+// limit stays one) and no rename is sent.
+func ReplaceDataroomNodeByID(
+	ctx context.Context, client *api.Client, dataroomID, nodeID string, dstParentID *string, newName string,
+	sess *DataroomSession,
+) error {
+	supported, err := sess.nodeTypesSupport(ctx, client, dataroomID)
+	if err != nil {
+		return err
+	}
+	if !supported {
+		return ErrReplaceUnsupported
+	}
+
+	return moveNodeByID(ctx, client, nodeID, dstParentID, newName, sess, true)
+}
+
+// moveNodeByID renames and moves nodeID, replacing a file that holds the
+// target name when replace is set.
+func moveNodeByID(
+	ctx context.Context, client *api.Client, nodeID string, dstParentID *string, newName string,
+	sess *DataroomSession, replace bool,
+) error {
 	nameEnc, err := crypto.EncryptStringForKeys(newName, []string{sess.PublicKey})
 	if err != nil {
 		return fmt.Errorf("encrypting new name: %w", err)
 	}
+	nameHash := nodeNameHash(newName, sess.NameSalt)
 
-	if err := client.RenameDataroomNode(
-		ctx, nodeID, nameEnc, nodeNameHash(newName, sess.NameSalt), dstParentID,
-	); err != nil {
+	if err := client.UpdateDataroomNode(ctx, nodeID, api.NodeUpdate{
+		NameEnc: &nameEnc, NameHash: &nameHash, ParentID: dstParentID, SetParent: true, Replace: replace,
+	}); err != nil {
 		return fmt.Errorf("moving node: %w", err)
 	}
 

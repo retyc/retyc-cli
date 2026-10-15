@@ -2,8 +2,11 @@ package crypto
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
+
+	"filippo.io/age/armor"
 )
 
 func TestGenerateKeyPair(t *testing.T) {
@@ -406,5 +409,72 @@ func TestEncryptStringForKeys_InvalidKey(t *testing.T) {
 	_, err := EncryptStringForKeys("hello", []string{"not-a-valid-key"})
 	if err == nil {
 		t.Error("EncryptStringForKeys() should return error for invalid key")
+	}
+}
+
+// dearmorForTest returns the binary AGE payload an armored one encodes.
+func dearmorForTest(t *testing.T, armored string) string {
+	t.Helper()
+	raw, err := io.ReadAll(armor.NewReader(strings.NewReader(armored)))
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("dearmoring: %v", err)
+	}
+
+	return string(raw)
+}
+
+func TestDecryptPayloadToString_ArmoredOrBinary(t *testing.T) {
+	id, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	armored, err := EncryptToString("report.pdf", id.Recipient())
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := dearmorForTest(t, armored)
+	if !IsArmored(armored) || !IsArmored("\n "+armored) || IsArmored(binary) || IsArmored("") {
+		t.Fatal("IsArmored does not tell the two forms apart")
+	}
+	if len(binary) >= len(armored) {
+		t.Fatalf("the binary form (%d bytes) is not smaller than the armored one (%d)", len(binary), len(armored))
+	}
+	for form, payload := range map[string]string{"armored": armored, "binary": binary} {
+		got, err := DecryptPayloadToString(payload, id)
+		if err != nil || got != "report.pdf" {
+			t.Errorf("%s: DecryptPayloadToString = %q, %v", form, got, err)
+		}
+	}
+	// The existing entry points keep their one form each.
+	if _, err := DecryptToString(binary, id); err == nil {
+		t.Error("DecryptToString accepted a binary payload")
+	}
+	if got, err := DecryptBinary([]byte(binary), id); err != nil || string(got) != "report.pdf" {
+		t.Errorf("DecryptBinary of the dearmored payload = %q, %v", got, err)
+	}
+
+	other, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	flipped := []byte(binary)
+	flipped[len(flipped)-1] ^= 0xff
+	for what, payload := range map[string]string{
+		"empty":                "",
+		"garbage":              "not an AGE payload",
+		"binary cut":           binary[:len(binary)/2],
+		"binary, header only":  "age-encryption.org/v1\n",
+		"binary, last byte":    string(flipped),
+		"armor cut":            armored[:len(armored)/2],
+		"armor around garbage": armor.Header + "\nAAAA\n" + armor.Footer + "\n",
+	} {
+		if got, err := DecryptPayloadToString(payload, id); err == nil {
+			t.Errorf("%s: decrypted to %q", what, got)
+		}
+	}
+	for form, payload := range map[string]string{"armored": armored, "binary": binary} {
+		if _, err := DecryptPayloadToString(payload, other); err == nil {
+			t.Errorf("%s: decrypted with another key", form)
+		}
 	}
 }

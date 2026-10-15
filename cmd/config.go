@@ -16,6 +16,8 @@ import (
 // secretKeys lists the configuration keys whose value must never be printed.
 var secretKeys = map[string]bool{
 	"admin.api_key": true,
+	// The URL carries the password of the Redis.
+	"cache.redis.url": true,
 }
 
 // maskedValue is what a set secret is displayed as.
@@ -49,10 +51,27 @@ var configPathCmd = &cobra.Command{
 			configErr = configFileErr.Error()
 		}
 
+		envFile, envErr := "", ""
+		var envVars []string
+		if envFileLoaded != nil {
+			envFile, envVars = envFileLoaded.Path, envFileLoaded.Applied
+		}
+		if envFileErr != nil {
+			envErr = envFileErr.Error()
+		}
+
 		if jsonOutput {
 			return printJSON(configPathJSON{
 				ConfigDir: dir, ConfigFile: configFile, ConfigFileError: configErr, TokenFile: tokenFile,
+				EnvFile: envFile, EnvFileVariables: envVars, EnvFileError: envErr,
 			})
+		}
+
+		switch {
+		case envErr != "":
+			envFile = "(none loaded: " + envErr + ")"
+		case envFile == "":
+			envFile = "(none)"
 		}
 
 		switch {
@@ -65,6 +84,7 @@ var configPathCmd = &cobra.Command{
 		fmt.Fprintf(w, "config dir\t%s\n", dir)
 		fmt.Fprintf(w, "config file\t%s\n", configFile)
 		fmt.Fprintf(w, "token file\t%s\n", tokenFile)
+		fmt.Fprintf(w, "env file\t%s\n", envFile)
 
 		return w.Flush()
 	},
@@ -78,13 +98,22 @@ var configShowCmd = &cobra.Command{
 
 Values come from the config file, the environment (RETYC_<KEY_WITH_UNDERSCORES>)
 or the built-in defaults; viper does not report which one won, so only the
-effective value is shown. Secrets are masked.`,
+effective value is shown. Secrets are masked. Variables read from an
+environment file (--env-file) count as environment.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// A value that viper can print but not unmarshal (keyring.ttl: abc)
 		// breaks every other command with an opaque error. Surface it here,
 		// on stderr, without hiding the listing someone came for.
 		if _, err := config.Load(); err != nil {
 			fmt.Fprintln(os.Stderr, "warning: the configuration does not load:", err)
+		}
+
+		// The values an environment file brought are listed like any other
+		// environment value, secrets masked. Which file, and which names, goes
+		// to stderr: stdout keeps its one-key-per-line shape.
+		if envFileLoaded != nil {
+			fmt.Fprintf(os.Stderr, "environment file: %s (applied: %s)\n",
+				envFileLoaded.Path, strings.Join(envFileLoaded.Applied, " "))
 		}
 
 		entries := configEntries()

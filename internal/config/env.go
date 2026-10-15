@@ -21,6 +21,9 @@ const (
 	EnvKeyPassphraseName  = "RETYC_KEY_PASSPHRASE"  //nolint:gosec // G101: variable name, not a credential
 	EnvWebdavPasswordName = "RETYC_WEBDAV_PASSWORD" //nolint:gosec // G101: variable name, not a credential
 	EnvConfigDirName      = "RETYC_CONFIG_DIR"
+	// EnvFileName designates the environment file (see envfile.go). It is read
+	// before anything else: the file may carry RETYC_CONFIG_DIR itself.
+	EnvFileName = "RETYC_ENV_FILE"
 )
 
 // ErrNoKeyPassphrase is returned when the key passphrase is required but the
@@ -43,6 +46,12 @@ func fromEnv(name string) string {
 	}
 
 	return v
+}
+
+// envFilePath returns the environment file designated by RETYC_ENV_FILE, or ""
+// when unset. The --env-file flag takes precedence (LoadEnvFile).
+func envFilePath() string {
+	return os.Getenv(EnvFileName)
 }
 
 // Token returns the offline refresh token from RETYC_TOKEN, or "" when unset.

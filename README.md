@@ -10,8 +10,8 @@
 # Retyc CLI
 
 > Official command-line interface for [Retyc](https://retyc.com) - send transfers and manage datarooms directly from
-> your terminal. Also runs as a local **[MCP server](doc/mcp.md)**: connect your AI agent and control Retyc in plain
-> language.
+> your terminal. With **[RetycFS](doc/retycfs.md)**, mount your datarooms as a local folder on Linux. Also runs as a
+> local **[MCP server](doc/mcp.md)**: connect your AI agent and control Retyc in plain language.
 
 <img src=".media/demo_0.0.2.gif" width="500" alt="Retyc CLI demo" />
 
@@ -111,22 +111,25 @@ double-click to install in Claude Desktop, no terminal needed. See [doc/mcpb.md]
 
 ---
 
-## WebDAV Server
+## RetycFS
 
-`retyc-cli` also runs as a local **WebDAV server** — mount your datarooms as a network
-drive in Finder, Windows Explorer or any WebDAV client and browse, open, upload, rename
-and delete files with the same end-to-end encryption. Files are encrypted and decrypted
-locally; the servers never see plaintext.
+RetycFS mounts your datarooms as a local folder on Linux. Any program can open, edit
+and save the files in it: `ls`, `cp`, a file manager, an editor, a script. Files are
+encrypted and decrypted locally; the Retyc servers never see plaintext.
 
 ```sh
+# The key passphrase is required (never prompted)
 read -rs RETYC_KEY_PASSPHRASE
 export RETYC_KEY_PASSPHRASE
 
-retyc webdav serve            # → http://localhost:8888  (datarooms under /dataroom)
+mkdir -p ~/retyc
+retyc fs mount retyc://<dataroom-id> ~/retyc   # one dataroom, the root of ~/retyc
+retyc fs mount --all ~/retyc                   # or every dataroom, one folder each
 ```
 
-Full guide (mounting on macOS/Windows/Linux, authentication, limitations):
-[doc/webdav.md](doc/webdav.md).
+The command stays in the foreground; unmount with `Ctrl-C`.
+
+Full guide: [doc/retycfs.md](doc/retycfs.md)
 
 ---
 
@@ -144,16 +147,16 @@ Full policy: <https://retyc.com/legal/data-policy>
 
 ## Documentation
 
-| Topic                        | Link                                         |
-|------------------------------|----------------------------------------------|
-| Full commands reference      | [doc/commands.md](doc/commands.md)           |
-| WebDAV server                | [doc/webdav.md](doc/webdav.md)               |
-| MCP server + tools reference | [doc/mcp.md](doc/mcp.md)                     |
-| Docker usage                 | [doc/docker.md](doc/docker.md)               |
-| Claude Desktop bundle (MCPB) | [doc/mcpb.md](doc/mcpb.md)                   |
-| CI / CD integration          | [doc/ci-cd.md](doc/ci-cd.md)                 |
-| Configuration & env vars     | [doc/configuration.md](doc/configuration.md) |
-| Roadmap                      | [doc/roadmap.md](doc/roadmap.md)             |
+| Topic                                        | Link                                         |
+|----------------------------------------------|----------------------------------------------|
+| Full commands reference                      | [doc/commands.md](doc/commands.md)           |
+| RetycFS (mount datarooms as a folder, Linux) | [doc/retycfs.md](doc/retycfs.md)             |
+| MCP server + tools reference                 | [doc/mcp.md](doc/mcp.md)                     |
+| Docker usage                                 | [doc/docker.md](doc/docker.md)               |
+| Claude Desktop bundle (MCPB)                 | [doc/mcpb.md](doc/mcpb.md)                   |
+| CI / CD integration                          | [doc/ci-cd.md](doc/ci-cd.md)                 |
+| Configuration & env vars                     | [doc/configuration.md](doc/configuration.md) |
+| Roadmap                                      | [doc/roadmap.md](doc/roadmap.md)             |
 
 ---
 

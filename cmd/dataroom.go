@@ -440,10 +440,10 @@ func dataroomCopyRemote(ctx context.Context, srcURI, dstURI string) error {
 }
 
 var dataroomCpCmd = &cobra.Command{
-	Use:   "cp <src...> <dst>",
+	Use: "cp <src...> <dst>",
 	Short: "Copy files to, from or within a dataroom (local→retyc:// uploads, retyc://→local downloads, " +
 		"retyc://→retyc:// copies on the server)",
-	Args:  cobra.MinimumNArgs(2),
+	Args: cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		yes, _ := cmd.Flags().GetBool("yes")
 

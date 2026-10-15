@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,6 +102,9 @@ func TestAccessMode_ParseAndFormat(t *testing.T) {
 		{"4755", 0o755 | fs.ModeSetuid, true, "4755"},
 		{"2755", 0o755 | fs.ModeSetgid, true, "2755"},
 		{"1777", 0o777 | fs.ModeSticky, true, "1777"},
+		{"0000", 0, true, "0000"},
+		{"0", 0, true, "0000"},
+		{"4000", fs.ModeSetuid, true, "4000"},
 		{"", 0, false, ""},
 		{"abc", 0, false, ""},
 		{"17777", 0, false, ""},
@@ -168,5 +174,70 @@ func TestHTTPError(t *testing.T) {
 	}
 	if ErrorDetail(statusError(422, []byte(`{"detail":[{"loc":["body"],"msg":"x"}]}`))) != "" {
 		t.Error("a structured validation detail is not a code")
+	}
+}
+
+// CreateDataroomSymlink posts the encrypted name and target to the symlink
+// route, with an explicit null parent for the root and no type nor mode, and
+// returns the node the API stored.
+func TestCreateDataroomSymlink(t *testing.T) {
+	parent := "d-1"
+	for _, parentID := range []*string{nil, &parent} {
+		var body map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/dataroom/dr1/node/symlink" {
+				t.Errorf("request = %s %s, want POST /dataroom/dr1/node/symlink", r.Method, r.URL.Path)
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"l-1","name_enc":"n","type":"symlink","target_enc":"t","access_mode":"0777"}`))
+		}))
+		node, err := newTestClient(srv).CreateDataroomSymlink(context.Background(), "dr1", SymlinkCreate{
+			ParentID: parentID, NameEnc: "n", NameHash: "h", TargetEnc: "t",
+		})
+		srv.Close()
+		if err != nil || node.ID != "l-1" || !node.IsSymlink() || node.TargetEnc == nil || *node.TargetEnc != "t" {
+			t.Fatalf("CreateDataroomSymlink = (%+v, %v), want the symlink node", node, err)
+		}
+		want := map[string]any{"name_enc": "n", "name_hash": "h", "target_enc": "t", "parent_id": nil}
+		if parentID != nil {
+			want["parent_id"] = *parentID
+		}
+		if len(body) != len(want) {
+			t.Errorf("body = %v, want exactly %v", body, want)
+		}
+		for k, v := range want {
+			if got, sent := body[k]; !sent || got != v {
+				t.Errorf("body[%s] = %v (sent %v), want %v", k, got, sent, v)
+			}
+		}
+	}
+}
+
+// The role is told by the list and the writable flag by the detail: a
+// dataroom that carries neither is writable, and marshals as before.
+func TestDataroom_RoleAndWritable(t *testing.T) {
+	var listed, detail, old Dataroom
+	for raw, into := range map[string]*Dataroom{
+		`{"id":"a","role":"viewer"}`:   &listed,
+		`{"id":"a","writable":false}`: &detail,
+		`{"id":"a"}`:                   &old,
+	} {
+		if err := json.Unmarshal([]byte(raw), into); err != nil {
+			t.Fatalf("Unmarshal(%s): %v", raw, err)
+		}
+	}
+	if listed.Role != RoleViewer || !listed.CanWrite() {
+		t.Errorf("listed = %+v, want a viewer of a dataroom not known to refuse writes", listed)
+	}
+	if detail.Role != "" || detail.CanWrite() {
+		t.Errorf("detail = %+v, want no role and writes refused", detail)
+	}
+	if !old.CanWrite() {
+		t.Errorf("an API without the flag must not refuse writes")
+	}
+	out, err := json.Marshal(old)
+	if err != nil || strings.Contains(string(out), "role") || strings.Contains(string(out), "writable") {
+		t.Errorf("Marshal = (%s, %v), want neither field when the API told neither", out, err)
 	}
 }

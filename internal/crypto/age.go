@@ -138,6 +138,28 @@ func DecryptBinary(data []byte, identities ...age.Identity) ([]byte, error) {
 	return plaintext, nil
 }
 
+// IsArmored reports whether ciphertext is an armored AGE payload: it starts,
+// leading whitespace aside, with the armor header. Anything else is taken for
+// the binary form, which starts with the AGE version line.
+func IsArmored(ciphertext string) bool {
+	return strings.HasPrefix(strings.TrimSpace(ciphertext), armor.Header)
+}
+
+// DecryptPayloadToString decrypts an AGE payload held in either form to a
+// string: armored (as the API sends metadata) or binary (the same bytes
+// without the armor, as a store may keep them), told apart by IsArmored.
+func DecryptPayloadToString(payload string, identities ...age.Identity) (string, error) {
+	if IsArmored(payload) {
+		return DecryptToString(payload, identities...)
+	}
+	b, err := DecryptBinary([]byte(payload), identities...)
+	if err != nil {
+		return "", err
+	}
+
+	return string(b), nil
+}
+
 // EncryptStringForKeys encrypts value as armored AGE for the given list of public keys.
 func EncryptStringForKeys(value string, publicKeys []string) (string, error) {
 	recipients := make([]age.Recipient, 0, len(publicKeys))

@@ -22,6 +22,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 RUN useradd --no-log-init -u 1000 -U -m retyc && \
     mkdir -p /home/retyc/.config/retyc
 
+# The temporary directory of the final image: `fs mount` keeps the files being
+# written there (mount.spool_dir) and scratch has none.
+RUN mkdir -p /image-root/tmp && chmod 1777 /image-root/tmp
+
 # ---
 
 FROM scratch
@@ -30,6 +34,8 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
 COPY --from=builder --chown=1000:1000 /home/retyc /home/retyc
+# The content of /image-root, so that /tmp keeps its mode (1777).
+COPY --from=builder /image-root/ /
 COPY --from=builder /retyc /retyc
 
 # OCI image annotations. `source` links the GHCR package to this repository

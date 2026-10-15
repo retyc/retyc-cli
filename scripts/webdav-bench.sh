@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Benchmark small-file writes through `retyc webdav serve`, with and without a
+# Benchmark small-file writes through `retyc fs webdav serve`, with and without a
 # WebDAV client in the path.
 #
 # Upload cost over WebDAV is dominated by the number of sequential API
@@ -13,7 +13,7 @@
 # pointed at a local collector) and the WebDAV mount is active.
 #
 # - retyc dataroom create --title bench1
-# - OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 retyc webdav serve --addr 127.0.0.1:8888
+# - OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 retyc fs webdav serve --addr 127.0.0.1:8888
 # - sudo mkdir -p /mnt/a && sudo mount -t davfs -o dir_mode=0777,file_mode=0666 http://127.0.0.1:8888/dataroom/bench1 /mnt/a
 #
 #

@@ -8,6 +8,20 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
 
+    # The tests of the shared metadata cache (redisstore, and vfs over it) need
+    # a real Redis. They skip without REDISSTORE_TEST_URL and fail here (CI is
+    # set). Each test works under a random key prefix it removes.
+    services:
+      redis:
+        image: redis:8.10.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v5
 
@@ -25,7 +39,15 @@ jobs:
         with:
           version: v2.11.3
 
+      # The tests of internal/retycfs mount a FUSE filesystem. They skip on a
+      # machine without FUSE and fail here (CI is set): the runner has
+      # /dev/fuse, the fusermount3 helper is not guaranteed.
+      - name: Install FUSE
+        run: sudo apt-get update && sudo apt-get install -y fuse3
+
       - name: Test
+        env:
+          REDISSTORE_TEST_URL: redis://localhost:6379/15
         run: go test -race -coverprofile=coverage.out ./...
 
       - name: Coverage summary

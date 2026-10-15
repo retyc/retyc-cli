@@ -13,6 +13,7 @@ import (
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/internal/vfs"
 )
 
 const (
@@ -59,7 +60,7 @@ func (a *chmodAPI) calls() []string {
 
 // davRequest runs one request through the WebDAV handler over fs.
 func davRequest(fs *webdavFS, method, target, body string) *httptest.ResponseRecorder {
-	h := &webdav.Handler{FileSystem: fs, LockSystem: webdav.NewMemLS()}
+	h := newWebdavHandler(fs, webdav.NewMemLS(), nil)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	req.Header.Set("Depth", "0")
 	rec := httptest.NewRecorder()
@@ -79,6 +80,26 @@ func newChmodFS(t *testing.T, a *chmodAPI, mode string) *webdavFS {
 	return fs
 }
 
+// A stored mode of 0 is presented as 0, not as the default of a node that
+// stores none.
+func TestWebdavFileInfo_Mode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		node vfs.Node
+		want os.FileMode
+	}{
+		{"file without a mode", vfs.Node{Type: vfs.TypeFile}, 0o644},
+		{"file with an explicit 0", vfs.Node{Type: vfs.TypeFile, ModeSet: true}, 0},
+		{"file with 0640", vfs.Node{Type: vfs.TypeFile, Mode: 0o640}, 0o640},
+		{"folder without a mode", vfs.Node{Type: vfs.TypeDir}, os.ModeDir | 0o755},
+		{"folder with an explicit 0", vfs.Node{Type: vfs.TypeDir, ModeSet: true}, os.ModeDir},
+	} {
+		if got := fileInfoFromNode(tc.node).Mode(); got != tc.want {
+			t.Errorf("%s: Mode() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // A chmod +x through a mount is a PROPPATCH of the executable property: it
 // reaches the API as the node's mode, and the next PROPFIND reports it.
 func TestProppatchExecutable_SetsTheMode(t *testing.T) {
@@ -88,6 +109,7 @@ func TestProppatchExecutable_SetsTheMode(t *testing.T) {
 		{"set on 0644", "0644", "T", "0755"},
 		{"set on 0600", "0600", "T", "0700"},
 		{"set without a stored mode", "", "T", "0755"},
+		{"set on an explicit 0000", "0000", "T", "0100"},
 		{"clear on 0755", "0755", "F", "0644"},
 		{"special bits are kept", "4644", "T", "4755"},
 	} {
@@ -168,18 +190,6 @@ func TestProppatch_OtherPropertiesAreRefused(t *testing.T) {
 	}
 	if calls := a.calls(); len(calls) != 0 {
 		t.Errorf("API calls = %v, want none", calls)
-	}
-}
-
-// An upload that does not learn the node's mode keeps the cached one.
-func TestUpsertNodeCache_KeepsTheMode(t *testing.T) {
-	a := &chmodAPI{}
-	fs := newChmodFS(t, a, "0755")
-
-	fs.upsertNodeCache("retyc://dr1/", service.DataroomNodeInfo{ID: "f-1", Name: "run.sh", Type: "file", Size: 3})
-	rec := davRequest(fs, "PROPFIND", "/dataroom/DR/run.sh", propfindExecutable)
-	if !strings.Contains(rec.Body.String(), ">T</executable>") {
-		t.Errorf("PROPFIND after an overwrite = %s, want the file still executable", rec.Body)
 	}
 }
 

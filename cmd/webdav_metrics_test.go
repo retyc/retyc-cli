@@ -19,6 +19,8 @@ import (
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
+	"github.com/retyc/retyc-cli/internal/vfs"
+	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -37,7 +39,7 @@ func getObservability(t *testing.T, h http.Handler, path string) (int, string) {
 	return rec.Code, string(body)
 }
 
-func mustObservability(t *testing.T, health *webdavHealth, opts observabilityOptions) http.Handler {
+func mustObservability(t *testing.T, health *serveHealth, opts observabilityOptions) http.Handler {
 	t.Helper()
 	h, err := newObservabilityHandler(health, opts)
 	if err != nil {
@@ -48,7 +50,7 @@ func mustObservability(t *testing.T, health *webdavHealth, opts observabilityOpt
 }
 
 func TestObservability_MetricsExposesGoAndBuildInfo(t *testing.T) {
-	h := mustObservability(t, newWebdavHealth(), observabilityOptions{runtime: true})
+	h := mustObservability(t, newServeHealth(), observabilityOptions{runtime: true})
 
 	code, body := getObservability(t, h, "/metrics")
 	if code != http.StatusOK {
@@ -87,7 +89,7 @@ func runtimeSeries(body string) []string {
 
 func TestObservability_RuntimeDisabledKeepsCLIMetrics(t *testing.T) {
 	metrics.WebdavRequests.WithLabelValues("GET", "200").Inc()
-	h := mustObservability(t, newWebdavHealth(), observabilityOptions{runtime: false})
+	h := mustObservability(t, newServeHealth(), observabilityOptions{runtime: false})
 
 	code, body := getObservability(t, h, "/metrics")
 	if code != http.StatusOK {
@@ -142,7 +144,7 @@ func TestResolveMetricsRuntime_DefaultEnabled(t *testing.T) {
 }
 
 func TestObservability_HealthzAlwaysOK(t *testing.T) {
-	health := newWebdavHealth()
+	health := newServeHealth()
 	h := mustObservability(t, health, observabilityOptions{runtime: true})
 
 	if code, _ := getObservability(t, h, "/healthz"); code != http.StatusOK {
@@ -156,7 +158,7 @@ func TestObservability_HealthzAlwaysOK(t *testing.T) {
 }
 
 func TestObservability_ReadyzFollowsServerState(t *testing.T) {
-	health := newWebdavHealth()
+	health := newServeHealth()
 	h := mustObservability(t, health, observabilityOptions{runtime: true})
 
 	if code, _ := getObservability(t, h, "/readyz"); code != http.StatusServiceUnavailable {
@@ -173,7 +175,7 @@ func TestObservability_ReadyzFollowsServerState(t *testing.T) {
 }
 
 func TestObservability_UnknownPathIs404(t *testing.T) {
-	h := mustObservability(t, newWebdavHealth(), observabilityOptions{runtime: true})
+	h := mustObservability(t, newServeHealth(), observabilityOptions{runtime: true})
 	if code, _ := getObservability(t, h, "/dataroom"); code != http.StatusNotFound {
 		t.Errorf("/dataroom status = %d, want 404", code)
 	}
@@ -210,7 +212,7 @@ func TestResolveMetricsAddr_DefaultDisabled(t *testing.T) {
 
 func TestStartObservabilityServer_ServesProbes(t *testing.T) {
 	srv, err := startObservabilityServer("127.0.0.1:0",
-		mustObservability(t, newWebdavHealth(), observabilityOptions{runtime: true}))
+		mustObservability(t, newServeHealth(), observabilityOptions{runtime: true}))
 	if err != nil {
 		t.Fatalf("startObservabilityServer: %v", err)
 	}
@@ -304,7 +306,7 @@ func TestInstrumentWebdav_KeepsFlusher(t *testing.T) {
 
 func TestObservability_MetricsExposesCustomMetrics(t *testing.T) {
 	metrics.WebdavRequests.WithLabelValues("GET", "200").Inc()
-	h := mustObservability(t, newWebdavHealth(), observabilityOptions{runtime: true})
+	h := mustObservability(t, newServeHealth(), observabilityOptions{runtime: true})
 	_, body := getObservability(t, h, "/metrics")
 	if !strings.Contains(body, "retyc_cli_webdav_requests_total{") {
 		t.Error("/metrics does not expose retyc_cli_webdav_requests_total")
@@ -317,12 +319,12 @@ func counterDelta(t *testing.T, c prometheus.Counter, before float64) float64 {
 	return testutil.ToFloat64(c) - before
 }
 
-func TestStreamWriteHandle_WriteCountsUploadBytes(t *testing.T) {
+func TestCreateHandle_WriteCountsUploadBytes(t *testing.T) {
 	counter := metrics.WebdavBytes.WithLabelValues("upload")
 	before := testutil.ToFloat64(counter)
 	pipeR, pipeW := io.Pipe()
 	go func() { _, _ = io.Copy(io.Discard, pipeR) }()
-	h := &streamWriteHandle{pipeW: pipeW}
+	h := &createHandle{pw: pipeW}
 
 	if _, err := h.Write(make([]byte, 300)); err != nil {
 		t.Fatal(err)
@@ -335,11 +337,13 @@ func TestStreamWriteHandle_WriteCountsUploadBytes(t *testing.T) {
 func TestWriteFileHandle_WriteCountsUploadBytes(t *testing.T) {
 	counter := metrics.WebdavBytes.WithLabelValues("upload")
 	before := testutil.ToFloat64(counter)
-	f, err := os.CreateTemp(t.TempDir(), "w")
+	spool, err := newTestFS(nil, vfs.Options{SpoolDir: t.TempDir()}).tree.OpenSpool(
+		context.Background(), "dr1", "/w", nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &writeFileHandle{file: f, info: &webdavFileInfo{}}
+	defer func() { _ = spool.Close() }()
+	h := &writeFileHandle{spool: spool, info: &webdavFileInfo{}}
 	if _, err := h.Write(make([]byte, 120)); err != nil {
 		t.Fatal(err)
 	}
@@ -361,50 +365,12 @@ func TestReadFileHandle_ReadCountsDownloadBytes(t *testing.T) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
-	h := &readFileHandle{file: f}
+	h := &readFileHandle{ctx: context.Background(), file: contextReaderAt{f}}
 	if _, err := io.ReadAll(h); err != nil {
 		t.Fatal(err)
 	}
 	if got := counterDelta(t, counter, before); got != 50 {
 		t.Errorf("download bytes delta = %v, want 50", got)
-	}
-}
-
-func TestListNodes_CountsCacheHitsAndMisses(t *testing.T) {
-	hits := metrics.WebdavNodeCacheLookups.WithLabelValues("hit")
-	misses := metrics.WebdavNodeCacheLookups.WithLabelValues("miss")
-	hitsBefore, missesBefore := testutil.ToFloat64(hits), testutil.ToFloat64(misses)
-	fs := &webdavFS{listFn: func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
-		return nil, nil
-	}}
-	ctx := context.Background()
-	for range 3 {
-		if _, err := fs.listNodes(ctx, "dr1", "/"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got := counterDelta(t, misses, missesBefore); got != 1 {
-		t.Errorf("miss delta = %v, want 1", got)
-	}
-	if got := counterDelta(t, hits, hitsBefore); got != 2 {
-		t.Errorf("hit delta = %v, want 2", got)
-	}
-}
-
-func TestDataroomCache_CountsRefreshes(t *testing.T) {
-	before := testutil.ToFloat64(metrics.WebdavDataroomCacheRefreshes)
-	c := newDataroomCache(func(context.Context) ([]dataroomCacheItem, error) {
-		return []dataroomCacheItem{{id: "dr1", title: "A"}}, nil
-	})
-	ctx := context.Background()
-	if _, err := c.resolve(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.resolve(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if got := counterDelta(t, metrics.WebdavDataroomCacheRefreshes, before); got != 1 {
-		t.Errorf("refresh delta = %v, want 1 (second resolve is a cache hit)", got)
 	}
 }
 
@@ -440,10 +406,10 @@ func TestCheckToken_ObservesResultAndExpiry(t *testing.T) {
 }
 
 func TestObservability_SessionsCachedGauge(t *testing.T) {
-	fs := &webdavFS{}
-	fs.sessions.Store("dr1", &service.DataroomSession{})
-	h := mustObservability(t, newWebdavHealth(), observabilityOptions{
-		runtime: true, extra: []prometheus.Collector{sessionsCachedGauge(fs)},
+	fs := newTestFS(nil, vfs.Options{})
+	fs.tree.SeedSession("dr1", &service.DataroomSession{})
+	h := mustObservability(t, newServeHealth(), observabilityOptions{
+		runtime: true, extra: []prometheus.Collector{sessionsCachedGauge(fs.tree)},
 	})
 	_, body := getObservability(t, h, "/metrics")
 	if !strings.Contains(body, "retyc_cli_sessions_cached 1") {
@@ -491,7 +457,7 @@ func TestParseMetricsLabels_ValueMayContainEquals(t *testing.T) {
 
 func TestObservability_ConstLabelsOnEverySeries(t *testing.T) {
 	metrics.WebdavRequests.WithLabelValues("GET", "200").Inc()
-	h := mustObservability(t, newWebdavHealth(), observabilityOptions{
+	h := mustObservability(t, newServeHealth(), observabilityOptions{
 		runtime: true, labels: prometheus.Labels{"identity": "abc"},
 	})
 	_, body := getObservability(t, h, "/metrics")
@@ -512,7 +478,7 @@ func TestObservability_ConstLabelsOnEverySeries(t *testing.T) {
 }
 
 func TestObservability_ConstLabelCollisionIsAnError(t *testing.T) {
-	_, err := newObservabilityHandler(newWebdavHealth(), observabilityOptions{
+	_, err := newObservabilityHandler(newServeHealth(), observabilityOptions{
 		labels: prometheus.Labels{"method": "x"},
 	})
 	if err == nil {
@@ -659,65 +625,6 @@ func TestWebdavServe_IsLongRunning(t *testing.T) {
 	}
 }
 
-func TestListNodes_EmitsCacheLookupEvents(t *testing.T) {
-	exp := telemetrytest.Install(t)
-	ctx, parent := telemetry.Tracer().Start(context.Background(), "parent")
-	fs := &webdavFS{listFn: func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
-		return nil, nil
-	}}
-	for range 2 {
-		if _, err := fs.listNodes(ctx, "dr1", "/SENTINEL"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	parent.End()
-
-	var hits []bool
-	for _, ev := range exp.GetSpans()[0].Events {
-		if ev.Name != "cache.lookup" {
-			continue
-		}
-		for _, kv := range ev.Attributes {
-			if kv.Key == "retyc.cache.hit" {
-				hits = append(hits, kv.Value.AsBool())
-			}
-			if strings.Contains(kv.Value.String(), "SENTINEL") {
-				t.Errorf("event attribute %s leaks the path", kv.Key)
-			}
-		}
-	}
-	if len(hits) != 2 || hits[0] || !hits[1] {
-		t.Errorf("cache.hit sequence = %v, want [false true]", hits)
-	}
-}
-
-// Resolving a dataroom from its title tags the current span with its ID: the
-// title never leaves the process, the UUID is what a trace needs.
-func TestDataroomCache_IdForNameTagsSpan(t *testing.T) {
-	exp := telemetrytest.Install(t)
-	cache := newDataroomCache(func(context.Context) ([]dataroomCacheItem, error) {
-		return []dataroomCacheItem{{id: "019d7cba-c700-73c2-8eac-f3dc311d1b25", title: "SENTINEL"}}, nil
-	})
-	ctx, span := telemetry.Tracer().Start(context.Background(), "parent")
-	if _, err := cache.idForName(ctx, "SENTINEL"); err != nil {
-		t.Fatal(err)
-	}
-	span.End()
-
-	var got string
-	for _, kv := range exp.GetSpans()[0].Attributes {
-		if kv.Key == "retyc.dataroom.id" {
-			got = kv.Value.AsString()
-		}
-		if strings.Contains(kv.Value.String(), "SENTINEL") {
-			t.Errorf("attribute %s leaks the title", kv.Key)
-		}
-	}
-	if got != "019d7cba-c700-73c2-8eac-f3dc311d1b25" {
-		t.Errorf("retyc.dataroom.id = %q", got)
-	}
-}
-
 // A buffered PUT (unknown length, LOCK-driven create) uploads from Close, on
 // a context that must still carry the request span: otherwise the session
 // resolution, the chunk POSTs and the crypto spans become orphan traces.
@@ -726,21 +633,19 @@ func TestWriteFileHandle_CloseUploadsUnderTheRequestSpan(t *testing.T) {
 	ctx, span := telemetry.Tracer().Start(context.Background(), "WEBDAV PUT")
 	defer span.End()
 	var sawSpan bool
-	fs := &webdavFS{sessionFn: func(ctx context.Context, _ string) (*service.DataroomSession, error) {
+	fs := newTestFS(nil, vfs.Options{Session: func(ctx context.Context, _ string) (*service.DataroomSession, error) {
 		// The cache wraps the resolver in its own session.unlock span, so the
 		// trace ID is what proves the request span is the ancestor.
 		sawSpan = oteltrace.SpanFromContext(ctx).SpanContext().TraceID() == span.SpanContext().TraceID()
 
 		return nil, errors.New("stop here")
-	}}
-	tempDir := t.TempDir()
-	tempFilePath := tempDir + "/f.txt"
-	f, err := os.Create(tempFilePath) //nolint:gosec // G304: our own TempDir
+	}})
+	spool, err := fs.tree.OpenSpool(ctx, "dr1", "/f.txt", nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	h := &writeFileHandle{
-		ctx: ctx, file: f, tempDir: tempDir, tempFilePath: tempFilePath,
+		ctx: ctx, spool: spool, info: &webdavFileInfo{},
 		drID: "dr1", parentPath: "/", fileName: "f.txt", wfs: fs, isPut: true,
 	}
 	if err := h.Close(); err == nil {
@@ -785,5 +690,145 @@ func TestResolveUnsafeWrite(t *testing.T) {
 				t.Errorf("API.UnsafeWrite = %v, want %v", cfg.API.UnsafeWrite, tc.want)
 			}
 		})
+	}
+}
+
+// The cache flags of the fs front ends land in the common cache section with
+// the usual precedence, and go through the validation of config.Load.
+func TestResolveCacheFlags(t *testing.T) {
+	cases := map[string]struct {
+		env, flags map[string]string
+		want       config.CacheConfig
+		wantErr    bool
+	}{
+		"defaults": {
+			want: config.CacheConfig{TTL: time.Minute, MaxStale: 5 * time.Minute, NegativeTTL: time.Second, Store: "memory"},
+		},
+		"env without flag": {
+			env:  map[string]string{"RETYC_CACHE_TTL": "90s", "RETYC_CACHE_NEGATIVE_TTL": "0"},
+			want: config.CacheConfig{TTL: 90 * time.Second, MaxStale: 5 * time.Minute, Store: "memory"},
+		},
+		"flags override env": {
+			env:   map[string]string{"RETYC_CACHE_TTL": "90s", "RETYC_CACHE_MAX_STALE": "1m"},
+			flags: map[string]string{"cache-ttl": "10s", "cache-max-stale": "0s", "cache-negative-ttl": "250ms"},
+			want:  config.CacheConfig{TTL: 10 * time.Second, NegativeTTL: 250 * time.Millisecond, Store: "memory"},
+		},
+		"redis from the flags": {
+			env: map[string]string{"RETYC_CACHE_REDIS_URL": "redis://env.example:6379"},
+			flags: map[string]string{
+				"cache-store": "redis", "cache-redis-url": "rediss://:pw@flag.example:6380/2",
+				"cache-redis-high-confidentiality": "true",
+			},
+			want: config.CacheConfig{
+				TTL: time.Minute, MaxStale: 5 * time.Minute, NegativeTTL: time.Second, Store: "redis",
+				Redis: config.CacheRedisConfig{URL: "rediss://:pw@flag.example:6380/2", HighConfidentiality: true},
+			},
+		},
+		"redis from the environment": {
+			env: map[string]string{
+				"RETYC_CACHE_STORE": "redis", "RETYC_CACHE_REDIS_URL": "redis://env.example:6379",
+				"RETYC_CACHE_REDIS_HIGH_CONFIDENTIALITY": "true",
+			},
+			want: config.CacheConfig{
+				TTL: time.Minute, MaxStale: 5 * time.Minute, NegativeTTL: time.Second, Store: "redis",
+				Redis: config.CacheRedisConfig{URL: "redis://env.example:6379", HighConfidentiality: true},
+			},
+		},
+		"redis without a URL": {
+			flags:   map[string]string{"cache-store": "redis"},
+			wantErr: true,
+		},
+		"flag value is validated": {
+			flags:   map[string]string{"cache-ttl": "10ms"},
+			wantErr: true,
+		},
+	}
+	for label, tc := range cases {
+		t.Run(label, func(t *testing.T) {
+			isolateConfig(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			config.SetDefaults()
+			cmd := &cobra.Command{Use: "serve"}
+			addCacheFlags(cmd, true)
+			for k, v := range tc.flags {
+				if err := cmd.Flags().Set(k, v); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resolveCacheFlags(cmd.Flags())
+			cfg, err := config.Load()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("Load() accepted %v", tc.flags)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Cache != tc.want {
+				t.Errorf("Cache = %+v, want %+v", cfg.Cache, tc.want)
+			}
+		})
+	}
+}
+
+// A front end that declares no --cache-max-stale still binds the others.
+func TestResolveCacheFlags_WithoutMaxStale(t *testing.T) {
+	isolateConfig(t)
+	config.SetDefaults()
+	cmd := &cobra.Command{Use: "mount"}
+	addCacheFlags(cmd, false)
+	if err := cmd.Flags().Set("cache-ttl", "30s"); err != nil {
+		t.Fatal(err)
+	}
+	resolveCacheFlags(cmd.Flags())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Cache.TTL != 30*time.Second || cfg.Cache.MaxStale != config.DefaultCacheMaxStale {
+		t.Errorf("Cache = %+v, want ttl 30s and the default max_stale", cfg.Cache)
+	}
+}
+
+// The serve command offers the three cache flags and none of the old names.
+func TestWebdavServeCacheFlags(t *testing.T) {
+	for _, name := range []string{"cache-ttl", "cache-max-stale", "cache-negative-ttl"} {
+		if webdavServeCmd.Flags().Lookup(name) == nil {
+			t.Errorf("fs webdav serve has no --%s", name)
+		}
+	}
+}
+
+// The metrics of the FUSE driver and those internal/vfs observes for both
+// front ends are on /metrics of either command: they are registered with the
+// rest of internal/metrics.
+func TestObservability_ExposesFuseAndVFSMetrics(t *testing.T) {
+	metrics.FuseOps.WithLabelValues("lookup", "ok").Inc()
+	metrics.FuseOpDuration.WithLabelValues("lookup").Observe(0.001)
+	metrics.FuseBytes.WithLabelValues("read").Add(1)
+	metrics.FuseOpenHandles.WithLabelValues("read").Add(0)
+	metrics.VFSUploads.WithLabelValues("ok").Add(0)
+
+	h := mustObservability(t, newServeHealth(), observabilityOptions{})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, name := range []string{
+		`retyc_cli_fuse_ops_total{op="lookup",result="ok"}`,
+		`retyc_cli_fuse_op_duration_seconds_bucket{op="lookup",`,
+		`retyc_cli_fuse_bytes_total{direction="read"}`,
+		`retyc_cli_fuse_open_handles{kind="read"}`,
+		`retyc_cli_vfs_uploads_total{result="ok"}`,
+		"retyc_cli_vfs_spool_bytes ",
+		"retyc_cli_vfs_locks_held ",
+	} {
+		if !strings.Contains(body, name) {
+			t.Errorf("/metrics lacks %s", name)
+		}
 	}
 }

@@ -1,9 +1,11 @@
 package telemetry
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -39,14 +41,42 @@ const (
 	// AttrCacheStale marks a hit on an expired entry, served while a
 	// background refresh replaces it.
 	AttrCacheStale = attribute.Key("retyc.cache.stale")
-	AttrNodeCount            = attribute.Key("retyc.node.count")
-	AttrPathDepth            = attribute.Key("retyc.path.depth")
-	AttrMCPTool              = attribute.Key("retyc.mcp.tool")
+	AttrNodeCount  = attribute.Key("retyc.node.count")
+	AttrPathDepth  = attribute.Key("retyc.path.depth")
+	AttrMCPTool    = attribute.Key("retyc.mcp.tool")
+	// AttrFuseOp is the FUSE operation of a "FUSE <op>" span (lookup, readdir,
+	// open, read, statfs): a fixed vocabulary, never a name or a path.
+	AttrFuseOp = attribute.Key("retyc.fuse.op")
 	// AttrUnsafeWrite is the unsafe_write parameter of an upload: true when the
 	// API answers before storing the chunk (see unsafeWriteAttribute).
 	AttrUnsafeWrite = attribute.Key("retyc.upload.unsafe_write")
 	AttrErrorType   = attribute.Key("error.type")
+	// AttrDBSystem and AttrDBOperation describe a "redis <op>" span of the
+	// shared metadata store: the system ("redis") and the store's own name for
+	// the operation (get_node, put_listing, ...), never a command, a key, a
+	// field or a value.
+	AttrDBSystem    = attribute.Key("db.system.name")
+	AttrDBOperation = attribute.Key("db.operation.name")
+	// AttrRetryAttempt and AttrRetryWaitMS describe the wait of a request held
+	// back by the API rate limit (see ThrottleEvent).
+	AttrRetryAttempt = attribute.Key("retyc.retry.attempt")
+	AttrRetryWaitMS  = attribute.Key("retyc.retry.wait_ms")
 )
+
+// EventThrottle is the event of a request waiting for the API rate limit.
+const EventThrottle = "api.throttle"
+
+// ThrottleEvent records, on the span of ctx, that an API request is held back
+// by the rate limit: attempt is the number of times it was already sent (0
+// for a request waiting behind the refusal of another one), wait the pause
+// ahead. Each attempt is a CLIENT span of its own; the wait between them
+// belongs to the span that made the call.
+func ThrottleEvent(ctx context.Context, attempt int, wait time.Duration) {
+	trace.SpanFromContext(ctx).AddEvent(EventThrottle, trace.WithAttributes(
+		AttrRetryAttempt.Int(attempt),
+		AttrRetryWaitMS.Int64(wait.Milliseconds()),
+	))
+}
 
 // ErrorType returns the Go type of the innermost error under the fmt.Errorf
 // wrappers, without the pointer marker, e.g. "fs.PathError" or "net.OpError".

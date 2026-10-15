@@ -143,9 +143,9 @@ func TestSessionCache_WaiterHonoursContext(t *testing.T) {
 }
 
 // Once the process-wide cache is enabled (mcp serve), every service function that
-// resolves a dataroom session goes through it: the second GetDataroomSession for
+// resolves a dataroom session goes through it: the second resolution for
 // the same dataroom must hit neither the API nor the passphrase reader.
-func TestGetDataroomSession_UsesProcessCacheWhenEnabled(t *testing.T) {
+func TestResolveDataroomSession_UsesProcessCacheWhenEnabled(t *testing.T) {
 	t.Cleanup(disableSessionCacheForTest)
 
 	userKey, err := crypto.GenerateKeyPair()
@@ -197,21 +197,21 @@ func TestGetDataroomSession_UsesProcessCacheWhenEnabled(t *testing.T) {
 
 	EnableSessionCache()
 
-	first, err := GetDataroomSession(ctx, cfg, client, "dr1", reader)
+	first, err := resolveDataroomSession(ctx, cfg, client, "dr1", reader)
 	if err != nil {
-		t.Fatalf("GetDataroomSession: %v", err)
+		t.Fatalf("resolveDataroomSession: %v", err)
 	}
 	if first.PublicKey != sessKey.Recipient().String() {
 		t.Errorf("PublicKey = %q, want the session public key", first.PublicKey)
 	}
 	callsAfterFirst := apiCalls.Load()
 
-	second, err := GetDataroomSession(ctx, cfg, client, "dr1", reader)
+	second, err := resolveDataroomSession(ctx, cfg, client, "dr1", reader)
 	if err != nil {
-		t.Fatalf("GetDataroomSession (cached): %v", err)
+		t.Fatalf("resolveDataroomSession (cached): %v", err)
 	}
 	if second != first {
-		t.Error("second GetDataroomSession did not return the cached session")
+		t.Error("second resolution did not return the cached session")
 	}
 	if got := apiCalls.Load(); got != callsAfterFirst {
 		t.Errorf("API calls after second resolution = %d, want %d (no new call)", got, callsAfterFirst)
