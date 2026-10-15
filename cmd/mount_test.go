@@ -151,10 +151,10 @@ func TestResolveMountFlags(t *testing.T) {
 				"RETYC_MOUNT_ENTRY_TTL": "5s", "RETYC_MOUNT_KERNEL_CACHE": "false", "RETYC_MOUNT_SPOOL_DIR": spool,
 				"RETYC_MOUNT_ALLOW_OTHER": "true", "RETYC_MOUNT_UID": "0", "RETYC_MOUNT_GID": "100",
 				"RETYC_MOUNT_FILE_MODE": "0600", "RETYC_MOUNT_DIR_MODE": "700", "RETYC_MOUNT_READ_ONLY": "true",
-				"RETYC_MOUNT_DRAIN_TIMEOUT": "0",
+				"RETYC_MOUNT_DRAIN_TIMEOUT": "0", "RETYC_MOUNT_READDIR_PLUS": "true",
 			},
 			want: mountSettings{
-				entryTTL: 5 * time.Second, attrTTL: time.Minute, spoolDir: spool, allowOther: true,
+				entryTTL: 5 * time.Second, attrTTL: time.Minute, readDirPlus: true, spoolDir: spool, allowOther: true,
 				uid: uid(0), gid: uid(100), fileMode: 0o600, dirMode: 0o700, readOnly: true,
 			},
 		},

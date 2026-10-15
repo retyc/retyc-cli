@@ -87,9 +87,22 @@ func stat(t *testing.T, path string) (os.FileInfo, *syscall.Stat_t) {
 }
 
 func TestMount_TreeAttributesAndContent(t *testing.T) {
+	testTreeAttributesAndContent(t, single("dr1"))
+}
+
+// With READDIRPLUS the attributes come with the listing, not from a lookup
+// per entry: they are the same.
+func TestMount_TreeAttributesAndContentReadDirPlus(t *testing.T) {
+	opts := single("dr1")
+	opts.driver.ReadDirPlus = true
+	testTreeAttributesAndContent(t, opts)
+}
+
+func testTreeAttributesAndContent(t *testing.T, opts mountOptions) {
+	t.Helper()
 	a := newFakeAPI(t)
 	_, big := sampleTree(a)
-	m := mountFS(t, a, single("dr1"))
+	m := mountFS(t, a, opts)
 
 	want := []string{"big.bin", "docs", "docs/a.txt", "docs/deep", "docs/deep/b.txt", "empty.txt", "hello.txt", "link"}
 	if got := walk(t, m.dir); !slices.Equal(got, want) {
@@ -556,6 +569,45 @@ func TestMount_WalkCost(t *testing.T) {
 	}
 	if a.count("listing") != folders || a.count("lookup") != 0 {
 		t.Errorf("requests: %s; want %d listings and no lookup", a.summary(), folders)
+	}
+}
+
+// A walk that reads no attribute gives an object to the folders it walks
+// into, not to the files it lists, unless READDIRPLUS is on: then every entry
+// listed has one, as long as the kernel keeps it.
+func TestMount_ReadDirPlusMakesAnObjectPerEntry(t *testing.T) {
+	const folders, files = 9, 18
+	for _, plus := range []bool{false, true} {
+		t.Run(map[bool]string{false: "readdir", true: "readdirplus"}[plus], func(t *testing.T) {
+			a := newFakeAPI(t)
+			dr := a.dataroom("dr1", "Projects")
+			for _, top := range []string{"a", "b", "c"} {
+				topID := a.dir(dr, "", top)
+				for _, mid := range []string{"x", "y"} {
+					midID := a.dir(dr, topID, mid)
+					for _, leaf := range []string{"1.txt", "2.txt", "3.txt"} {
+						a.file(dr, midID, leaf, []byte(leaf))
+					}
+				}
+			}
+			opts := single("dr1")
+			opts.driver.ReadDirPlus = plus
+			m := mountFS(t, a, opts)
+			table := m.srv.drv.inodes
+			_, before := table.records()
+
+			if got := len(walk(t, m.dir)); got != folders+files {
+				t.Fatalf("%d paths walked, want %d", got, folders+files)
+			}
+			_, after := table.records()
+			made := after - before
+			switch {
+			case plus && made < folders+files:
+				t.Errorf("%d objects made by the walk, want one per entry (%d)", made, folders+files)
+			case !plus && (made < folders || made >= folders+files):
+				t.Errorf("%d objects made by the walk, want the %d folders only", made, folders)
+			}
+		})
 	}
 }
 

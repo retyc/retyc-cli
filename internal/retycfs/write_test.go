@@ -789,7 +789,9 @@ func TestWrite_ForgetsReleaseTheInodeTable(t *testing.T) {
 
 		return scheduled()
 	}
-	before, _ := table.records()
+	// A listing numbers its entries; only a lookup, or a listing with
+	// READDIRPLUS, makes objects of them.
+	beforeRecs, beforeObjects := table.records()
 
 	const files = 200
 	for i := range files {
@@ -798,8 +800,9 @@ func TestWrite_ForgetsReleaseTheInodeTable(t *testing.T) {
 		stat(t, path)
 	}
 	m.settle(t)
-	if recs, objects := table.records(); recs < before+files || objects < before+files {
-		t.Fatalf("%d records holding %d objects after %d files, want at least %d", recs, objects, files, before+files)
+	if recs, objects := table.records(); recs < beforeRecs+files || objects < beforeObjects+files {
+		t.Fatalf("%d records holding %d objects after %d files, want at least %d and %d",
+			recs, objects, files, beforeRecs+files, beforeObjects+files)
 	}
 	for i := range files {
 		if err := os.Remove(filepath.Join(m.dir, fmt.Sprintf("forgotten-%d.txt", i))); err != nil {
@@ -818,7 +821,7 @@ func TestWrite_ForgetsReleaseTheInodeTable(t *testing.T) {
 		}
 		recs, objects := table.records()
 
-		return recs <= before && objects <= before
+		return recs <= beforeRecs && objects <= beforeObjects
 	})
 }
 

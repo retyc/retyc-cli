@@ -1,6 +1,7 @@
 package redisstore
 
 import (
+	"reflect"
 	"context"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func TestGetNamed_Conformance(t *testing.T) {
 							t.Errorf("meta = %+v, GetNode says %+v", meta, wantMeta)
 						}
 					}
-					if n != nil && (*n != *wantN || n.ID != "id-a" || n.Name != "a" || n.Size != 1234) {
+					if n != nil && (!reflect.DeepEqual(*n, *wantN) || n.ID != "id-a" || n.Name != "a" || n.Size != 1234) {
 						t.Errorf("node = %+v, GetNode says %+v", n, wantN)
 					}
 					if hasEntry != (entry != "none") || hasEntry != wantHas {
@@ -74,7 +75,7 @@ func TestGetNamed_Conformance(t *testing.T) {
 						if (en.Node != nil) != (entry == "positive") || (en.Node == nil) != (wantE.Node == nil) {
 							t.Fatalf("entry node = %+v for an entry %s", en.Node, entry)
 						}
-						if en.Node != nil && (*en.Node != *wantE.Node || en.Node.ID != "id-a" || en.Node.Name != "a") {
+						if en.Node != nil && (!reflect.DeepEqual(*en.Node, *wantE.Node) || en.Node.ID != "id-a" || en.Node.Name != "a") {
 							t.Errorf("entry node = %+v, GetEntry says %+v", en.Node, wantE.Node)
 						}
 						if time.Since(en.FetchedAt) > 5*time.Second {

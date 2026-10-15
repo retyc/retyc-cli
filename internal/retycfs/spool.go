@@ -538,7 +538,7 @@ func (sp *openSpool) copied(node vfs.Node) {
 	}
 	sp.modeOwed = wantSet && want != sp.drv.attrs.filePerm(node)
 	node.Mode, node.ModeSet = want, wantSet
-	st.node = node
+	st.node = bare(node)
 	st.seen = max(st.seen, seen)
 	st.pagesOf = ""
 }

@@ -283,6 +283,7 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 		AttrTimeout:     settings.attrTTL,
 		NegativeTimeout: kernelNegativeTimeout(cfg.Cache.NegativeTTL),
 		NoKernelCache:   !settings.kernelCache,
+		ReadDirPlus:     settings.readDirPlus,
 		AllowOther:      settings.allowOther,
 		UID:             settings.uid,
 		GID:             settings.gid,

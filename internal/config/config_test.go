@@ -820,7 +820,7 @@ func TestMount_FromEnv(t *testing.T) {
 	resetViper(t)
 	for name, value := range map[string]string{
 		"RETYC_CACHE_TTL": "20s", "RETYC_MOUNT_ENTRY_TTL": "5s", "RETYC_MOUNT_KERNEL_CACHE": "false",
-		"RETYC_MOUNT_SPOOL_DIR": "/var/spool/retyc", "RETYC_MOUNT_ALLOW_OTHER": "true",
+		"RETYC_MOUNT_READDIR_PLUS": "true", "RETYC_MOUNT_SPOOL_DIR": "/var/spool/retyc", "RETYC_MOUNT_ALLOW_OTHER": "true",
 		"RETYC_MOUNT_UID": "0", "RETYC_MOUNT_GID": "1000", "RETYC_MOUNT_FILE_MODE": "0600",
 		"RETYC_MOUNT_DIR_MODE": "700", "RETYC_MOUNT_READ_ONLY": "true", "RETYC_MOUNT_DRAIN_TIMEOUT": "2m",
 		"RETYC_MOUNT_MIRROR_LOCKS": "true", "RETYC_MOUNT_METRICS_ADDR": "127.0.0.1:9091",
@@ -836,7 +836,8 @@ func TestMount_FromEnv(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	want := MountConfig{
-		EntryTTL: 5 * time.Second, SpoolDir: "/var/spool/retyc", AllowOther: true, UID: 0, GID: 1000,
+		EntryTTL: 5 * time.Second, ReadDirPlus: true, SpoolDir: "/var/spool/retyc", AllowOther: true,
+		UID: 0, GID: 1000,
 		FileMode: "0600", DirMode: "700", ReadOnly: true, DrainTimeout: 2 * time.Minute,
 		MirrorLocks: true,
 		LocalFiles:  []string{".*.swp", "*.tmp"},

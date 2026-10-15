@@ -167,6 +167,17 @@ type Options struct {
 	// file (no FOPEN_KEEP_CACHE): a file read twice is downloaded twice.
 	NoKernelCache bool
 
+	// ReadDirPlus lets a listing carry the attributes of its entries (FUSE
+	// READDIRPLUS). The kernel then makes an inode of every entry listed, and
+	// the mount holds its state (inodeTable, the object of go-fuse) for as
+	// long as the kernel keeps it: most of the memory of a mount after a walk.
+	// Without it a listing gives names and types only, and an entry gets an
+	// inode when it is looked up (stat, open, a folder walked into): a walk
+	// that reads no attribute holds the folders alone, one that reads them
+	// (ls -l) costs one LOOKUP per entry, answered by the cache of vfs: a
+	// memory read with the memstore, a round trip to Redis with redisstore.
+	ReadDirPlus bool
+
 	// MirrorLocks makes the open for writing of a file that exists at the API
 	// take an exclusive API lock on it (vfs.LockManager), one per inode, kept
 	// until the last handle opened for writing on it is released: another
@@ -318,7 +329,7 @@ func Mount(ctx context.Context, tree *vfs.FS, mountpoint string, opts Options) (
 		mountOpts = append(mountOpts, "ro")
 	}
 
-	id := ident{drv: d, ino: rootIno, seed: vfs.Node{Type: vfs.TypeDir}}
+	id := ident{drv: d, ino: rootIno, typ: vfs.TypeDir}
 	var root fs.InodeEmbedder
 	source := "retyc://"
 	if opts.All {
@@ -344,9 +355,10 @@ func Mount(ctx context.Context, tree *vfs.FS, mountpoint string, opts Options) (
 			// mount(2) needs CAP_SYS_ADMIN and works without the fusermount3
 			// helper, which a scratch image does not have. go-fuse falls back
 			// on the helper when it fails.
-			DirectMount: os.Geteuid() == 0,
-			AllowOther:  opts.AllowOther,
-			MaxWrite:    maxWrite,
+			DirectMount:        os.Geteuid() == 0,
+			DisableReadDirPlus: !opts.ReadDirPlus,
+			AllowOther:         opts.AllowOther,
+			MaxWrite:           maxWrite,
 			// Without it, serving extended attributes costs one
 			// GETXATTR security.capability per write(2).
 			//

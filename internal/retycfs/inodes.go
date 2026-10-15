@@ -350,7 +350,7 @@ func (t *inodeTable) state(ino uint64, seed vfs.Node) *inodeState {
 	defer t.mu.Unlock()
 	st, ok := t.states[ino]
 	if !ok {
-		st = &inodeState{node: seed}
+		st = &inodeState{node: bare(seed)}
 		t.states[ino] = st
 	}
 
@@ -535,6 +535,16 @@ type mirrorLock struct {
 	key string
 }
 
+// bare returns node without its sealed form, which the driver never reads:
+// with a store that keeps sealed nodes (high confidentiality) it is the name
+// and the type as the API encrypted them, a few kB, and a state keeps its node
+// for as long as the kernel holds the inode.
+func bare(node vfs.Node) vfs.Node {
+	node.Sealed = nil
+
+	return node
+}
+
 // view returns the node as the driver presents it: the one last seen, with
 // the size and the modification time of its spool while it has one. It never
 // waits for more than a short mutex: Getattr answers from it. unlinked tells
@@ -617,7 +627,7 @@ func (st *inodeState) adopt(node vfs.Node, seen uint64) {
 	if !node.HasMode() || (st.spool != nil && st.spool.modeOwed) {
 		node.Mode, node.ModeSet = st.node.Mode, st.node.ModeSet
 	}
-	st.node = node
+	st.node = bare(node)
 	st.seen = max(st.seen, seen)
 	st.pagesOf = ""
 }
@@ -707,7 +717,7 @@ func (st *inodeState) observe(node vfs.Node, at location, seen uint64) (purge *f
 		st.at = at
 	}
 	changed := node.Type == vfs.TypeFile && node.VersionID != st.node.VersionID
-	st.node = node
+	st.node = bare(node)
 	if !changed {
 		return nil
 	}

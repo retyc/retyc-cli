@@ -4,8 +4,6 @@ import (
 	"context"
 	"slices"
 	"time"
-
-	"github.com/retyc/retyc-cli/internal/vfs/metastore"
 )
 
 // The methods of this file record in the cache a mutation just made through
@@ -76,7 +74,7 @@ func (fs *FS) move(dataroomID, srcParent, srcName, dstParent, dstName, dstParent
 		return
 	}
 	// The name it was sealed under is not the one it now has.
-	moved.Name, moved.ParentID, moved.Sealed = dstName, dstParentID, metastore.Sealed{}
+	moved.Name, moved.ParentID, moved.Sealed = dstName, dstParentID, nil
 	fs.upsertLocked(dst, *moved)
 }
 

@@ -127,6 +127,7 @@ var mountFlags = [][2]string{
 	{"entry-ttl", "mount.entry_ttl"},
 	{"attr-ttl", "mount.attr_ttl"},
 	{"kernel-cache", "mount.kernel_cache"},
+	{"readdir-plus", "mount.readdir_plus"},
 	{"spool-dir", "mount.spool_dir"},
 	{"allow-other", "mount.allow_other"},
 	{"uid", "mount.uid"},
@@ -161,6 +162,7 @@ func resolveMountFlags(flags *pflag.FlagSet) {
 type mountSettings struct {
 	entryTTL, attrTTL time.Duration
 	kernelCache       bool
+	readDirPlus       bool
 	spoolDir          string
 	allowOther        bool
 	// uid and gid are nil for the user and the group of the process.
@@ -186,6 +188,7 @@ func newMountSettings(cfg *config.Config) (mountSettings, error) {
 	m := cfg.Mount
 	s := mountSettings{
 		kernelCache:      m.KernelCache,
+		readDirPlus:      m.ReadDirPlus,
 		allowOther:       m.AllowOther,
 		readOnly:         m.ReadOnly,
 		drainTimeout:     m.DrainTimeout,
@@ -263,6 +266,8 @@ func addMountFlags(cmd *cobra.Command) {
 	flags.Duration("attr-ttl", 0,
 		"how long the kernel keeps the attributes of a file without asking again (0: --cache-ttl)")
 	flags.Bool("kernel-cache", true, "let the kernel keep what it read of a file between two opens")
+	flags.Bool("readdir-plus", false,
+		"send the attributes of the entries with a listing: fewer requests to the mount, an inode per entry listed")
 	flags.String("spool-dir", "",
 		"directory holding the files being written until they are sent (default: the system's temporary directory)")
 	flags.Bool("allow-other", false, "let the other users of the machine into the mount (-o allow_other)")

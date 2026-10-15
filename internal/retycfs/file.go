@@ -119,7 +119,7 @@ func (n *fileNode) Open(
 		return &spoolHandle{sp: sp}, fuse.FOPEN_DIRECT_IO, 0
 	}
 
-	ctx, span := startSpan(ctx, "open", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "open", n.dataroomID, n.nodeID)
 	node, file, err := n.open(ctx, st)
 	if err == nil {
 		span.Span().SetAttributes(telemetry.AttrVersionID.String(node.VersionID))
@@ -168,7 +168,7 @@ func (n *fileNode) openForWrite(
 	h.locked = locked
 	sp := st.join()
 	if sp == nil {
-		ctx, span := startSpan(ctx, "open", n.dataroomID, n.seed.ID)
+		ctx, span := startSpan(ctx, "open", n.dataroomID, n.nodeID)
 		var err error
 		sp, err = n.openSpool(ctx, st, truncate)
 		span.End(err)
@@ -422,7 +422,7 @@ func (n *fileNode) Read(
 	if !ok {
 		return nil, syscall.EBADF
 	}
-	ctx, span := startSpan(ctx, "read", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "read", n.dataroomID, n.nodeID)
 	span.Span().SetAttributes(telemetry.AttrVersionID.String(h.version))
 	read, err := h.file.ReadAtContext(ctx, dest, off)
 	if errors.Is(err, io.EOF) {
@@ -517,7 +517,7 @@ func (n *fileNode) sync(ctx context.Context, op string, fh fs.FileHandle) syscal
 	if op == "flush" && sp.unwritten() {
 		return 0
 	}
-	ctx, span := startSpan(ctx, op, n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, op, n.dataroomID, n.nodeID)
 	err := sp.flush(ctx)
 	span.End(err)
 
@@ -566,7 +566,7 @@ func (n *fileNode) CopyFileRange(
 		return 0, syscall.EXDEV
 	}
 
-	ctx, span := startSpan(ctx, "copy_file_range", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "copy_file_range", n.dataroomID, n.nodeID)
 	node, err := n.copyInto(ctx, fhIn, length, sp)
 	span.End(err)
 	switch {
@@ -657,7 +657,7 @@ func (n *fileNode) Release(ctx context.Context, fh fs.FileHandle) (errno syscall
 	}
 
 	if h, ok := fh.(*spoolHandle); ok {
-		ctx, span := startSpan(ctx, "release", n.dataroomID, n.seed.ID)
+		ctx, span := startSpan(ctx, "release", n.dataroomID, n.nodeID)
 		h.sp.release(ctx, h.sends)
 		n.unlockWrite(ctx, h.sp.st, h.locked)
 		span.End(nil)
