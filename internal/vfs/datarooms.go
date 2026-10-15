@@ -288,7 +288,7 @@ func (c *DataroomCache) fetchLocked(ctx context.Context, background bool) *datar
 		if err != nil {
 			result = "error"
 		}
-		metrics.VFSDataroomCacheRefreshes.WithLabelValues(result).Inc()
+		metrics.DataroomListRefreshes.WithLabelValues(result).Inc()
 		if span != nil {
 			telemetry.RecordError(span, err)
 			span.End()

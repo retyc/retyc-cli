@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,7 +11,6 @@ import (
 	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 	"github.com/retyc/retyc-cli/internal/vfs"
-	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
@@ -28,18 +26,16 @@ func TestTracing_NeverExportsNames(t *testing.T) {
 	isolateConfig(t)
 	exp := telemetrytest.Install(t)
 
-	// 1. A WebDAV request whose path, body and listing all carry the sentinel.
+	// 1. A tree listing whose path and names carry the sentinel, under the
+	// root span a FUSE operation would open.
 	fs := newTestFS(nil, vfs.Options{List: func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
 		return []service.DataroomNodeInfo{{ID: "n1", Name: sentinel + ".pdf", Type: "file"}}, nil
 	}})
-	h := instrumentWebdav(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, err := fs.tree.ReadDir(r.Context(), "dr1", "/"+sentinel); err != nil {
-			t.Error(err)
-		}
-		w.WriteHeader(http.StatusMultiStatus)
-	}))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("PROPFIND", "/dataroom/"+sentinel+"/"+sentinel+".pdf",
-		strings.NewReader("<propfind>"+sentinel+"</propfind>")))
+	ctx, root := telemetry.Tracer().Start(context.Background(), "FUSE lookup")
+	if _, err := fs.tree.ReadDir(ctx, "dr1", "/"+sentinel); err != nil {
+		t.Error(err)
+	}
+	root.End()
 
 	// 2. An API call whose query, header and body carry the sentinel.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -56,24 +52,15 @@ func TestTracing_NeverExportsNames(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	// 3. A command whose argument and error message carry the sentinel.
-	probe := &cobra.Command{
-		Use:  "privacy-probe",
-		Args: cobra.ArbitraryArgs,
-		RunE: func(*cobra.Command, []string) error { return errors.New("stat " + sentinel + ": no such file") },
-	}
-	withTestCommand(t, probe)
-	_ = run(context.Background(), []string{"privacy-probe", "/tmp/" + sentinel + ".pdf"})
-
 	spans := exp.GetSpans()
-	if len(spans) < 3 {
-		t.Fatalf("expected at least 3 spans (webdav, api, command), got %d", len(spans))
+	if len(spans) < 2 {
+		t.Fatalf("expected at least 2 spans (fuse, api), got %d", len(spans))
 	}
 	assertNoSentinel(t, spans)
 }
 
 // The OIDC client (discovery, token refresh, device flow) runs before the API
-// client exists: webdav serve init spent seconds there with no span at all.
+// client exists: fs mount init spent seconds there with no span at all.
 func TestNewHTTPClient_TracesRoundTrips(t *testing.T) {
 	isolateConfig(t)
 	exp := telemetrytest.Install(t)

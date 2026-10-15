@@ -186,8 +186,10 @@ func (t authWatchTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	return resp, err
 }
 
-// apiTransportWatching is apiTransport for a command that watches its login:
-// the same wrappers, around the one that reports a 401 to watch.
+// apiTransportWatching is the transport of `fs mount`: tracing outermost
+// (one CLIENT span per round trip, traceparent injected), Prometheus metrics
+// inside it, around the wrapper that reports a 401 to watch. The other
+// commands use the bare transport.
 func apiTransportWatching(watch *authWatch) api.Option {
 	return api.WrapTransport(func(base http.RoundTripper) http.RoundTripper {
 		return telemetry.RoundTripper(metrics.RoundTripper(watch.roundTripper(base)))
@@ -195,7 +197,7 @@ func apiTransportWatching(watch *authWatch) api.Option {
 }
 
 // checkToken asks src for a valid token (refreshing it when needed) and feeds
-// the retyc_cli_token_* metrics: the result counter and the seconds left on
+// the retycfs_token_* metrics: the result counter and the seconds left on
 // the access token, 0 when unknown.
 func checkToken(src oauth2.TokenSource) error {
 	tok, err := src.Token()

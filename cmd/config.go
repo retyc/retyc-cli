@@ -165,7 +165,7 @@ func effectiveValue(key string) string {
 	if key == "insecure" {
 		return strconv.FormatBool(insecure)
 	}
-	// List keys (webdav.metrics.labels) would render as "" through GetString:
+	// List keys (mount.metrics.labels) would render as "" through GetString:
 	// []string from the environment, []any from a YAML list.
 	switch viper.Get(key).(type) {
 	case []string, []any:

@@ -1,20 +1,16 @@
-// Package metrics declares the Prometheus metrics of the CLI.
+// Package metrics declares the Prometheus metrics of `retyc fs mount`.
 //
 // Every metric is a package-level collector, observed where the event happens
-// (API client, session cache, WebDAV server, chunk crypto) and exposed only by
-// `webdav serve --metrics-addr` and `fs mount --metrics-addr`, which register
-// them. Unregistered collectors
-// still accept observations, so instrumentation costs nothing to callers that
-// never expose them (the MCP server, one-shot commands).
+// (FUSE driver, internal/vfs, API client, token keepalive) and exposed only by
+// `fs mount --metrics-addr`, which registers them. Unregistered collectors
+// still accept observations, so instrumentation costs nothing to the other
+// commands, which share the code that observes them.
 //
-// Four prefixes: retyc_cli_ for what is not specific to a front end (API
-// calls, token, crypto), retyc_cli_vfs_ for what internal/vfs does for every
-// filesystem front end (caches, spools, uploads, API locks),
-// retyc_cli_webdav_ for the WebDAV server itself and retyc_cli_fuse_ for the
-// FUSE driver.
+// One prefix, retycfs_: the mount is the only command that exposes metrics.
 //
-// Adding a metric: declare it here, add it to Register, observe it at the
-// event. Keep label cardinality bounded (no IDs, no raw paths).
+// Adding a metric: declare it here, add it to all, observe it at the event,
+// document it in doc/retycfs.md. Keep label cardinality bounded (no IDs, no
+// raw paths).
 package metrics
 
 import (
@@ -24,191 +20,131 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Buckets tuned for a CLI talking to a remote API: from a cache hit to a
+// Buckets tuned for a round trip to a remote API: from a small listing to a
 // multi-chunk upload.
 var latencyBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30}
 
-// A FUSE operation is most often answered from memory: the buckets start two
-// decades lower.
-var fuseBuckets = []float64{.00005, .0001, .00025, .0005, .001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30}
+// A filesystem operation is most often answered from memory: the buckets
+// start two decades lower.
+var opBuckets = []float64{.00005, .0001, .00025, .0005, .001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30}
 
 // A store operation is one round trip to a Redis that is usually close: from
 // 100 µs to its 2 s I/O timeout, and past it for a retried command.
 var storeBuckets = []float64{.0001, .00025, .0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5}
 
 var (
-	// WebdavRequests counts WebDAV requests by method and HTTP status.
-	WebdavRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_webdav_requests_total",
-		Help: "WebDAV requests served, by method and HTTP status.",
-	}, []string{"method", "status"})
+	// Ops counts filesystem operations by operation and result.
+	Ops = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "retycfs_ops_total",
+		Help: "Filesystem operations served, by operation and result (ok, or the errno name).",
+	}, []string{"op", "result"})
 
-	// WebdavRequestDuration is the WebDAV request latency by method.
-	WebdavRequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "retyc_cli_webdav_request_duration_seconds",
-		Help:    "WebDAV request duration in seconds, by method.",
-		Buckets: latencyBuckets,
-	}, []string{"method"})
+	// OpDuration times filesystem operations.
+	OpDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "retycfs_op_duration_seconds",
+		Help:    "Filesystem operation duration in seconds, by operation.",
+		Buckets: opBuckets,
+	}, []string{"op"})
 
-	// WebdavInflight is the number of WebDAV requests being served.
-	WebdavInflight = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "retyc_cli_webdav_inflight_requests",
-		Help: "WebDAV requests currently being served.",
-	})
-
-	// WebdavBytes counts plaintext bytes moved through the WebDAV server.
-	WebdavBytes = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_webdav_bytes_total",
-		Help: "Plaintext bytes served (download) or received (upload) by the WebDAV server.",
+	// Bytes counts the plaintext bytes read from and written to the mount.
+	Bytes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "retycfs_bytes_total",
+		Help: "Plaintext bytes read from (read) or written to (write) the mount.",
 	}, []string{"direction"})
 
-	// VFSNodeCacheLookups counts node listing cache lookups: hit, stale
-	// (expired listing served while a background refresh replaces it) or miss.
-	// Observed in internal/vfs, so by every front end built on it.
-	VFSNodeCacheLookups = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_vfs_node_cache_lookups_total",
+	// OpenHandles counts the file handles open on the mount.
+	OpenHandles = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "retycfs_open_handles",
+		Help: "File handles open on the mount, by kind (read, write).",
+	}, []string{"kind"})
+
+	// BackgroundDeletes counts the deletes sent after unlink answered.
+	BackgroundDeletes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "retycfs_background_deletes_total",
+		Help: "Deletes sent in the background after unlink answered (--background-delete), by result (ok, error).",
+	}, []string{"result"})
+
+	// CacheLookups counts the lookups of the node listing cache.
+	CacheLookups = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "retycfs_cache_lookups_total",
 		Help: "Node listing cache lookups, by result (hit, stale, miss).",
 	}, []string{"result"})
 
-	// VFSDataroomCacheRefreshes counts refreshes of the dataroom list cache,
-	// by result: ok, or error when the listing failed and the list held, if
-	// any, stayed in place.
-	VFSDataroomCacheRefreshes = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_vfs_dataroom_cache_refreshes_total",
+	// DataroomListRefreshes counts the refreshes of the dataroom list.
+	DataroomListRefreshes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "retycfs_dataroom_list_refreshes_total",
 		Help: "Refreshes of the dataroom list cache (one API listing each), by result (ok, error).",
 	}, []string{"result"})
 
-	// VFSSpoolBytes is what the spool files of the files being written hold
-	// on disk (a WebDAV upload of unknown length, a file open for writing
-	// through the mount).
-	VFSSpoolBytes = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "retyc_cli_vfs_spool_bytes",
+	// SpoolBytes is the size of the spool files of the files being written.
+	SpoolBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "retycfs_spool_bytes",
 		Help: "Bytes held in the spool files of the files being written.",
 	})
 
-	// VFSUploads counts the uploads of a file content (a creation or a new
-	// version), by result.
-	VFSUploads = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_vfs_uploads_total",
+	// Uploads counts the uploads of a file content.
+	Uploads = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "retycfs_uploads_total",
 		Help: "Uploads of a file content (new file or new version), by result (ok, error).",
 	}, []string{"result"})
 
-	// VFSLocksHeld is the number of API locks held on files.
-	VFSLocksHeld = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "retyc_cli_vfs_locks_held",
-		Help: "API locks currently held on files (WebDAV LOCK, mount --mirror-locks).",
+	// LocksHeld is the number of API locks held on files.
+	LocksHeld = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "retycfs_locks_held",
+		Help: "API locks currently held on files (--mirror-locks).",
 	})
 
-	// VFSStoreOpDuration is the duration of one operation of a shared
-	// metadata store (Redis), by operation (a fixed name per method of the
-	// store: get_node, put_listing, ...) and result. The in-memory store
-	// observes nothing.
-	VFSStoreOpDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "retyc_cli_vfs_store_op_duration_seconds",
+	// StoreOpDuration times the operations of the shared metadata store.
+	StoreOpDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "retycfs_store_op_duration_seconds",
 		Help:    "Duration of the operations of the shared metadata store (Redis) in seconds, by operation and result.",
 		Buckets: storeBuckets,
 	}, []string{"op", "result"})
 
-	// FuseOps counts the FUSE operations served, by operation and result: ok
-	// or the name of the errno answered ("other" for one the driver has no
-	// name for).
-	FuseOps = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_fuse_ops_total",
-		Help: "FUSE operations served, by operation and result (ok, or the errno name).",
-	}, []string{"op", "result"})
-
-	// FuseBackgroundDeletes counts the deletes a mount sent after unlink had
-	// answered (mount --background-delete), by result: ok or error.
-	FuseBackgroundDeletes = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_fuse_background_deletes_total",
-		Help: "Deletes sent in the background after unlink answered (mount --background-delete), by result (ok, error).",
-	}, []string{"result"})
-
-	// FuseOpDuration is the time a FUSE operation took, by operation.
-	FuseOpDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "retyc_cli_fuse_op_duration_seconds",
-		Help:    "FUSE operation duration in seconds, by operation.",
-		Buckets: fuseBuckets,
-	}, []string{"op"})
-
-	// FuseBytes counts plaintext bytes moved through the mount.
-	FuseBytes = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_fuse_bytes_total",
-		Help: "Plaintext bytes read from (read) or written to (write) the mount.",
-	}, []string{"direction"})
-
-	// FuseOpenHandles is the number of file handles open on the mount, by
-	// kind: write for a handle that changes its file, read otherwise.
-	FuseOpenHandles = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "retyc_cli_fuse_open_handles",
-		Help: "File handles open on the mount, by kind (read, write).",
-	}, []string{"kind"})
-
-	// APIRequests counts calls to the RETYC API by method, normalized route
-	// and HTTP status ("error" when no response came back).
+	// APIRequests counts the RETYC API requests.
 	APIRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_api_requests_total",
+		Name: "retycfs_api_requests_total",
 		Help: "RETYC API requests, by method, normalized route and HTTP status (error = transport failure).",
 	}, []string{"method", "route", "status"})
 
-	// APIRequestDuration is the API round-trip latency by method and route.
+	// APIRequestDuration times the RETYC API requests.
 	APIRequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "retyc_cli_api_request_duration_seconds",
+		Name:    "retycfs_api_request_duration_seconds",
 		Help:    "RETYC API request duration in seconds, by method and normalized route.",
 		Buckets: latencyBuckets,
 	}, []string{"method", "route"})
 
-	// APIThrottleEpisodes counts the times the API rate limit (429) closed
-	// the gate of a client; every refusal is already a status="429" request.
+	// APIThrottleEpisodes counts the pauses the API rate limit imposed.
 	APIThrottleEpisodes = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "retyc_cli_api_throttle_episodes_total",
+		Name: "retycfs_api_throttle_episodes_total",
 		Help: "Episodes of API rate limiting (429): times the client paused all its requests.",
 	})
 
-	// APIThrottleWait is the time one request was held back by the rate
-	// limit, behind the gate or for its own Retry-After.
-	APIThrottleWait = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "retyc_cli_api_throttle_wait_seconds",
-		Help:    "Time an API request was held back by the rate limit, in seconds.",
-		Buckets: latencyBuckets,
-	})
-
-	// APIRateLimited counts the requests given up after api.retry.max_wait or
-	// api.retry.max_attempts, by method.
+	// APIRateLimited counts the requests given up on 429.
 	APIRateLimited = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_api_rate_limited_total",
+		Name: "retycfs_api_rate_limited_total",
 		Help: "API requests given up after retrying on 429, by method.",
 	}, []string{"method"})
 
-	// TokenRefreshes counts keepalive token checks by result (ok, error).
+	// TokenRefreshes counts the login checks of the keepalive.
 	TokenRefreshes = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "retyc_cli_token_refreshes_total",
+		Name: "retycfs_token_refreshes_total",
 		Help: "Login token checks by the keepalive, by result (ok, error).",
 	}, []string{"result"})
 
-	// TokenExpiry is the remaining lifetime of the access token.
+	// TokenExpiry is the time left on the access token.
 	TokenExpiry = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "retyc_cli_token_expiry_seconds",
+		Name: "retycfs_token_expiry_seconds",
 		Help: "Seconds until the current access token expires (0 when unknown).",
 	})
-
-	// CryptoDuration is the per-chunk encryption/decryption time.
-	CryptoDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "retyc_cli_crypto_duration_seconds",
-		Help:    "Per-chunk AGE operation duration in seconds, by op (encrypt, decrypt).",
-		Buckets: []float64{.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1},
-	}, []string{"op"})
 )
 
 // all lists every collector, in the order of the declarations above.
 var all = []prometheus.Collector{
-	WebdavRequests, WebdavRequestDuration, WebdavInflight, WebdavBytes,
-	VFSNodeCacheLookups, VFSDataroomCacheRefreshes,
-	VFSSpoolBytes, VFSUploads, VFSLocksHeld, VFSStoreOpDuration,
-	FuseOps, FuseOpDuration, FuseBytes, FuseOpenHandles, FuseBackgroundDeletes,
-	APIRequests, APIRequestDuration,
-	APIThrottleEpisodes, APIThrottleWait, APIRateLimited,
-	TokenRefreshes, TokenExpiry, CryptoDuration,
+	Ops, OpDuration, Bytes, OpenHandles, BackgroundDeletes,
+	CacheLookups, DataroomListRefreshes, SpoolBytes, Uploads, LocksHeld, StoreOpDuration,
+	APIRequests, APIRequestDuration, APIThrottleEpisodes, APIRateLimited,
+	TokenRefreshes, TokenExpiry,
 }
 
 // All returns every metric of the package, for callers that register them
@@ -216,12 +152,6 @@ var all = []prometheus.Collector{
 // instead of panicking).
 func All() []prometheus.Collector {
 	return append([]prometheus.Collector(nil), all...)
-}
-
-// Register adds every metric of the package to reg. A collector may belong to
-// several registries, so calling it for more than one registry is safe.
-func Register(reg prometheus.Registerer) {
-	reg.MustRegister(all...)
 }
 
 // routeTemplates lists every route the CLI calls, as the backend templates

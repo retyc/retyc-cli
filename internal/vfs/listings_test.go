@@ -1422,8 +1422,8 @@ func TestFindListedNode_JoinedRefreshIsLinked(t *testing.T) {
 }
 
 func TestListNodes_CountsCacheHitsAndMisses(t *testing.T) {
-	hits := metrics.VFSNodeCacheLookups.WithLabelValues("hit")
-	misses := metrics.VFSNodeCacheLookups.WithLabelValues("miss")
+	hits := metrics.CacheLookups.WithLabelValues("hit")
+	misses := metrics.CacheLookups.WithLabelValues("miss")
 	hitsBefore, missesBefore := testutil.ToFloat64(hits), testutil.ToFloat64(misses)
 	fs := New(nil, Options{List: func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
 		return nil, nil

@@ -105,7 +105,7 @@ func (fs *FS) upload(ctx context.Context, dataroomID, path string, c content) (n
 		if err != nil {
 			result = "error"
 		}
-		metrics.VFSUploads.WithLabelValues(result).Inc()
+		metrics.Uploads.WithLabelValues(result).Inc()
 	}()
 	parentPath, name := SplitPath(path)
 	if name == "" {
@@ -598,7 +598,7 @@ type spool struct {
 	srcSize int64
 	// cancelFlush stops the upload of the Flush in flight.
 	cancelFlush context.CancelFunc
-	// accounted is what the spool counts for in metrics.VFSSpoolBytes.
+	// accounted is what the spool counts for in metrics.SpoolBytes.
 	accounted int64
 }
 
@@ -615,7 +615,7 @@ func (s *spool) accountLocked() {
 	case s.src != nil:
 		held = min(s.srcFrom, s.size)
 	}
-	metrics.VFSSpoolBytes.Add(float64(held - s.accounted))
+	metrics.SpoolBytes.Add(float64(held - s.accounted))
 	s.accounted = held
 }
 

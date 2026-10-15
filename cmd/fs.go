@@ -55,7 +55,7 @@ func addCacheFlags(cmd *cobra.Command, maxStale bool) {
 // resolveCacheFlags binds the cache flags the command declares to their
 // viper keys, so that config.Load reads them with the usual precedence
 // (flag > env > config file > default) and validates them like any other
-// source. Same binding strategy as resolveMetricsAddr: from RunE, never from
+// source. Bound from RunE, never from
 // init(), to survive the viper.Reset() of the config tests.
 func resolveCacheFlags(flags *pflag.FlagSet) {
 	for _, f := range cacheFlags {

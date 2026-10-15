@@ -18,8 +18,8 @@ import (
 )
 
 // TestReadDataroomChunk reads one chunk by index: the route of that chunk
-// alone, one crypto.decrypt span under the caller's span and one sample of
-// the decrypt histogram, as the streamed download gives per chunk.
+// alone and one crypto.decrypt span under the caller's span, as the streamed
+// download gives per chunk.
 func TestReadDataroomChunk(t *testing.T) {
 	exp := telemetrytest.Install(t)
 	identity, err := crypto.GenerateKeyPair()
@@ -37,7 +37,6 @@ func TestReadDataroomChunk(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	before := cryptoSamples(t, "decrypt")
 	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
 	got, err := ReadDataroomChunk(ctx, newKeyTestClient(srv), "v1", 3, identity)
 	parent.End()
@@ -49,9 +48,6 @@ func TestReadDataroomChunk(t *testing.T) {
 	}
 	if len(paths) != 1 || paths[0] != "/dataroom/node/version/v1/chunk/3" {
 		t.Errorf("requests = %v, want the chunk route once", paths)
-	}
-	if n := cryptoSamples(t, "decrypt") - before; n != 1 {
-		t.Errorf("decrypt samples delta = %d, want 1", n)
 	}
 	spans := childSpans(exp, parent, "crypto.decrypt")
 	if len(spans) != 1 {

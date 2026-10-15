@@ -54,7 +54,7 @@ type spoolHandle struct {
 }
 
 // handleKind is the kind a file handle counts as in
-// retyc_cli_fuse_open_handles: write for one that changes its file.
+// retycfs_open_handles: write for one that changes its file.
 func handleKind(fh fs.FileHandle) string {
 	if h, ok := fh.(*spoolHandle); ok && h.sends {
 		return "write"
@@ -65,7 +65,7 @@ func handleKind(fh fs.FileHandle) string {
 
 // countHandle counts a handle the kernel was just given.
 func countHandle(fh fs.FileHandle) {
-	metrics.FuseOpenHandles.WithLabelValues(handleKind(fh)).Inc()
+	metrics.OpenHandles.WithLabelValues(handleKind(fh)).Inc()
 }
 
 // fileHandle is a file open for reading: the version it was opened on, which
@@ -414,7 +414,7 @@ func (n *fileNode) Read(
 			return nil, toErrno(err)
 		}
 
-		metrics.FuseBytes.WithLabelValues("read").Add(float64(read))
+		metrics.Bytes.WithLabelValues("read").Add(float64(read))
 
 		return fuse.ReadResultData(dest[:read]), 0
 	}
@@ -432,7 +432,7 @@ func (n *fileNode) Read(
 	if err != nil {
 		return nil, toErrno(err)
 	}
-	metrics.FuseBytes.WithLabelValues("read").Add(float64(read))
+	metrics.Bytes.WithLabelValues("read").Add(float64(read))
 
 	return fuse.ReadResultData(dest[:read]), 0
 }
@@ -465,7 +465,7 @@ func (n *fileNode) Write(
 		return 0, toErrno(err)
 	}
 
-	metrics.FuseBytes.WithLabelValues("write").Add(float64(count))
+	metrics.Bytes.WithLabelValues("write").Add(float64(count))
 
 	// A short write: the caller gets the error at its next one.
 	return uint32(count), 0 //nolint:gosec // G115: bounded by the size of a request
@@ -653,7 +653,7 @@ func (n *fileNode) Release(ctx context.Context, fh fs.FileHandle) (errno syscall
 	defer c.end(&errno)
 	ctx = c.guard(ctx)
 	if fh != nil {
-		metrics.FuseOpenHandles.WithLabelValues(handleKind(fh)).Dec()
+		metrics.OpenHandles.WithLabelValues(handleKind(fh)).Dec()
 	}
 
 	if h, ok := fh.(*spoolHandle); ok {

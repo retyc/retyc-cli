@@ -31,8 +31,8 @@ internal/
   vfs/                   # file-tree service shared by WebDAV and FUSE (caches, mutations, I/O)
     metastore/           #   MetaStore interface; memstore/ (default), redisstore/ (shared)
   retycfs/               # FUSE driver (linux build tag), go-fuse v2 `fs` API
-  metrics/               # Prometheus collectors (retyc_cli_*, _vfs_*, _webdav_*, _fuse_*)
-  telemetry/             # OpenTelemetry tracing; env.go is the only reader of OTEL_*
+  metrics/               # Prometheus collectors of `fs mount`, all retycfs_*
+  telemetry/             # OpenTelemetry tracing of `fs mount`; env.go is the only reader of OTEL_*
 scripts/                 # build-mcpb.sh, benches, start-jaeger.sh, start-redis.sh,
                          #   redis-cache-dump (diagnostic, not released)
 ```
@@ -261,13 +261,18 @@ User doc: `doc/retycfs.md`. Rules:
 
 ## Observability
 
-- Metrics (`internal/metrics`): declare in `metrics.go`, add to `all`, observe at the
-  event, document in `doc/webdav.md` or `doc/retycfs.md`. Labels stay bounded (routes
-  through `metrics.NormalizeRoute`, never an ID or path). Registered only by the
-  observability listener (`--metrics-addr`).
-- Tracing (`internal/telemetry`): off unless an OTLP endpoint is set. Attribute keys
-  live in `attrs.go`, never spelled at call sites. Long-running commands open one root
-  span per request / operation.
+`retyc fs mount` only: no other command (WebDAV, MCP, one-shot) exposes metrics,
+probes or traces. Shared code (`vfs`, `service`, `api`) still observes and opens
+spans: unregistered collectors and the no-op tracer cost nothing elsewhere.
+
+- Metrics (`internal/metrics`): one prefix, `retycfs_`. Declare in `metrics.go`, add
+  to `all`, observe at the event, document in `doc/retycfs.md`. Labels stay bounded
+  (routes through `metrics.NormalizeRoute`, never an ID or path). Registered only by
+  the observability listener of the mount (`--metrics-addr`, `cmd/observability.go`).
+- Tracing (`internal/telemetry`): `telemetry.Init` is called by `runMount` only; off
+  unless an OTLP endpoint is set. Attribute keys live in `attrs.go`, never spelled at
+  call sites. One root span per FUSE operation that reaches the API
+  (`StartUsedRoot`).
 - **Privacy rule** (`cmd/tracing_privacy_test.go`, `telemetrytest.AssertNoLeak`): no
   span name, attribute, event, status or resource carries a path, file or folder name,
   dataroom title, command argument, HTTP body or header, error message or e-mail.

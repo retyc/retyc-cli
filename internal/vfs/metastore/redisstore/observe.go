@@ -12,7 +12,7 @@ import (
 )
 
 // The operations of the store, as the "op" label of
-// retyc_cli_vfs_store_op_duration_seconds and the name of a "redis <op>"
+// retycfs_store_op_duration_seconds and the name of a "redis <op>"
 // span: one fixed name per method that talks to Redis (PutListingIf and
 // PutEntryIf are put_listing and put_entry; GetNamed, one round trip for a
 // node and an entry, is get_named).
@@ -84,7 +84,7 @@ func (o operation) end(err error) {
 	if err != nil {
 		result = "error"
 	}
-	metrics.VFSStoreOpDuration.WithLabelValues(o.name, result).Observe(time.Since(o.start).Seconds())
+	metrics.StoreOpDuration.WithLabelValues(o.name, result).Observe(time.Since(o.start).Seconds())
 	if o.span == nil {
 		return
 	}

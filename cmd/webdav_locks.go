@@ -191,7 +191,7 @@ func (m *lockMirror) run(ctx context.Context) { m.locks().Run(ctx) }
 // lapsed (see vfs.LockManager.RefreshAll).
 func (m *lockMirror) refreshAll(ctx context.Context) { m.locks().RefreshAll(ctx) }
 
-// held returns the number of mirrored locks (tests, metrics).
+// held returns the number of mirrored locks (tests).
 func (m *lockMirror) held() int { return m.locks().Held() }
 
 // bufferedResponse captures a handler's response so that a decision can be

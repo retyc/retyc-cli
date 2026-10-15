@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -12,59 +13,31 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-func gatheredNames(t *testing.T, reg *prometheus.Registry) map[string]bool {
-	t.Helper()
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	names := make(map[string]bool, len(families))
-	for _, f := range families {
-		names[f.GetName()] = true
-	}
+// fqNamePattern pulls the metric name out of a Desc's String().
+var fqNamePattern = regexp.MustCompile(`fqName: "([^"]+)"`)
 
-	return names
-}
-
-func TestRegister_ExposesTouchedMetrics(t *testing.T) {
-	reg := prometheus.NewRegistry()
-	Register(reg)
-
-	WebdavRequests.WithLabelValues("PROPFIND", "207").Inc()
-	WebdavRequestDuration.WithLabelValues("PROPFIND").Observe(0.01)
-	WebdavInflight.Inc()
-	WebdavBytes.WithLabelValues("download").Add(10)
-	VFSNodeCacheLookups.WithLabelValues("hit").Inc()
-	VFSDataroomCacheRefreshes.WithLabelValues("ok").Inc()
-	APIRequests.WithLabelValues("GET", "/dataroom", "200").Inc()
-	APIRequestDuration.WithLabelValues("GET", "/dataroom").Observe(0.02)
-	TokenRefreshes.WithLabelValues("ok").Inc()
-	TokenExpiry.Set(3600)
-	CryptoDuration.WithLabelValues("encrypt").Observe(0.001)
-
-	names := gatheredNames(t, reg)
-	for _, want := range []string{
-		"retyc_cli_webdav_requests_total",
-		"retyc_cli_webdav_request_duration_seconds",
-		"retyc_cli_webdav_inflight_requests",
-		"retyc_cli_webdav_bytes_total",
-		"retyc_cli_vfs_node_cache_lookups_total",
-		"retyc_cli_vfs_dataroom_cache_refreshes_total",
-		"retyc_cli_api_requests_total",
-		"retyc_cli_api_request_duration_seconds",
-		"retyc_cli_token_refreshes_total",
-		"retyc_cli_token_expiry_seconds",
-		"retyc_cli_crypto_duration_seconds",
-	} {
-		if !names[want] {
-			t.Errorf("registry missing %s", want)
+func TestAll_OnePrefix(t *testing.T) {
+	seen := map[string]bool{}
+	for _, c := range All() {
+		ch := make(chan *prometheus.Desc, 4)
+		go func() { c.Describe(ch); close(ch) }()
+		for d := range ch {
+			m := fqNamePattern.FindStringSubmatch(d.String())
+			if m == nil {
+				t.Fatalf("no fqName in %s", d)
+			}
+			if !strings.HasPrefix(m[1], "retycfs_") {
+				t.Errorf("%s: want the retycfs_ prefix", m[1])
+			}
+			if seen[m[1]] {
+				t.Errorf("%s declared twice", m[1])
+			}
+			seen[m[1]] = true
 		}
 	}
-}
-
-func TestRegister_TwiceInDistinctRegistries(t *testing.T) {
-	Register(prometheus.NewRegistry())
-	Register(prometheus.NewRegistry()) // must not panic: one collector, many registries
+	if len(seen) != len(all) {
+		t.Errorf("%d names for %d collectors", len(seen), len(all))
+	}
 }
 
 func TestNormalizeRoute(t *testing.T) {

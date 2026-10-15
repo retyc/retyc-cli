@@ -234,7 +234,7 @@ func recordListingLookup(ctx context.Context, result string) {
 // missed: nodes (a listing) or entries (a single name, see Lookup). Both feed
 // one counter: what it tells is whether a lookup was answered without the API.
 func recordCacheLookup(ctx context.Context, cache, result string) {
-	metrics.VFSNodeCacheLookups.WithLabelValues(result).Inc()
+	metrics.CacheLookups.WithLabelValues(result).Inc()
 	trace.SpanFromContext(ctx).AddEvent("cache.lookup", trace.WithAttributes(
 		telemetry.AttrCacheName.String(cache),
 		telemetry.AttrCacheHit.Bool(result != "miss"),
