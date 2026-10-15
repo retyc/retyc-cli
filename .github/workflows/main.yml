@@ -17,6 +17,10 @@ on:
 jobs:
   ci:
     name: CI
+    # A branch of this repository is tested by its push; the pull_request run
+    # is only for forks, which have no push run here. Without this, every push
+    # to a branch with an open pull request runs the workflow twice.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     uses: ./.github/workflows/_ci.yml
 
   # Builds the image everywhere, pushes it (as `master`) from the default branch
