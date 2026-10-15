@@ -594,3 +594,28 @@ func TestGetValidToken_NoToken(t *testing.T) {
 		t.Errorf("error = %v, want ErrNoToken", err)
 	}
 }
+
+// Expire makes a source that holds a refresh token refresh on the next call,
+// and leaves one without it as it is: it could only fail from then on.
+func TestRefreshingTokenSource_Expire(t *testing.T) {
+	valid := func(refresh string) *oauth2.Token {
+		return &oauth2.Token{AccessToken: "access", RefreshToken: refresh, Expiry: time.Now().Add(time.Hour)}
+	}
+
+	src := &RefreshingTokenSource{tok: valid("")}
+	src.Expire()
+	if tok, err := src.Token(); err != nil || tok.AccessToken != "access" {
+		t.Errorf("without a refresh token: Token() = %v, %v, want the token kept", tok, err)
+	}
+
+	held := valid("refresh")
+	src = &RefreshingTokenSource{tok: held}
+	src.Expire()
+	if src.tok.Valid() {
+		t.Error("with a refresh token: the access token is still taken for valid")
+	}
+	// The token handed out before is not changed under its holder.
+	if !held.Valid() || src.tok.RefreshToken != "refresh" {
+		t.Errorf("held token valid = %v, refresh token %q", held.Valid(), src.tok.RefreshToken)
+	}
+}

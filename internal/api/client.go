@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -45,6 +46,9 @@ type Client struct {
 	// missingChunkRetries are the pauses before each new attempt at a chunk
 	// download answering 404 (see getChunk).
 	missingChunkRetries []time.Duration
+	// retry is the outermost RoundTripper: it replays the requests answered
+	// 429 and holds the gate every request of this client waits at.
+	retry *retryTransport
 }
 
 // Option customizes a Client at construction.
@@ -54,6 +58,8 @@ type clientOptions struct {
 	wrapTransport       func(http.RoundTripper) http.RoundTripper
 	unsafeWrite         bool
 	missingChunkRetries []time.Duration
+	retryMaxWait        time.Duration
+	retryMaxAttempts    int
 }
 
 // defaultMissingChunkRetries cover the window, about 450 ms, in which a chunk
@@ -75,9 +81,10 @@ func WithMissingChunkRetries(delays ...time.Duration) Option {
 	return func(o *clientOptions) { o.missingChunkRetries = delays }
 }
 
-// WrapTransport wraps the outermost RoundTripper of the client, so wrap sees
-// every request exactly as sent (token and User-Agent attached). Used to plug
-// metrics without touching the request path.
+// WrapTransport wraps the RoundTripper that sends a request, so wrap sees
+// every attempt exactly as sent (token and User-Agent attached), a request
+// replayed after a 429 included: the retry transport sits outside it. Used to
+// plug metrics and tracing without touching the request path.
 func WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) Option {
 	return func(o *clientOptions) { o.wrapTransport = wrap }
 }
@@ -89,7 +96,11 @@ func WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) Option {
 // connecting to servers using self-signed certificates.
 // When debug is true, raw API responses are printed to stderr.
 func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debug bool, opts ...Option) *Client {
-	o := clientOptions{missingChunkRetries: defaultMissingChunkRetries}
+	o := clientOptions{
+		missingChunkRetries: defaultMissingChunkRetries,
+		retryMaxWait:        defaultRetryMaxWait,
+		retryMaxAttempts:    defaultRetryMaxAttempts,
+	}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -118,18 +129,22 @@ func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debu
 	if o.wrapTransport != nil {
 		transport = o.wrapTransport(transport)
 	}
+	// Outermost, so each attempt at a request answered 429 goes through the
+	// wrappers above: one counted request and one CLIENT span per attempt.
+	retry := newRetryTransport(transport, o.retryMaxWait, o.retryMaxAttempts, debug)
 
 	return &Client{
 		baseURL:             baseURL,
 		debug:               debug,
 		unsafeWrite:         o.unsafeWrite,
 		missingChunkRetries: o.missingChunkRetries,
+		retry:               retry,
 		// No client-level Timeout: that field caps the entire round-trip
 		// (including body upload), which would kill large chunk uploads on
 		// slow connections. Transport-level timeouts above protect against
 		// hung connections and unresponsive servers instead.
 		httpClient: &http.Client{
-			Transport: transport,
+			Transport: retry,
 		},
 	}
 }
@@ -267,8 +282,10 @@ func (c *Client) Delete(ctx context.Context, path string) error {
 // ErrChunkMissing (which also matches ErrNotFound): the version is incomplete
 // for good, e.g. its background store failed or its worker was killed. A 410
 // (node pending deletion) or any other error is not retried.
-func (c *Client) getChunk(ctx context.Context, path string) ([]byte, error) {
-	data, err := c.GetBytes(ctx, path)
+//
+// limit, when positive, bounds the chunk: see getBytes.
+func (c *Client) getChunk(ctx context.Context, path string, limit int64) ([]byte, error) {
+	data, err := c.getBytes(ctx, path, limit)
 	missing := func() bool { return errors.Is(err, ErrNotFound) && !errors.Is(err, ErrGone) }
 	for _, delay := range c.missingChunkRetries {
 		if !missing() {
@@ -279,7 +296,7 @@ func (c *Client) getChunk(ctx context.Context, path string) ([]byte, error) {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		data, err = c.GetBytes(ctx, path)
+		data, err = c.getBytes(ctx, path, limit)
 	}
 	if missing() {
 		return nil, fmt.Errorf("%w: %w", ErrChunkMissing, err)
@@ -290,6 +307,19 @@ func (c *Client) getChunk(ctx context.Context, path string) ([]byte, error) {
 
 // GetBytes performs an authenticated GET and returns the raw response body.
 func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
+	return c.getBytes(ctx, path, 0)
+}
+
+// errorBodyMax bounds what getBytes keeps of the body of a refusal when the
+// download itself is bounded.
+const errorBodyMax = 64 << 10
+
+// getBytes is GetBytes with a bound on the body when limit is positive: a 2xx
+// response announcing more than limit bytes is refused with ErrChunkTooLarge
+// before any of its body is read, and one that announces no length is read up
+// to limit bytes and refused when more follow. Memory is committed for limit
+// bytes at most, whatever the server sends.
+func (c *Client) getBytes(ctx context.Context, path string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return nil, err
@@ -301,11 +331,30 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, unwrapRateLimit(err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	body, err := io.ReadAll(resp.Body)
+	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
+	var src io.Reader = resp.Body
+	if limit > 0 {
+		if ok && resp.ContentLength > limit {
+			if c.debug {
+				fmt.Fprintf(os.Stderr, "< %s (%d bytes announced, limit %d)\n", resp.Status, resp.ContentLength, limit)
+			}
+
+			return nil, fmt.Errorf("%w: %d bytes announced, limit %d", ErrChunkTooLarge, resp.ContentLength, limit)
+		}
+		bound := limit
+		if !ok {
+			bound = errorBodyMax
+		}
+		// One byte more than allowed tells a body that is too long from one
+		// that fits exactly.
+		src = io.LimitReader(resp.Body, bound+1)
+	}
+
+	body, err := io.ReadAll(src)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -314,11 +363,44 @@ func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
 		fmt.Fprintf(os.Stderr, "< %s (%d bytes, binary)\n", resp.Status, len(body))
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, statusError(resp.StatusCode, body)
+	if !ok {
+		return nil, c.responseError(resp, body)
+	}
+	if limit > 0 && int64(len(body)) > limit {
+		return nil, fmt.Errorf("%w: more than %d bytes", ErrChunkTooLarge, limit)
 	}
 
 	return body, nil
+}
+
+// headContentLength performs an authenticated HEAD and returns the
+// Content-Length of a 2xx response, -1 when it announces none. A refusal is
+// an HTTPError with an empty body, a HEAD having none.
+func (c *Client) headContentLength(ctx context.Context, path string) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, c.baseURL+path, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	if c.debug {
+		fmt.Fprintf(os.Stderr, "> HEAD %s%s\n", req.URL, ProxyLabel(req))
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, unwrapRateLimit(err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if c.debug {
+		fmt.Fprintf(os.Stderr, "< %s (Content-Length %d)\n", resp.Status, resp.ContentLength)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, c.responseError(resp, nil)
+	}
+
+	return resp.ContentLength, nil
 }
 
 // do executes the request and decodes the response body into dst (if non-nil).
@@ -337,7 +419,7 @@ func (c *Client) doHeader(req *http.Request, dst any) (http.Header, error) {
 
 	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: intentional outbound HTTP request from API client
 	if err != nil {
-		return nil, err
+		return nil, unwrapRateLimit(err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
@@ -359,7 +441,7 @@ func (c *Client) doHeader(req *http.Request, dst any) (http.Header, error) {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, statusError(resp.StatusCode, body)
+		return nil, c.responseError(resp, body)
 	}
 
 	if dst != nil {
@@ -373,12 +455,18 @@ func (c *Client) doHeader(req *http.Request, dst any) (http.Header, error) {
 
 // HTTPError is the error of a non-2xx response. It matches the sentinels of
 // its status through errors.Is (ErrConflict for 409, ErrNotFound for 404 and
-// 410, ErrGone for 410, ErrLocked for 423, ErrNotModified for 304) and exposes
-// the status and body for callers that need to tell apart two refusals with
-// the same status (see Detail).
+// 410, ErrGone for 410, ErrLocked for 423, ErrNotModified for 304,
+// ErrRateLimited for 429) and exposes the status and body for callers that
+// need to tell apart two refusals with the same status (see Detail).
 type HTTPError struct {
 	Status int
 	Body   string
+	// Code is the X-Error-Code header of the response (ErrorCodeHeader): the
+	// stable code of a dataroom refusal, "" when the API sent none.
+	Code string
+	// RetryAfter is the Retry-After header of the response, given in seconds
+	// or as an HTTP date; 0 when absent or malformed.
+	RetryAfter time.Duration
 }
 
 // Error keeps the historical messages: "conflict: <body>" for a 409,
@@ -410,14 +498,17 @@ func (e *HTTPError) Is(target error) bool {
 		return e.Status == http.StatusLocked
 	case ErrNotModified:
 		return e.Status == http.StatusNotModified
+	case ErrRateLimited:
+		return e.Status == http.StatusTooManyRequests
 	default:
 		return false
 	}
 }
 
 // Detail returns the "detail" string of a JSON error body ({"detail": "..."}),
-// the form the API uses for its stable refusal codes (mime_type_unknown,
-// mime_types_limit, ...), or "" when the body has no such string.
+// or "" when the body has no such string. It is a message for humans: branch
+// on Code, and read Detail only as the fallback for an API that predates the
+// codes, which put some of them there (mime_type_unknown, mime_types_limit).
 func (e *HTTPError) Detail() string {
 	var payload struct {
 		Detail string `json:"detail"`
@@ -429,8 +520,9 @@ func (e *HTTPError) Detail() string {
 	return payload.Detail
 }
 
-// ErrorDetail returns the detail code of the HTTPError in err's chain, or ""
-// when err is not an API refusal or carries no string detail.
+// ErrorDetail returns the detail of the HTTPError in err's chain, or "" when
+// err is not an API refusal or carries no string detail. Branch on ErrorCode
+// first: the detail is only the fallback of an API that predates the codes.
 func ErrorDetail(err error) string {
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) {
@@ -440,7 +532,40 @@ func ErrorDetail(err error) string {
 	return ""
 }
 
+// StorageExceededDetail is what the detail of a write refused for lack of
+// storage contains: the single-request upload, the creation of a version, the
+// upload of a chunk and the server-side copy all answer it with a 400.
+const StorageExceededDetail = "exceeds maximum allowed storage size"
+
+// IsStorageExceeded reports a write the API refused for lack of storage: the
+// code STORAGE_EXCEEDED, or, from an API without codes, a 400 whose detail
+// contains StorageExceededDetail. Other 400s (the version limit, the MIME
+// table limit, a dataroom without name salt) are not.
+func IsStorageExceeded(err error) bool {
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		return false
+	}
+	if httpErr.Code != "" {
+		return httpErr.Code == CodeStorageExceeded
+	}
+
+	return httpErr.Status == http.StatusBadRequest && strings.Contains(httpErr.Detail(), StorageExceededDetail)
+}
+
 // statusError builds the error of a non-2xx response.
 func statusError(code int, body []byte) error {
 	return &HTTPError{Status: code, Body: string(body)}
+}
+
+// responseError is statusError for a response in hand: it also keeps the
+// Retry-After header, read against the clock of the retry gate so both agree
+// on a header given as a date.
+func (c *Client) responseError(resp *http.Response, body []byte) error {
+	return &HTTPError{
+		Status:     resp.StatusCode,
+		Body:       string(body),
+		Code:       resp.Header.Get(ErrorCodeHeader),
+		RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), c.retry.gate.now()),
+	}
 }

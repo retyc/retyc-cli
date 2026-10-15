@@ -5,6 +5,7 @@ package telemetrytest
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -75,5 +76,36 @@ func ClearEnv(t testing.TB) {
 	for _, name := range OTelEnvNames {
 		t.Setenv(name, "")
 		_ = os.Unsetenv(name)
+	}
+}
+
+// AssertNoLeak fails the test when needle appears in any exported field of any
+// span: name, status description, attributes, events and their attributes,
+// resource. Privacy tests plant needle in every name, path and message a span
+// must never carry.
+func AssertNoLeak(t testing.TB, spans tracetest.SpanStubs, needle string) {
+	t.Helper()
+	check := func(where, s string) {
+		if strings.Contains(s, needle) {
+			t.Errorf("%s leaks the sentinel: %s", where, s)
+		}
+	}
+	for _, s := range spans {
+		check("span name", s.Name)
+		check("status description", s.Status.Description)
+		for _, kv := range s.Attributes {
+			check("attribute "+string(kv.Key), kv.Value.String())
+		}
+		for _, ev := range s.Events {
+			check("event name", ev.Name)
+			for _, kv := range ev.Attributes {
+				check("event attribute "+string(kv.Key), kv.Value.String())
+			}
+		}
+		if s.Resource != nil {
+			for _, kv := range s.Resource.Attributes() {
+				check("resource "+string(kv.Key), kv.Value.String())
+			}
+		}
 	}
 }

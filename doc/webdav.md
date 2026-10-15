@@ -16,7 +16,7 @@ read -rs RETYC_KEY_PASSPHRASE
 export RETYC_KEY_PASSPHRASE
 
 # Start the server on localhost:8888
-retyc webdav serve
+retyc fs webdav serve
 ```
 
 Then mount `http://localhost:8888` in your WebDAV client. Your datarooms appear under
@@ -27,17 +27,31 @@ the `/dataroom` folder.
 - You must be authenticated first: `retyc auth login`.
 - `RETYC_KEY_PASSPHRASE` **must** be set — the server never prompts interactively.
   It is used to unlock your AGE identity for decrypting/encrypting file contents.
+  A service reads it, with `RETYC_TOKEN` and `RETYC_WEBDAV_PASSWORD`, from an environment
+  file of mode `0600`: `retyc --env-file /etc/retyc/env fs webdav serve`, or
+  `RETYC_ENV_FILE`. See
+  [Configuration](configuration.md#keep-the-secrets-in-an-environment-file-boot-mounts-systemd-csi).
 
 ## Command
 
 ```
-retyc webdav serve [flags]
+retyc fs webdav serve [flags]
 ```
+
+> **Breaking changes.** The command used to be `retyc webdav serve`, the cache
+> settings lived under `webdav.cache`, and two metrics changed name: see
+> [Breaking changes](#breaking-changes) before upgrading a deployment.
 
 | Flag           | Short | Default     | Description                                                        |
 |----------------|-------|-------------|--------------------------------------------------------------------|
 | `--addr`       |       | `127.0.0.1:8888` | `host:port` to bind (`127.0.0.1` = local only; also `webdav.addr` / `RETYC_WEBDAV_ADDR`) |
 | `--auth`       |       | `false`     | Require HTTP Basic authentication                                  |
+| `--cache-ttl`  |       | `1m`        | How long a listing is served from memory (also `cache.ttl` / `RETYC_CACHE_TTL`), see [Caching](#caching) |
+| `--cache-max-stale` |  | `5m`        | How much longer an expired listing is served while refreshed, `0` to disable (also `cache.max_stale` / `RETYC_CACHE_MAX_STALE`) |
+| `--cache-negative-ttl` | | `1s`      | How long a name found missing is answered missing, `0` to disable (also `cache.negative_ttl` / `RETYC_CACHE_NEGATIVE_TTL`) |
+| `--cache-store` |      | `memory`    | `memory`, or `redis` to share the cache between instances (also `cache.store` / `RETYC_CACHE_STORE`), see [Caching](#caching) |
+| `--cache-redis-url` |  | *(empty)*   | `redis://` or `rediss://` URL of that Redis, password included (also `cache.redis.url` / `RETYC_CACHE_REDIS_URL`, to be preferred to the flag) |
+| `--cache-redis-high-confidentiality` | | `false` | Store in Redis the encrypted names the API sent, never the decrypted ones (also `cache.redis.high_confidentiality` / `RETYC_CACHE_REDIS_HIGH_CONFIDENTIALITY`) |
 | `--unsafe-write` |     | `false`     | Let the API acknowledge uploads before storing them (also `api.unsafe_write` / `RETYC_API_UNSAFE_WRITE`): faster, but a failed background store goes unreported, see [configuration](configuration.md#acknowledge-uploads-before-they-are-stored) |
 | `--metrics-addr` |     | *(empty)*   | Expose Prometheus metrics and health probes on this address (see [below](#metrics-probes-and-traces)) |
 | `--metrics-runtime` |  | `true`      | Include the Go runtime and process metrics on `/metrics` (`--metrics-runtime=false` to drop them) |
@@ -49,6 +63,7 @@ retyc webdav serve [flags]
 |-------------------------|-----------------|--------------------------------------------------------------------|
 | `RETYC_KEY_PASSPHRASE`  | yes             | Passphrase that unlocks your AGE identity (no interactive prompt)  |
 | `RETYC_WEBDAV_PASSWORD` | with `--auth`   | Basic-auth password. If unset while `--auth` is on, one is generated and printed at startup |
+| `RETYC_ENV_FILE`        | no              | File of `RETYC_*` variables (same as `--env-file`), where a service keeps the two above |
 
 ## Layout
 
@@ -118,7 +133,7 @@ Notes and limitations:
   renewed and is released within two minutes.
   The lock is advisory: it arbitrates between clients that lock, it does not block a write
   from one that does not. Locks on folders, and on files being created, stay local.
-  The server holds one lock per client, so a second `retyc webdav serve` of the same user
+  The server holds one lock per client, so a second `retyc fs webdav serve` of the same user
   locking the same file gets `423` too; a lock this server still mirrors for a WebDAV lock
   that lapsed is released before the next `LOCK` on the file takes its place.
 - **Symbolic links are not shown.** A dataroom may hold symlinks (created by a mount or
@@ -131,10 +146,12 @@ Notes and limitations:
   managers show them as the free space of the mount.
 - **Uploading an existing name** creates a new **version** of that node rather than a
   duplicate.
-- **Small files are one request.** A file that fits in one 8 MB chunk (an empty one
-  included) is sent with its node and its version in a single API call
+- **Small files are one request.** A file of at most 8 MiB, one chunk (an empty one
+  included), is sent with its node and its version in a single API call
   (`POST /dataroom/{id}/node/file`), kept in memory until the PUT completes; a larger
-  file is streamed chunk by chunk into a version created when the PUT starts.
+  file is streamed in 8 MiB chunks into a version created when the PUT starts. If a
+  proxy in front of the API answers `413` (an older deployment limited that route to
+  1 MiB), the file is sent again as a version and its chunks.
 - **File names containing `/`** cannot be represented as a single path component and are
   skipped from listings (a warning is printed to stderr).
 - Folder listings and the dataroom list are cached (see [Caching](#caching));
@@ -173,8 +190,8 @@ round trip. Folder listings and the dataroom list are therefore cached:
 
 | Age of the cached listing | Behaviour |
 |---|---|
-| under `webdav.cache.ttl` (default `1m`) | served from memory |
-| up to `webdav.cache.max_stale` more (default `5m`) | served from memory **while one background refresh replaces it** |
+| under `cache.ttl` (default `1m`) | served from memory |
+| up to `cache.max_stale` more (default `5m`) | served from memory **while one background refresh replaces it** |
 | older | the request waits for a fresh listing |
 
 The second row matters to clients that walk a whole tree after a pause: PrivateBin,
@@ -196,24 +213,44 @@ status `304` in `retyc_cli_api_requests_total`.
 
 Mutations made through the server keep the cache exact. Changes made elsewhere
 (web app, another client, another `webdav serve`) appear once the listing is
-refreshed: after `webdav.cache.ttl` at best, after `ttl + max_stale` at worst, and
+refreshed: after `cache.ttl` at best, after `ttl + max_stale` at worst, and
 always one request late for an expired listing (that request still gets the
 previous one: an old size, version or `ETag`, a node deleted since). A name the
 expired listing does not hold is the exception: the request waits for the refresh
 instead of answering `404`, so a file created elsewhere is found on first access.
-Set `webdav.cache.max_stale` to `0` (`RETYC_WEBDAV_CACHE_MAX_STALE=0`) to never
-serve an expired listing.
+Set `cache.max_stale` to `0` (`RETYC_CACHE_MAX_STALE=0`, `--cache-max-stale 0`)
+to never serve an expired listing.
 
-Both settings are durations and need a unit (`90s`, `2m`): a bare number in
-`config.yaml` would be read as nanoseconds, so anything under a second is
-rejected at startup.
+A file or folder whose parent has no listing in memory is looked up on its own.
+A name found missing that way is answered missing for `cache.negative_ttl`
+(default `1s`) without asking the API again, which absorbs the burst of probes a
+client makes for one name; a name created elsewhere therefore shows up at most
+that much later. `0` disables it: every such lookup asks the API. When a second
+name of the same folder is looked up that way within `cache.ttl`, the listing of
+the folder is also loaded in the background, and answers the lookups that follow.
+A folder gets one such listing per `cache.ttl` at most, and none when it holds
+more than 5,000 nodes: its lookups keep asking for one name each.
+
+The three settings are durations and need a unit (`90s`, `2m`, `500ms`): a bare
+number in `config.yaml` would be read as nanoseconds, so `ttl` and `max_stale`
+under a second, and `negative_ttl` under a millisecond, are rejected at startup.
 
 ```yaml
-webdav:
-  cache:
-    ttl: 1m
-    max_stale: 5m
+cache:
+  ttl: 1m
+  max_stale: 5m
+  negative_ttl: 1s
 ```
+
+The section is shared with [`retyc fs mount`](retycfs.md#freshness), which never
+serves an expired listing: `cache.max_stale` applies to the WebDAV server only.
+
+Several servers, and mounts, can share this cache through a Redis
+(`cache.store: redis`, `cache.redis.url`, `cache.redis.high_confidentiality`): what
+one lists or changes is served to the others without a request, and survives a
+restart. What Redis then holds, and what it requires, is described under
+[Shared metadata cache (Redis)](retycfs.md#shared-metadata-cache-redis); it applies to
+the WebDAV server as it stands.
 
 ## Authentication (`--auth`)
 
@@ -224,10 +261,10 @@ decrypted dataroom contents, so if you bind to a non-loopback address you should
 
 ```sh
 # Generate a random password (printed once at startup)
-retyc webdav serve --auth
+retyc fs webdav serve --auth
 
 # Or provide your own
-RETYC_WEBDAV_PASSWORD='choose-a-strong-password' retyc webdav serve --auth
+RETYC_WEBDAV_PASSWORD='choose-a-strong-password' retyc fs webdav serve --auth
 ```
 
 - Username is always `retyc`.
@@ -275,7 +312,7 @@ rclone ls retyc:/dataroom
 for Prometheus and container orchestrators. It is off by default.
 
 ```sh
-retyc webdav serve --auth --metrics-addr 127.0.0.1:9090
+retyc fs webdav serve --auth --metrics-addr 127.0.0.1:9090
 ```
 
 | Path       | Purpose   | Response                                                                 |
@@ -308,7 +345,7 @@ name (`le`, `quantile`, anything starting with `__`) or an invalid label name
 stops the server at startup.
 
 ```sh
-retyc webdav serve --metrics-addr 127.0.0.1:9090 --metrics-runtime=false \
+retyc fs webdav serve --metrics-addr 127.0.0.1:9090 --metrics-runtime=false \
   --metrics-label identity=pvc-1234
 ```
 
@@ -323,25 +360,36 @@ are folded into `OTHER`.
 | `retyc_cli_webdav_request_duration_seconds` | histogram | `method` | WebDAV request latency |
 | `retyc_cli_webdav_inflight_requests` | gauge | | Requests being served right now |
 | `retyc_cli_webdav_bytes_total` | counter | `direction` (`upload`, `download`) | Plaintext bytes moved through the server |
-| `retyc_cli_webdav_node_cache_lookups_total` | counter | `result` (`hit`, `stale`, `miss`) | Folder listing cache efficiency (`stale`: expired listing served while refreshed) |
-| `retyc_cli_webdav_dataroom_cache_refreshes_total` | counter | | Refreshes of the dataroom list (one API call each) |
+| `retyc_cli_vfs_node_cache_lookups_total` | counter | `result` (`hit`, `stale`, `miss`) | Efficiency of the tree caches: a folder listing, or the cached result of looking one name up (`stale`: expired listing served while refreshed; `miss`: the API is asked, for a listing or for one name) |
+| `retyc_cli_vfs_dataroom_cache_refreshes_total` | counter | `result` (`ok`, `error`) | Refreshes of the dataroom list (one API call each); `error`: the listing failed and the list held, if any, was kept |
+| `retyc_cli_vfs_spool_bytes` | gauge | | Bytes held on disk by the uploads of unknown length (chunked `PUT`) being received |
+| `retyc_cli_vfs_uploads_total` | counter | `result` (`ok`, `error`) | Files sent to the API (a new file or a new version) |
+| `retyc_cli_vfs_locks_held` | gauge | | Locks held at the API for the WebDAV `LOCK`s of the clients |
+| `retyc_cli_vfs_store_op_duration_seconds` | histogram | `op`, `result` (`ok`, `error`) | Time one operation of the [shared metadata cache](retycfs.md#shared-metadata-cache-redis) took: one round trip to Redis. `op` is the operation of the cache (`get_node`, `get_listing`, `put_listing`, `put_entry`, `generation`, …). Empty with `cache.store: memory` |
 | `retyc_cli_api_requests_total` | counter | `method`, `route`, `status` | Calls to the Retyc API (`status="error"` = no response) |
 | `retyc_cli_api_request_duration_seconds` | histogram | `method`, `route` | API round-trip latency, the dominant cost of every WebDAV operation |
+| `retyc_cli_api_throttle_episodes_total` | counter | | Times the API rate limit (`429`) made the server pause all its API requests; each refusal is already a `status="429"` request above |
+| `retyc_cli_api_throttle_wait_seconds` | histogram | | Time one API request was held back by the rate limit |
+| `retyc_cli_api_rate_limited_total` | counter | `method` | API requests given up after `api.retry.max_wait` / `api.retry.max_attempts`; the WebDAV client is answered `429` |
 | `retyc_cli_sessions_cached` | gauge | | Dataroom session keys held unlocked in memory |
 | `retyc_cli_token_refreshes_total` | counter | `result` (`ok`, `error`) | Keepalive checks of the login token (every 60 s) |
 | `retyc_cli_token_expiry_seconds` | gauge | | Seconds left on the access token, 0 when unknown |
 | `retyc_cli_crypto_duration_seconds` | histogram | `op` (`encrypt`, `decrypt`) | Per-chunk AGE operation time |
 
+`fs mount` exposes the same listener and the same metrics, plus the
+`retyc_cli_fuse_*` ones of the filesystem operations: see
+[RetycFS](retycfs.md#metrics-and-probes).
+
 Chunk counts are the `retyc_cli_api_requests_total` series of the chunk routes
 (`/dataroom/node/version/{id}/chunk/{n}` for uploads,
-`/dataroom/node/{id}/download/{n}` for downloads); files that fit in one chunk are
+`/dataroom/node/{id}/download/{n}` for downloads); files of at most 8 MiB are
 uploaded through `/dataroom/{id}/node/file` instead.
 
 ### Traces
 
 With an OTLP endpoint in the environment (see
 [Tracing](configuration.md#tracing-opentelemetry)), `webdav serve` exports one
-startup span (`retyc webdav serve init`: login check, key unlock as a
+startup span (`retyc fs webdav serve init`: login check, key unlock as a
 `crypto.unlock_key` child span, bind),
 parented to `TRACEPARENT` when set, then one new trace per request, named
 `WEBDAV <method>`, with the API calls, the per-chunk `crypto.encrypt` /
@@ -357,7 +405,9 @@ background refresh already running (a name missing from the expired listing),
 its span gets a link to that `cache.refresh` trace instead. Upload calls carry
 `retyc.upload.unsafe_write`, telling whether the API was asked to store the chunk
 in the background; a chunk download retried on a 404 shows as successive calls of
-the same route. Requests are
+the same route. A request the API rate limit refused (`429`) shows the same
+way, one call per attempt, with an `api.throttle` event on the request's span
+for each wait (`retyc.retry.attempt`, `retyc.retry.wait_ms`). Requests are
 never parented to the startup span, so a caller's trace closes once the server
 is up. WebDAV clients issue many `PROPFIND`s: set
 `OTEL_TRACES_SAMPLER=parentbased_traceidratio` and `OTEL_TRACES_SAMPLER_ARG`
@@ -369,6 +419,10 @@ dataroom title.
 - The server keeps your access token warm by refreshing it in the background.
 - If the **refresh token expires**, the server shuts down gracefully (draining any
   in-flight uploads) and exits with a message. Run `retyc auth login` and restart it.
+- A refresh that fails for another reason (the identity provider unreachable,
+  answering a 5xx or `429`, timing out) does not stop the server: it is reported once
+  on stderr and tried again every minute, and `/readyz` keeps answering `200`.
+  Requests to the API fail meanwhile if the access token has expired.
 - A login that cannot recover, at startup or while serving (no stored token, refresh
   token expired or revoked), exits with code **77**; a missing or wrong key passphrase
   exits with **78**; any other failure exits with 1. A supervisor should stop restarting
@@ -396,7 +450,7 @@ read -rs RETYC_KEY_PASSPHRASE
 export RETYC_KEY_PASSPHRASE
 
 # Local, authenticated server on a custom port
-RETYC_WEBDAV_PASSWORD='s3cret' retyc webdav serve --addr 127.0.0.1:9000 --auth
+RETYC_WEBDAV_PASSWORD='s3cret' retyc fs webdav serve --addr 127.0.0.1:9000 --auth
 # → WebDAV server listening on http://127.0.0.1:9000
 # → WebDAV auth enabled: user "retyc", password from RETYC_WEBDAV_PASSWORD
 
@@ -404,3 +458,26 @@ RETYC_WEBDAV_PASSWORD='s3cret' retyc webdav serve --addr 127.0.0.1:9000 --auth
 #   mount http://localhost:9000  (user retyc / s3cret)
 #   open  /dataroom/Project Alpha/report.pdf
 ```
+
+## Breaking changes
+
+Nothing below has an alias: a deployment (service unit, container arguments,
+Helm values, dashboards, alerts) must be updated together with the binary.
+
+| Before | Now | What happens with the old form |
+|---|---|---|
+| `retyc webdav serve` | `retyc fs webdav serve` | unknown command, the process exits at once |
+| `webdav.cache.ttl`, `RETYC_WEBDAV_CACHE_TTL` | `cache.ttl`, `RETYC_CACHE_TTL`, `--cache-ttl` | refused at startup: `webdav.cache.ttl was replaced by cache.ttl` |
+| `webdav.cache.max_stale`, `RETYC_WEBDAV_CACHE_MAX_STALE` | `cache.max_stale`, `RETYC_CACHE_MAX_STALE`, `--cache-max-stale` | refused at startup: `webdav.cache.max_stale was replaced by cache.max_stale` |
+| `retyc_cli_webdav_node_cache_lookups_total{result}` | `retyc_cli_vfs_node_cache_lookups_total{result}` | the old series is no longer exposed |
+| `retyc_cli_webdav_dataroom_cache_refreshes_total` | `retyc_cli_vfs_dataroom_cache_refreshes_total{result}` | the old series is no longer exposed; the new one has a `result` label (`ok`, `error`), so sum over it to get the former total |
+
+The old cache keys are refused by **every** command that reads the configuration,
+not only by the server: a `config.yaml` or an environment that still carries one
+stops `retyc dataroom ls` too, until the key is renamed. The values and their
+meaning did not change. `cache.negative_ttl` (`1s`) is new and was a fixed second
+before.
+
+The cache settings and the two metrics moved because they belong to the tree both
+`retyc fs webdav serve` and `retyc fs mount` are built on. The other `webdav.*`
+keys, `RETYC_WEBDAV_*` variables and `retyc_cli_webdav_*` metrics are unchanged.

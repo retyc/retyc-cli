@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/ui"
+	"github.com/retyc/retyc-cli/internal/vfs"
 )
 
 // — COPY ————————————————————————————————————————————————————————————————————————
@@ -37,11 +37,19 @@ import (
 // response is 201 for a new resource, 204 for a replaced one. The copy is
 // sealed by the server before the response is sent, so the client can read
 // the copy at once.
+//
+// The copy itself is vfs.FS.Copy; what stays here is HTTP: the Destination,
+// Overwrite and If headers, the WebDAV locks, the statuses.
 func (fs *webdavFS) handleCopy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	status, err := fs.copyNode(ctx, r)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
+			return
+		}
+		if errors.Is(err, api.ErrRateLimited) {
+			writeRateLimited(w, err)
+
 			return
 		}
 		http.Error(w, "COPY: "+ui.EscapeLines(err.Error()), status)
@@ -53,10 +61,11 @@ func (fs *webdavFS) handleCopy(w http.ResponseWriter, r *http.Request) {
 
 // copyReplaceRetry and copyReplaceWait pace the copy onto a destination this
 // server just deleted: how often it is tried again while the API still holds
-// the name, and for how long before the 409 is reported.
+// the name, and for how long before the 409 is reported. newWebdavFS hands
+// them to the tree, which runs the wait (vfs.FS.Copy).
 var (
-	copyReplaceRetry = 500 * time.Millisecond
-	copyReplaceWait  = 15 * time.Second
+	copyReplaceRetry = vfs.DefaultCopyReplaceRetry
+	copyReplaceWait  = vfs.DefaultCopyReplaceWait
 )
 
 // copyNode performs the copy of r and returns the status to answer.
@@ -70,11 +79,11 @@ func (fs *webdavFS) copyNode(ctx context.Context, r *http.Request) (int, error) 
 	if srcKind != pathDataroomNode || dstKind != pathDataroomNode || srcSub == "/" || dstSub == "/" {
 		return http.StatusForbidden, errors.New("only files inside a dataroom can be copied")
 	}
-	srcID, err := fs.cache.idForName(ctx, srcDR)
+	srcID, err := fs.tree.DataroomByName(ctx, srcDR)
 	if err != nil {
 		return http.StatusNotFound, err
 	}
-	dstID, err := fs.cache.idForName(ctx, dstDR)
+	dstID, err := fs.tree.DataroomByName(ctx, dstDR)
 	if err != nil {
 		return http.StatusConflict, err
 	}
@@ -90,66 +99,60 @@ func (fs *webdavFS) copyNode(ctx context.Context, r *http.Request) (int, error) 
 	}
 	defer release()
 
-	srcParent, srcName := splitWebdavPath(srcSub)
-	src, err := fs.findListedNode(ctx, srcID, srcParent, srcName)
+	_, replaced, err := fs.tree.Copy(ctx, srcID, srcSub, dstSub, r.Header.Get("Overwrite") != "F")
 	if err != nil {
-		return http.StatusNotFound, err
+		return copyStatus(err)
 	}
-	if src.Type == "dir" {
-		return http.StatusNotImplemented, errors.New("copying a folder is not supported: copy its files")
+	if replaced {
+		return http.StatusNoContent, nil
 	}
-	dstParent, dstName := splitWebdavPath(dstSub)
-	dstParentID, err := fs.parentNodeID(ctx, dstID, dstParent)
-	if err != nil {
+
+	return http.StatusCreated, nil
+}
+
+// copyStatus maps a failed vfs.FS.Copy to the status RFC 4918 §9.8.5 gives it
+// and the error to report. The status depends on which resource failed, hence
+// the step: a source that cannot be resolved is a 404 where a missing
+// destination folder is a 409.
+func copyStatus(err error) (int, error) {
+	var failed *vfs.CopyError
+	if !errors.As(err, &failed) {
+		// A rate limit, which crosses the tree as it is: handleCopy answers
+		// it 429 whatever the status.
+		return http.StatusInternalServerError, err
+	}
+	switch failed.Step {
+	case vfs.CopySource:
+		if errors.Is(err, vfs.ErrIsDir) {
+			return http.StatusNotImplemented, errors.New("copying a folder is not supported: copy its files")
+		}
+
+		return http.StatusNotFound, failed.Err
+	case vfs.CopyDestinationFolder:
 		// RFC 4918 §9.8.5: a missing intermediate collection is a 409.
-		return http.StatusConflict, fmt.Errorf("destination folder: %w", err)
-	}
-
-	// Resolved before the destination is deleted: nothing but the copy
-	// itself may fail once it is gone.
-	sess, err := fs.getSession(ctx, dstID)
-	if err != nil {
-		return http.StatusInternalServerError, fmt.Errorf("dataroom session: %w", err)
-	}
-
-	status = http.StatusCreated
-	if existing, err := fs.findListedNode(ctx, dstID, dstParent, dstName); err == nil {
-		if existing.ID == src.ID {
+		return http.StatusConflict, fmt.Errorf("destination folder: %w", failed.Err)
+	case vfs.CopySession:
+		return http.StatusInternalServerError, fmt.Errorf("dataroom session: %w", failed.Err)
+	case vfs.CopyDestination:
+		switch {
+		case errors.Is(err, vfs.ErrSameNode):
 			// Two spellings of one path (the Destination header is not
 			// normalized): replacing it would delete the source.
 			return http.StatusForbidden, errors.New("destination equals source")
-		}
-		if r.Header.Get("Overwrite") == "F" {
+		case errors.Is(err, vfs.ErrExist):
 			return http.StatusPreconditionFailed, errors.New("destination exists and Overwrite is F")
-		}
-		if existing.Type == "dir" {
+		case errors.Is(err, vfs.ErrIsDir):
 			return http.StatusConflict, errors.New("destination is a folder")
+		default:
+			// The destination could not be looked up: nothing was copied.
+			return http.StatusInternalServerError, fmt.Errorf("destination: %w", failed.Err)
 		}
-		if err := fs.client.DeleteDataroomNode(ctx, existing.ID); err != nil && !errors.Is(err, api.ErrNotFound) {
-			return http.StatusInternalServerError, fmt.Errorf("replacing destination: %w", err)
-		}
-		fs.removeFromNodeCache(dataroomURI(dstID, dstParent), dstName)
-		status = http.StatusNoContent
+	case vfs.CopyReplace:
+		return http.StatusInternalServerError, fmt.Errorf("replacing destination: %w", failed.Err)
+	case vfs.CopyTransfer:
 	}
 
-	node, err := service.CopyDataroomNodeByID(ctx, fs.client, dstID, src.ID, dstParentID, dstName, sess)
-	// The API keeps the name of the file just deleted until its purge has run
-	// (seconds with the workers keeping up) and answers 409 meanwhile.
-	for waited := time.Duration(0); status == http.StatusNoContent && errors.Is(err, api.ErrConflict) &&
-		waited < copyReplaceWait; waited += copyReplaceRetry {
-		select {
-		case <-ctx.Done():
-			return http.StatusInternalServerError, ctx.Err()
-		case <-time.After(copyReplaceRetry):
-		}
-		node, err = service.CopyDataroomNodeByID(ctx, fs.client, dstID, src.ID, dstParentID, dstName, sess)
-	}
-	if err != nil {
-		return copyErrorStatus(err), err
-	}
-	fs.upsertNodeCache(dataroomURI(dstID, dstParent), node)
-
-	return status, nil
+	return copyErrorStatus(failed.Err), failed.Err
 }
 
 // copyDestination parses the Destination header into a path on this server.
@@ -306,12 +309,14 @@ func copyErrorStatus(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, service.ErrCopyDiscarded), errors.Is(err, service.ErrCopyTargetDeleted):
 		return http.StatusInternalServerError
+	case errors.Is(err, vfs.ErrStorageExceeded):
+		// The copy exceeds the storage (a 400 of the API).
+		return http.StatusInsufficientStorage
+	case errors.Is(err, vfs.ErrForbidden):
+		return http.StatusForbidden
 	case errors.As(err, &httpErr):
 		switch httpErr.Status {
-		case http.StatusBadRequest:
-			// The copy exceeds the storage.
-			return http.StatusInsufficientStorage
-		case http.StatusForbidden, http.StatusServiceUnavailable:
+		case http.StatusServiceUnavailable:
 			return httpErr.Status
 		case http.StatusUnprocessableEntity:
 			return http.StatusNotImplemented
@@ -322,45 +327,8 @@ func copyErrorStatus(err error) int {
 }
 
 // — Quota (RFC 4331) ————————————————————————————————————————————————————————————
-
-// quotaCacheEntry is a dataroom's storage counters as last fetched.
-type quotaCacheEntry struct {
-	used, free int64
-	fetchedAt  time.Time
-}
-
-// dataroomQuota returns the storage used by the dataroom and the room left
-// (its reserved capacity, or its owner's plan remainder), from
-// GET /dataroom/{id}/stats, cached for the listing TTL: a PROPFIND asks the
-// quota of every collection it lists. ok is false when the counters are
-// unavailable (an older API, or a failed fetch), in which case no quota
-// property is reported.
-func (fs *webdavFS) dataroomQuota(ctx context.Context, drID string) (used, free int64, ok bool) {
-	fs.quotaMu.Lock()
-	entry, cached := fs.quotaCache[drID]
-	fs.quotaMu.Unlock()
-	if cached && time.Since(entry.fetchedAt) < fs.nodeTTL() {
-		return entry.used, entry.free, true
-	}
-	stats, err := fs.client.GetDataroomStats(ctx, drID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "webdav: dataroom quota: %s\n", ui.EscapeLines(err.Error()))
-
-		return 0, 0, false
-	}
-	if stats.StorageUsed == nil {
-		// An API without storage counters.
-		return 0, 0, false
-	}
-	fs.quotaMu.Lock()
-	if fs.quotaCache == nil {
-		fs.quotaCache = make(map[string]quotaCacheEntry)
-	}
-	fs.quotaCache[drID] = quotaCacheEntry{used: *stats.StorageUsed, free: stats.StorageFree, fetchedAt: time.Now()}
-	fs.quotaMu.Unlock()
-
-	return *stats.StorageUsed, stats.StorageFree, true
-}
+//
+// The counters come from vfs.FS.Quota, cached there per dataroom.
 
 // quotaFunc is what a folder handle calls to report its dataroom's quota.
 type quotaFunc func() (used, free int64, ok bool)

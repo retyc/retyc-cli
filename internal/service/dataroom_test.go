@@ -12,7 +12,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -492,8 +494,8 @@ func smallFileServer(
 	return srv
 }
 
-// A file that fits in one chunk is sent in a single request, its name, type and
-// content encrypted for the session key, overwriting by default.
+// A small file is sent in a single request, its name, type and content
+// encrypted for the session key, overwriting by default.
 func TestUploadSmallFile(t *testing.T) {
 	identity, err := crypto.GenerateKeyPair()
 	if err != nil {
@@ -569,17 +571,260 @@ func TestUploadSmallFile_NameBeingDeleted(t *testing.T) {
 	}
 }
 
-// A file above one chunk cannot go through the single request.
-func TestUploadSmallFile_RejectsMoreThanOneChunk(t *testing.T) {
-	sess := &DataroomSession{}
-	_, _, err := UploadSmallFile(context.Background(), nil, "dr1", nil, "big", make([]byte, UploadChunkSize+1), sess)
-	if err == nil {
-		t.Error("UploadSmallFile accepted a file larger than one chunk")
+// With error codes, only NAME_HOLDER_DELETED is a name being deleted: another
+// 410 (the parent pending deletion) is returned as the API's refusal.
+func TestUploadSmallFile_GoneWithCode(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+	for _, tc := range []struct {
+		code         string
+		nameDeleting bool
+	}{
+		{api.CodeNameHolderDeleted, true},
+		{api.CodeParentDeleted, false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set(api.ErrorCodeHeader, tc.code)
+			http.Error(w, `{"detail":"pending deletion"}`, http.StatusGone)
+		}))
+		_, _, err := UploadSmallFile(context.Background(), newExportTestClient(srv), "dr1", nil, "doc.txt", []byte("x"), sess)
+		srv.Close()
+		if got := errors.Is(err, ErrNameBeingDeleted); got != tc.nameDeleting {
+			t.Errorf("%s: err = %v, ErrNameBeingDeleted = %v, want %v", tc.code, err, got, tc.nameDeleting)
+		}
+		if !tc.nameDeleting && (!errors.Is(err, api.ErrGone) || api.ErrorCode(err) != tc.code) {
+			t.Errorf("%s: err = %v, want the API's 410", tc.code, err)
+		}
 	}
 }
 
-// dataroom cp (and the MCP upload tool) send a file that fits in one chunk in a
-// single request instead of node, version and chunk.
+// CONCURRENT_UPDATE is the API asking for the request again; any other 409,
+// coded or not, is not retried.
+func TestUploadSmallFile_ConcurrentUpdateIsRetriedOnce(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+	for _, tc := range []struct {
+		code     string
+		requests int
+		fails    bool
+	}{
+		{api.CodeConcurrentUpdate, 2, false},
+		{api.CodeNameTaken, 1, true},
+		{"", 1, true},
+	} {
+		var requests int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			requests++
+			if requests == 1 {
+				if tc.code != "" {
+					w.Header().Set(api.ErrorCodeHeader, tc.code)
+				}
+				http.Error(w, `{"detail":"conflict"}`, http.StatusConflict)
+
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"node":{"id":"n-1","name_enc":"x","type_enc":"x","parent_id":null},`+
+				`"node_version":{"id":"v-1","node_id":"n-1","original_size":1,"chunk_count":1,"version_number":1,`+
+				`"created_at":"2026-10-05T10:00:00Z"},"max_version_number":1,"capabilities":{}}`)
+		}))
+		_, _, err := UploadSmallFile(context.Background(), newExportTestClient(srv), "dr1", nil, "doc.txt", []byte("x"), sess)
+		srv.Close()
+		if (err != nil) != tc.fails || requests != tc.requests {
+			t.Errorf("code %q: err = %v after %d request(s), want failure %v after %d",
+				tc.code, err, requests, tc.fails, tc.requests)
+		}
+	}
+}
+
+// A file above SmallUploadMaxSize cannot go through the single request: it
+// holds one chunk.
+func TestUploadSmallFile_RejectsMoreThanTheRouteTakes(t *testing.T) {
+	sess := &DataroomSession{}
+	_, _, err := UploadSmallFile(context.Background(), nil, "dr1", nil, "big", make([]byte, SmallUploadMaxSize+1), sess)
+	if err == nil {
+		t.Error("UploadSmallFile accepted a file larger than SmallUploadMaxSize")
+	}
+}
+
+// The single request carries one chunk, and a chunk at the limit, encrypted,
+// leaves room for the multipart envelope under the 32 MiB the proxy allows.
+func TestSmallUploadMaxSize(t *testing.T) {
+	if SmallUploadMaxSize != UploadChunkSize {
+		t.Errorf("SmallUploadMaxSize = %d, want a chunk (%d)", SmallUploadMaxSize, UploadChunkSize)
+	}
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := crypto.EncryptBinaryForKey(make([]byte, SmallUploadMaxSize), identity.Recipient().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1 MiB is left for the envelope: the encrypted name and MIME type.
+	if room := 32<<20 - len(encrypted); room < 1<<20 {
+		t.Errorf("a file at the limit encrypts to %d bytes: %d left under 32 MiB", len(encrypted), room)
+	}
+}
+
+// chunkedRoutes records the requests of an upload by version and chunks, and
+// answers them; fileStatus is what the single-request route answers.
+func chunkedRoutes(t *testing.T, calls *[]string, fileStatus, chunkStatus int) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		*calls = append(*calls, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		switch {
+		case r.URL.Path == "/dataroom/dr1/node/file":
+			// What the proxy in front of the API answers: text, not JSON.
+			http.Error(w, "Request Entity Too Large", fileStatus)
+		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/dr1/node":
+			fmt.Fprint(w, `{"id":"n-1","name_enc":"x","parent_id":"d-1","created_at":"2026-10-01T08:00:00Z"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/dataroom/node/n-1/version":
+			fmt.Fprint(w, `{"id":"v-1","node_id":"n-1","created_at":"2026-10-05T10:00:00Z",`+
+				`"client_mtime":"2024-05-06T07:08:09Z"}`)
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/dataroom/node/version/v-1/chunk/"):
+			if chunkStatus != http.StatusCreated {
+				http.Error(w, "boom", chunkStatus)
+
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodDelete:
+			// The node may be gone already: the API deletes it itself when it
+			// refuses its first version.
+			http.Error(w, "gone", http.StatusNotFound)
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+// A single request refused as too large (413, by the proxy in front of the
+// API) is sent again, once, as a version and its chunks.
+func TestUploadSmallFile_FallsBackOn413(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	srv := chunkedRoutes(t, &calls, http.StatusRequestEntityTooLarge, http.StatusCreated)
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+	parent := "d-1"
+	mtime := time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC)
+
+	node, newNode, err := UploadSmallFileWithMtime(context.Background(), newExportTestClient(srv), "dr1", &parent,
+		"notes.txt", []byte("hello"), &mtime, sess)
+	if err != nil {
+		t.Fatalf("UploadSmallFileWithMtime: %v", err)
+	}
+	want := []string{
+		"POST /dataroom/dr1/node/file",
+		"POST /dataroom/dr1/node",
+		"POST /dataroom/node/n-1/version",
+		"POST /dataroom/node/version/v-1/chunk/0",
+	}
+	if !slices.Equal(calls, want) {
+		t.Errorf("requests = %v, want %v", calls, want)
+	}
+	if node.ID != "n-1" || node.VersionID != "v-1" || node.Size != 5 || node.ChunkCount != 1 || !newNode ||
+		node.ParentID() != "d-1" || !node.ModTime().Equal(mtime) ||
+		!node.CreatedAt().Equal(time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)) {
+		t.Errorf("node = %+v (new %v), want what a listing would report", node, newNode)
+	}
+}
+
+// The fallback cleans up after itself, and a node already gone is no error.
+func TestUploadSmallFile_FallbackDiscardsOnFailure(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	srv := chunkedRoutes(t, &calls, http.StatusRequestEntityTooLarge, http.StatusInternalServerError)
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+
+	_, _, err = UploadSmallFile(context.Background(), newExportTestClient(srv), "dr1", nil,
+		"notes.txt", []byte("hello"), sess)
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v, want the chunk failure", err)
+	}
+	if last := calls[len(calls)-1]; last != "DELETE /dataroom/node/n-1" {
+		t.Errorf("requests = %v, want the node deleted last", calls)
+	}
+	if err := DiscardFailedUpload(newExportTestClient(srv), "n-1", "", true); err != nil {
+		t.Errorf("DiscardFailedUpload of a node already gone = %v, want nil", err)
+	}
+	if err := DiscardFailedUpload(newExportTestClient(srv), "n-1", "v-1", false); !errors.Is(err, api.ErrNotFound) {
+		t.Errorf("DiscardFailedUpload of a version = %v, want the 404", err)
+	}
+}
+
+// Another refusal of the single request is not retried the other way.
+func TestUploadSmallFile_OnlyA413FallsBack(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	srv := chunkedRoutes(t, &calls, http.StatusBadRequest, http.StatusCreated)
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+	_, _, err = UploadSmallFile(context.Background(), newExportTestClient(srv), "dr1", nil, "a", []byte("x"), sess)
+	if err == nil {
+		t.Fatal("the upload succeeded")
+	}
+	if len(calls) != 1 {
+		t.Errorf("requests = %v, want the single request alone", calls)
+	}
+}
+
+// dataroom cp sends a file above SmallUploadMaxSize, more than a chunk, as a
+// version and its chunks.
+func TestUploadToDataroom_AboveTheSingleRequestLimitIsChunked(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	srv := chunkedRoutes(t, &calls, http.StatusInternalServerError, http.StatusCreated)
+	sess := &DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()}
+	path := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(path, make([]byte, SmallUploadMaxSize+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := UploadToDataroomWithSession(context.Background(), newExportTestClient(srv), "dr1", "/",
+		[]string{path}, sess, nil); err != nil {
+		t.Fatalf("UploadToDataroomWithSession: %v", err)
+	}
+	want := []string{
+		"POST /dataroom/dr1/node",
+		"POST /dataroom/node/n-1/version",
+		"POST /dataroom/node/version/v-1/chunk/0",
+		"POST /dataroom/node/version/v-1/chunk/1",
+	}
+	slices.Sort(calls[2:]) // the chunks are sent in parallel
+	if !slices.Equal(calls, want) {
+		t.Errorf("requests = %v, want %v", calls, want)
+	}
+}
+
+// dataroom cp (and the MCP upload tool) send a small file (at most
+// SmallUploadMaxSize) in a single request instead of node, version and chunk.
 func TestUploadToDataroom_SmallFileIsOneRequest(t *testing.T) {
 	identity, err := crypto.GenerateKeyPair()
 	if err != nil {

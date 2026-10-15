@@ -6,7 +6,14 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"golang.org/x/term"
 )
+
+// stderrIsTerminal reports whether stderr is a terminal; a variable for tests.
+var stderrIsTerminal = func() bool {
+	return term.IsTerminal(int(os.Stderr.Fd())) //nolint:gosec // a file descriptor fits an int
+}
 
 var frames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -45,9 +52,14 @@ func NewSpinner(label ...string) *Spinner {
 }
 
 // Start begins animating the spinner in a background goroutine.
-// If the spinner is already running it is a no-op.
+// If the spinner is already running it is a no-op, and so is it when stderr
+// is not a terminal: a script reading stderr (an error object under --json)
+// gets no frames and no escape sequences.
 // Start may be called again after Stop to resume animation.
 func (s *Spinner) Start() {
+	if !stderrIsTerminal() {
+		return
+	}
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()

@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +46,10 @@ type Dataroom struct {
 	// nil when the dataroom draws on its owner's plan instead.
 	StorageCapacity *int64 `json:"storage_capacity,omitempty"`
 	StorageUsed     int64  `json:"storage_used"`
+	// Writable is false when the plan of the dataroom's owner refuses writes.
+	// Only the detail (GET /dataroom/{id}) reports it: nil in the list, and on
+	// an API that predates it. Read it through CanWrite.
+	Writable *bool `json:"writable,omitempty"`
 }
 
 // DataroomLabel is the public shape of an organization label.
@@ -52,6 +58,15 @@ type DataroomLabel struct {
 	Name        string  `json:"name"`
 	Color       string  `json:"color"`
 	Description *string `json:"description"`
+}
+
+// RoleViewer is the role that may read a dataroom and change nothing in it.
+const RoleViewer = "viewer"
+
+// CanWrite reports whether the owner's plan allows writes: true unless the
+// API says otherwise, so an API that does not tell refuses nothing.
+func (d *Dataroom) CanWrite() bool {
+	return d.Writable == nil || *d.Writable
 }
 
 // Versioning reports whether the dataroom keeps every version of a file.
@@ -293,7 +308,10 @@ func (m NodeMIME) formFields(fields []formField) []formField {
 	return fields
 }
 
-// Stable refusal codes of the MIME table (HTTPError.Detail).
+// Refusal codes of the MIME table as an API without X-Error-Code put them in
+// HTTPError.Detail: the fallback of CodeMimeTypeUnknown / CodeMimeTypesLimit,
+// read only when the refusal carries no code (the new API no longer puts
+// them in the detail).
 const (
 	// DetailMimeTypeUnknown (422): the hash is not in the table and no
 	// ciphertext came with it; resend with NameEnc.
@@ -591,16 +609,58 @@ func (c *Client) CreateDataroomNode(ctx context.Context, dataroomID string, p No
 	return &result, nil
 }
 
+// SymlinkCreate describes a symbolic link to create
+// (POST /dataroom/{id}/node/symlink).
+type SymlinkCreate struct {
+	ParentID *string // nil for the dataroom root
+	NameEnc  string
+	NameHash string
+	// TargetEnc is the target as the client wrote it, armored AGE for the
+	// session key: the server never reads it.
+	TargetEnc string
+}
+
+// CreateDataroomSymlink creates a symbolic link node and returns it as
+// stored (201). The access mode is left to the server (0777, as lstat reports
+// a link on Linux). 409 when the name is taken in the folder, 404 when the
+// parent is missing, 403 when the user may not create there.
+func (c *Client) CreateDataroomSymlink(ctx context.Context, dataroomID string, p SymlinkCreate) (*DataroomNode, error) {
+	data, err := json.Marshal(map[string]any{
+		"name_enc":   p.NameEnc,
+		"name_hash":  p.NameHash,
+		"parent_id":  p.ParentID,
+		"target_enc": p.TargetEnc,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result DataroomNode
+	if err := c.Post(ctx, "/dataroom/"+dataroomID+"/node/symlink", bytes.NewReader(data), &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 // NodeUpdate describes a change to a node (PUT /dataroom/node/{id}). A field
 // left nil is not sent, and the API leaves it as it is; NameEnc and NameHash
 // go together. Moving to the root is an explicit null parent_id, hence
 // SetParent: a nil ParentID with SetParent false means "do not move".
+//
+// Replace asks the API to replace a live file holding the target name, in the
+// transaction of the rename: the file is deleted with its versions and the
+// node takes its name. A folder holding the name answers 409
+// REPLACE_TARGET_IS_FOLDER ("Cannot replace a folder" from an API without
+// codes), a file the caller may not delete 403 REPLACE_FORBIDDEN.
+// It is sent only when true: an API without the field refuses it (422) or,
+// older still, ignores it.
 type NodeUpdate struct {
 	NameEnc    *string
 	NameHash   *string
 	ParentID   *string
 	SetParent  bool
 	AccessMode *string
+	Replace    bool
 }
 
 // UpdateDataroomNode renames, moves or chmods a node.
@@ -617,6 +677,9 @@ func (c *Client) UpdateDataroomNode(ctx context.Context, nodeID string, u NodeUp
 	}
 	if u.AccessMode != nil {
 		body["access_mode"] = *u.AccessMode
+	}
+	if u.Replace {
+		body["replace"] = true
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -761,7 +824,47 @@ func (c *Client) UploadDataroomChunk(ctx context.Context, versionID string, chun
 
 // DownloadDataroomChunk downloads a single encrypted chunk from a node version.
 func (c *Client) DownloadDataroomChunk(ctx context.Context, versionID string, chunkID int) ([]byte, error) {
+	return c.DownloadDataroomChunkLimit(ctx, versionID, chunkID, 0)
+}
+
+// DownloadDataroomChunkLimit is DownloadDataroomChunk for a caller that knows
+// how large an encrypted chunk may be: a chunk of more than limit bytes is
+// refused with ErrChunkTooLarge, before its body is read when the response
+// announces its length, and no more than limit bytes are ever held. A limit
+// of zero or less is no limit.
+func (c *Client) DownloadDataroomChunkLimit(
+	ctx context.Context, versionID string, chunkID int, limit int64,
+) ([]byte, error) {
 	path := fmt.Sprintf("/dataroom/node/version/%s/chunk/%d", versionID, chunkID)
 
-	return c.getChunk(ctx, path)
+	return c.getChunk(ctx, path, limit)
+}
+
+// DataroomChunkEncryptedSize returns the size in bytes of a chunk as stored,
+// that is encrypted, without downloading it: a HEAD on the chunk route, whose
+// Content-Length is that size. The API reads it from the object store at
+// every call and counts the call in its rate limit, and a version never
+// changes: callers keep the answer.
+//
+// A 404 (ErrNotFound) is a version the API does not know or a chunk the store
+// does not hold, and is not retried as a download is; a 410 (ErrGone) a
+// version pending deletion. An API that predates the route answers 405, and
+// the error then matches ErrNoChunkSize, as does a 2xx without a usable
+// Content-Length; behind some proxies such an API answers 404, which nothing
+// here tells from a missing chunk.
+func (c *Client) DataroomChunkEncryptedSize(ctx context.Context, versionID string, chunkID int) (int64, error) {
+	path := fmt.Sprintf("/dataroom/node/version/%s/chunk/%d", versionID, chunkID)
+	size, err := c.headContentLength(ctx, path)
+	var httpErr *HTTPError
+	switch {
+	case errors.As(err, &httpErr) &&
+		(httpErr.Status == http.StatusMethodNotAllowed || httpErr.Status == http.StatusNotImplemented):
+		return 0, fmt.Errorf("%w: %w", ErrNoChunkSize, err)
+	case err != nil:
+		return 0, err
+	case size <= 0:
+		return 0, fmt.Errorf("%w: Content-Length %d", ErrNoChunkSize, size)
+	}
+
+	return size, nil
 }

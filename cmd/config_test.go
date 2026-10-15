@@ -27,6 +27,12 @@ func isolateConfig(t *testing.T) {
 		cfgFile = ""
 		configFileLoaded = ""
 		configFileErr = nil
+		// Variables an environment file injected are not registered with
+		// t.Setenv: take them back here.
+		config.UnloadEnvFile()
+		envFileFlag = ""
+		envFileLoaded = nil
+		envFileErr = nil
 	}
 	reset()
 	t.Cleanup(reset)
@@ -36,12 +42,20 @@ func TestConfigEntries_MasksSecrets(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv("RETYC_ADMIN_API_KEY", "ryc_supersecret")
 	t.Setenv("RETYC_API_BASE_URL", "https://api.env.example")
+	t.Setenv("RETYC_CACHE_REDIS_URL", "rediss://user:supersecret@redis.example:6380/1")
 	config.SetDefaults()
 
 	entries := configEntries()
 
 	var sawKey, sawURL bool
 	for _, e := range entries {
+		// The whole URL is masked, not its password alone.
+		if strings.Contains(e.Value, "redis.example") {
+			t.Fatalf("entry %q shows the Redis URL", e.Key)
+		}
+		if e.Key == "cache.redis.url" && (!e.Secret || e.Value == "") {
+			t.Errorf("cache.redis.url = %+v, want a masked secret", e)
+		}
 		if strings.Contains(e.Value, "supersecret") {
 			t.Fatalf("entry %q leaked the secret value", e.Key)
 		}

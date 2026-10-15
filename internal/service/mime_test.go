@@ -26,12 +26,18 @@ type mimeAPI struct {
 	identity *age.HybridIdentity
 	salt     string
 
-	mu       sync.Mutex
-	legacy   bool // answer 404 on the MIME table route
-	limit    int  // 400 mime_types_limit past this many rows (0: unbounded)
-	rows     []api.DataroomMimeType
-	nodes    []api.DataroomNodeItem // listed at the root
-	requests []string               // "METHOD path"
+	mu     sync.Mutex
+	legacy bool // answer 404 on the MIME table route
+	limit  int  // 400 mime_types_limit past this many rows (0: unbounded)
+	// codes answers the MIME refusals as the API with X-Error-Code does: the
+	// code in the header, a human detail in the body.
+	codes bool
+	// tableRefusal, when set, is the X-Error-Code of a 404 on the MIME table
+	// route (a new API refusing the request).
+	tableRefusal string
+	rows         []api.DataroomMimeType
+	nodes        []api.DataroomNodeItem // listed at the root
+	requests     []string               // "METHOD path"
 	// forms records the decoded fields of every write, in order.
 	forms []map[string]string
 }
@@ -64,6 +70,12 @@ func (a *mimeAPI) handle(w http.ResponseWriter, r *http.Request) {
 	a.requests = append(a.requests, r.Method+" "+r.URL.Path)
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/mime-types":
+		if a.tableRefusal != "" {
+			w.Header().Set(api.ErrorCodeHeader, a.tableRefusal)
+			http.Error(w, `{"detail":"The dataroom does not exist"}`, http.StatusNotFound)
+
+			return
+		}
 		if a.legacy {
 			http.Error(w, `{"detail":"Not Found"}`, http.StatusNotFound)
 
@@ -129,12 +141,12 @@ func (a *mimeAPI) write(w http.ResponseWriter, form map[string]string, path stri
 		}
 		if mimeID == nil {
 			if form["mime_name_enc"] == "" {
-				http.Error(w, `{"detail":"mime_type_unknown"}`, http.StatusUnprocessableEntity)
+				a.refuse(w, http.StatusUnprocessableEntity, api.CodeMimeTypeUnknown, api.DetailMimeTypeUnknown)
 
 				return
 			}
 			if a.limit > 0 && len(a.rows) >= a.limit {
-				http.Error(w, `{"detail":"mime_types_limit"}`, http.StatusBadRequest)
+				a.refuse(w, http.StatusBadRequest, api.CodeMimeTypesLimit, api.DetailMimeTypesLimit)
 
 				return
 			}
@@ -162,6 +174,16 @@ func (a *mimeAPI) write(w http.ResponseWriter, form map[string]string, path stri
 	default:
 		_ = json.NewEncoder(w).Encode(api.DataroomNode{ID: "n-1", Type: api.NodeTypeFile, MimeTypeID: mimeID})
 	}
+}
+
+// refuse answers a MIME refusal: the code in X-Error-Code with a free detail
+// when a.codes is set, the former detail alone otherwise.
+func (a *mimeAPI) refuse(w http.ResponseWriter, status int, code, detail string) {
+	if a.codes {
+		w.Header().Set(api.ErrorCodeHeader, code)
+		detail = "refused for a reason told in the code"
+	}
+	http.Error(w, `{"detail":"`+detail+`"}`, status)
 }
 
 func (a *mimeAPI) server() *httptest.Server {
@@ -209,8 +231,8 @@ func TestNodesFromItems_MimeTable(t *testing.T) {
 			Version: &api.DataroomNodeVersion{ID: "v", OriginalSize: 3, ChunkCount: 1, CreatedAt: created, ClientMtime: &mtime}},
 		{Node: api.DataroomNode{ID: "b", Type: api.NodeTypeFile, NameEnc: nameEnc, TypeEnc: &legacyEnc},
 			Version: &api.DataroomNodeVersion{ID: "v2", CreatedAt: created}},
-		{Node: api.DataroomNode{ID: "c", Type: api.NodeTypeFolder, NameEnc: nameEnc, CreatedAt: created}},
-		{Node: api.DataroomNode{ID: "d", Type: api.NodeTypeFile, NameEnc: nameEnc, MimeTypeID: &later}},
+		{Node: api.DataroomNode{ID: "c", Type: api.NodeTypeFolder, NameEnc: nameEnc, CreatedAt: created, AccessMode: "0000"}},
+		{Node: api.DataroomNode{ID: "d", Type: api.NodeTypeFile, NameEnc: nameEnc, MimeTypeID: &later, AccessMode: "9z"}},
 	}
 	nodes := nodesFromItems(context.Background(), client, "dr1", items, sess)
 
@@ -218,16 +240,19 @@ func TestNodesFromItems_MimeTable(t *testing.T) {
 		typ, mime string
 		mod       time.Time
 		mode      os.FileMode
+		hasMode   bool
 	}{
-		{"file", "application/pdf", mtime, 0o640},
-		{"file", "text/plain", created, 0},
-		{"dir", "", created, 0},
-		{"file", "", time.Time{}, 0},
+		{"file", "application/pdf", mtime, 0o640, true},
+		{"file", "text/plain", created, 0, false},
+		// An explicit "0000" is a mode, an unparsable one is none.
+		{"dir", "", created, 0, true},
+		{"file", "", time.Time{}, 0, false},
 	}
 	for i, w := range want {
 		n := nodes[i]
-		if n.Type != w.typ || n.MIMEType != w.mime || !n.ModTime().Equal(w.mod) || n.Mode() != w.mode {
-			t.Errorf("node %d = %+v (mod %v, mode %v), want %+v", i, n, n.ModTime(), n.Mode(), w)
+		if n.Type != w.typ || n.MIMEType != w.mime || !n.ModTime().Equal(w.mod) || n.Mode() != w.mode ||
+			n.HasMode() != w.hasMode {
+			t.Errorf("node %d = %+v (mod %v, mode %v, has %v), want %+v", i, n, n.ModTime(), n.Mode(), n.HasMode(), w)
 		}
 	}
 	// One load, one reload for the unknown row, and no further reload when
@@ -295,12 +320,21 @@ func TestUploadSmallFile_MimeHash(t *testing.T) {
 // A hash the session believes known but the API does not (422
 // mime_type_unknown) is resent with the ciphertext; a dataroom at its limit
 // of distinct types (400 mime_types_limit) gets the legacy ciphertext.
+// Both forms of the refusals: the API's code, and the former detail of an API
+// without codes.
 func TestWithMIME_Fallbacks(t *testing.T) {
+	for _, codes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("codes=%v", codes), func(t *testing.T) { testWithMIMEFallbacks(t, codes) })
+	}
+}
+
+func testWithMIMEFallbacks(t *testing.T, codes bool) {
 	identity, err := crypto.GenerateKeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
 	fake := newMimeAPI(t, identity)
+	fake.codes = codes
 	fake.addType("application/pdf")
 	srv := fake.server()
 	client := newExportTestClient(srv)
@@ -377,6 +411,63 @@ func TestLegacyAPI_TypeEncAndListing(t *testing.T) {
 		if strings.Contains(r, "name_hash") {
 			t.Errorf("legacy API asked a hash lookup: %s", r)
 		}
+	}
+}
+
+// A refusal with a code is read by its code alone: another code whose detail
+// happens to hold a former MIME text is not a MIME refusal.
+func TestMimeRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"code unknown", &api.HTTPError{Status: 422, Code: api.CodeMimeTypeUnknown, Body: `{"detail":"x"}`},
+			api.CodeMimeTypeUnknown},
+		{"code limit", &api.HTTPError{Status: 400, Code: api.CodeMimeTypesLimit}, api.CodeMimeTypesLimit},
+		{"detail unknown", &api.HTTPError{Status: 422, Body: `{"detail":"mime_type_unknown"}`}, api.CodeMimeTypeUnknown},
+		{"detail limit", &api.HTTPError{Status: 400, Body: `{"detail":"mime_types_limit"}`}, api.CodeMimeTypesLimit},
+		{"other code, old detail", &api.HTTPError{Status: 400, Code: api.CodeVersionsLimit,
+			Body: `{"detail":"mime_types_limit"}`}, api.CodeVersionsLimit},
+		{"no code, other detail", &api.HTTPError{Status: 400, Body: `{"detail":"bad"}`}, ""},
+	} {
+		if got := mimeRefusal(fmt.Errorf("wrapped: %w", tc.err)); got != tc.want {
+			t.Errorf("%s: mimeRefusal = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if got := mimeRefusal(nil); got != "" {
+		t.Errorf("mimeRefusal(nil) = %q", got)
+	}
+}
+
+// A 404 on the MIME table that carries a code comes from the new API refusing
+// the request (DATAROOM_NOT_FOUND…), not from an API without the route: the
+// probe fails, the session is not marked legacy and the next call asks again.
+func TestMimeProbe_404WithCodeIsNotLegacy(t *testing.T) {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newMimeAPI(t, identity)
+	fake.tableRefusal = api.CodeDataroomNotFound
+	client := newExportTestClient(fake.server())
+	sess := fake.session()
+
+	supported, err := sess.SupportsNameLookup(context.Background(), client, "dr1")
+	if err == nil || api.ErrorCode(err) != api.CodeDataroomNotFound || supported {
+		t.Fatalf("SupportsNameLookup = %v, %v; want the API's refusal", supported, err)
+	}
+	if sess.mime.loaded {
+		t.Error("a refusal with a code was cached")
+	}
+	fake.mu.Lock()
+	fake.tableRefusal = ""
+	fake.mu.Unlock()
+	if supported, err := sess.SupportsNameLookup(context.Background(), client, "dr1"); err != nil || !supported {
+		t.Errorf("second probe = %v, %v; want a new API", supported, err)
+	}
+	if got := fake.count("GET /dataroom/dr1/mime-types"); got != 2 {
+		t.Errorf("probe ran %d times, want 2", got)
 	}
 }
 

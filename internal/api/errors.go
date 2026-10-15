@@ -32,3 +32,21 @@ var ErrLocked = errors.New("locked")
 // background store failed), so the version cannot be downloaded. It also
 // matches ErrNotFound.
 var ErrChunkMissing = errors.New("chunk missing on the server: the file version is incomplete or corrupted")
+
+// ErrRateLimited is matched by a 429: the API (its ingress, per source IP)
+// refused the request for coming too fast. The client retries those itself
+// (see retryTransport), so a caller only sees it once the retry budget is
+// spent, as a RateLimitError.
+var ErrRateLimited = errors.New("rate limited")
+
+// ErrChunkTooLarge is returned by a chunk download given a limit when the
+// chunk holds more bytes than it: nothing of the body is kept, and it is not
+// read at all when the response announces its length.
+var ErrChunkTooLarge = errors.New("chunk larger than the limit")
+
+// ErrNoChunkSize is returned by DataroomChunkEncryptedSize when the API
+// cannot tell the size of a chunk: it predates the route (405, 501), or what
+// it answered is no size. A 404 is not turned into it: the route answers 404
+// for a version or a chunk it does not hold, and so does an API without the
+// route behind some proxies; the caller tells the two apart (see vfs.File).
+var ErrNoChunkSize = errors.New("the API does not tell the size of a chunk")

@@ -2,8 +2,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
-	"strings"
+	"net/http"
 
 	"filippo.io/age"
 	"github.com/retyc/retyc-cli/internal/api"
@@ -38,7 +39,7 @@ func newAdminClient() (*config.Config, *api.Client, error) {
 	}
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: cfg.Admin.APIKey, TokenType: "Bearer"})
 
-	return cfg, api.New(cfg.AdminBaseURL(), cliUserAgent(), ts, insecure, debug, apiTransport()), nil
+	return cfg, api.New(cfg.AdminBaseURL(), cliUserAgent(), ts, insecure, debug, apiTransport(), apiRetry(cfg)), nil
 }
 
 // adminIdentity loads the organization AGE identity from the
@@ -58,11 +59,14 @@ func adminErrHint(err error) error {
 	if err == nil {
 		return nil
 	}
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "API error 401"):
+	var httpErr *api.HTTPError
+	if !errors.As(err, &httpErr) {
+		return err
+	}
+	switch httpErr.Status {
+	case http.StatusUnauthorized:
 		return fmt.Errorf("%w\nHint: the admin API key is invalid or revoked", err)
-	case strings.Contains(msg, "API error 403"):
+	case http.StatusForbidden:
 		return fmt.Errorf("%w\nHint: the API key lacks a required scope — check with 'retyc admin org scopes'", err)
 	}
 

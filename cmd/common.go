@@ -115,7 +115,13 @@ func newAPIClient(ctx context.Context) (*config.Config, *api.Client, error) {
 	}
 
 	return cfg, api.New(cfg.API.BaseURL, cliUserAgent(), tok, insecure, debug,
-		apiTransport(), api.WithUnsafeWrite(cfg.API.UnsafeWrite)), nil
+		apiTransport(), apiRetry(cfg), api.WithUnsafeWrite(cfg.API.UnsafeWrite)), nil
+}
+
+// apiRetry returns the client option carrying the api.retry.* budget of a
+// request the API answers 429; every api.New call site passes it.
+func apiRetry(cfg *config.Config) api.Option {
+	return api.WithRetry(cfg.API.Retry.MaxWait, cfg.API.Retry.MaxAttempts)
 }
 
 // apiTransport returns the client option every api.New call site uses:

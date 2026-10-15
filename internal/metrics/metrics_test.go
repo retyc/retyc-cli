@@ -34,8 +34,8 @@ func TestRegister_ExposesTouchedMetrics(t *testing.T) {
 	WebdavRequestDuration.WithLabelValues("PROPFIND").Observe(0.01)
 	WebdavInflight.Inc()
 	WebdavBytes.WithLabelValues("download").Add(10)
-	WebdavNodeCacheLookups.WithLabelValues("hit").Inc()
-	WebdavDataroomCacheRefreshes.Inc()
+	VFSNodeCacheLookups.WithLabelValues("hit").Inc()
+	VFSDataroomCacheRefreshes.WithLabelValues("ok").Inc()
 	APIRequests.WithLabelValues("GET", "/dataroom", "200").Inc()
 	APIRequestDuration.WithLabelValues("GET", "/dataroom").Observe(0.02)
 	TokenRefreshes.WithLabelValues("ok").Inc()
@@ -48,8 +48,8 @@ func TestRegister_ExposesTouchedMetrics(t *testing.T) {
 		"retyc_cli_webdav_request_duration_seconds",
 		"retyc_cli_webdav_inflight_requests",
 		"retyc_cli_webdav_bytes_total",
-		"retyc_cli_webdav_node_cache_lookups_total",
-		"retyc_cli_webdav_dataroom_cache_refreshes_total",
+		"retyc_cli_vfs_node_cache_lookups_total",
+		"retyc_cli_vfs_dataroom_cache_refreshes_total",
 		"retyc_cli_api_requests_total",
 		"retyc_cli_api_request_duration_seconds",
 		"retyc_cli_token_refreshes_total",

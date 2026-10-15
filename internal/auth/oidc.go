@@ -207,6 +207,52 @@ func tokenFromResponse(tr TokenResponse) *oauth2.Token {
 	return tok
 }
 
+// RefreshError is the refusal of a refresh by the identity provider, other
+// than invalid_grant (which is ErrNoRefreshToken): an HTTP error status, or
+// an OAuth error code in the answer.
+type RefreshError struct {
+	// Status is the HTTP status of the answer.
+	Status int
+	// Code and Description are the OAuth error of the answer, empty when it
+	// carried none (a gateway answering for the provider).
+	Code, Description string
+}
+
+func (e *RefreshError) Error() string {
+	if e.Code == "" {
+		return fmt.Sprintf("refresh error: the token endpoint answered %d", e.Status)
+	}
+
+	return fmt.Sprintf("refresh error %s: %s", e.Code, e.Description)
+}
+
+// transient reports whether the same refresh may succeed later: the provider
+// or a gateway before it is failing or throttling, not refusing the login.
+func (e *RefreshError) transient() bool {
+	switch {
+	case e.Status >= http.StatusInternalServerError,
+		e.Status == http.StatusRequestTimeout, e.Status == http.StatusTooManyRequests,
+		e.Code == "temporarily_unavailable", e.Code == "server_error":
+		return true
+	}
+
+	return false
+}
+
+// IsPermanent reports whether err, the failure to obtain a valid token, will
+// repeat until the user acts: no stored token, no refresh token or one the
+// identity provider no longer accepts, or any other refusal by the provider
+// (a 4xx other than 408 and 429). Everything else may be gone at the next
+// attempt: a network error, a timeout, a 5xx, an answer that cannot be read.
+func IsPermanent(err error) bool {
+	if errors.Is(err, ErrNoToken) || errors.Is(err, ErrNoRefreshToken) {
+		return true
+	}
+	var refused *RefreshError
+
+	return errors.As(err, &refused) && !refused.transient()
+}
+
 // Refresh exchanges a refresh token for a new set of tokens.
 // If the server does not return a new refresh token, the original one is
 // preserved so that subsequent refreshes remain possible.
@@ -237,17 +283,18 @@ func Refresh(
 	}
 
 	var tr TokenResponse
-	if err := json.Unmarshal(body, &tr); err != nil {
-		return nil, fmt.Errorf("decoding refresh response (status %d): %w — body: %s", resp.StatusCode, err, string(body))
+	decodeErr := json.Unmarshal(body, &tr)
+	if tr.Error == "invalid_grant" {
+		// Refresh token is expired or revoked — caller must re-authenticate.
+		return nil, fmt.Errorf("refresh token invalid or expired (%s): %w", tr.ErrorDesc, ErrNoRefreshToken)
 	}
-
-	if tr.Error != "" {
-		if tr.Error == "invalid_grant" {
-			// Refresh token is expired or revoked — caller must re-authenticate.
-			return nil, fmt.Errorf("refresh token invalid or expired (%s): %w", tr.ErrorDesc, ErrNoRefreshToken)
-		}
-
-		return nil, fmt.Errorf("refresh error %s: %s", tr.Error, tr.ErrorDesc)
+	if tr.Error != "" || resp.StatusCode >= http.StatusBadRequest {
+		// The body of an answer that is not JSON (a gateway page) is left out.
+		return nil, &RefreshError{Status: resp.StatusCode, Code: tr.Error, Description: tr.ErrorDesc}
+	}
+	if decodeErr != nil {
+		return nil, fmt.Errorf("decoding refresh response (status %d): %w — body: %s",
+			resp.StatusCode, decodeErr, string(body))
 	}
 
 	tok := tokenFromResponse(tr)
@@ -352,6 +399,23 @@ func (s *RefreshingTokenSource) Token() (*oauth2.Token, error) {
 	s.tok = newTok
 
 	return newTok, nil
+}
+
+// Expire makes the next call to Token refresh the access token even though
+// it has not reached its expiry: for a caller the API has just answered 401,
+// which is how a login revoked on the server shows before the access token
+// runs out. A source without a refresh token is left as it is: it could only
+// fail from then on.
+func (s *RefreshingTokenSource) Expire() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.tok.RefreshToken == "" {
+		return
+	}
+	expired := *s.tok
+	expired.Expiry = time.Now().Add(-time.Minute)
+	s.tok = &expired
 }
 
 // GetValidToken returns a valid token for the current session.
