@@ -74,7 +74,7 @@ func newDeleteQueue(d *driver, concurrency int) *deleteQueue {
 // whose path is path. The node is already hidden (vfs.FS.HideNode).
 func (q *deleteQueue) add(dir *dirNode, path, name string, node vfs.Node) {
 	j := &deleteJob{
-		key:    deleteKey{dataroomID: dir.dataroomID, folderID: dir.seed.ID, name: name},
+		key:    deleteKey{dataroomID: dir.dataroomID, folderID: dir.nodeID, name: name},
 		dir:    dir,
 		path:   path,
 		nodeID: node.ID,
@@ -177,7 +177,7 @@ func (q *deleteQueue) waitName(ctx context.Context, dir *dirNode, name string) e
 	if q == nil || dir == nil {
 		return nil
 	}
-	key := deleteKey{dataroomID: dir.dataroomID, folderID: dir.seed.ID, name: name}
+	key := deleteKey{dataroomID: dir.dataroomID, folderID: dir.nodeID, name: name}
 
 	return q.wait(ctx, func(j *deleteJob) bool { return j.key == key })
 }
@@ -200,7 +200,7 @@ func (q *deleteQueue) waitFolder(ctx context.Context, dir *dirNode) error {
 	}
 
 	return q.wait(ctx, func(j *deleteJob) bool {
-		return j.key.dataroomID == dir.dataroomID && j.key.folderID == dir.seed.ID
+		return j.key.dataroomID == dir.dataroomID && j.key.folderID == dir.nodeID
 	})
 }
 
@@ -237,7 +237,7 @@ func (q *deleteQueue) wait(ctx context.Context, match func(*deleteJob) bool) err
 // sp is the spool of the file when it is being written, which is unlinked as
 // in Unlink.
 func (n *dirNode) unlinkLater(ctx context.Context, name string, sp *openSpool) (handled bool, errno syscall.Errno) {
-	ctx, span := startSpan(ctx, "unlink", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "unlink", n.dataroomID, n.nodeID)
 	var (
 		node vfs.Node
 		dir  string

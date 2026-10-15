@@ -172,7 +172,6 @@ func describeNode(r *reader) (*NodeDescription, bool) {
 		Name:       n.Name,
 		Target:     n.Target,
 		MIMEType:   n.MIMEType,
-		MIMETypeID: n.Sealed.MIMETypeID,
 		VersionID:  n.VersionID,
 		ChunkCount: n.ChunkCount,
 		Size:       n.Size,
@@ -185,6 +184,7 @@ func describeNode(r *reader) (*NodeDescription, bool) {
 		d.Mode = fmt.Sprintf("0%03o", uint64(n.Mode))
 	}
 	if sealed {
+		d.MIMETypeID = n.Sealed.MIMETypeID
 		d.Name, d.Target = payloadSize(n.Sealed.Name), payloadSize(n.Sealed.Target)
 		d.MIMEType = payloadSize(n.Sealed.MIMEType)
 	}

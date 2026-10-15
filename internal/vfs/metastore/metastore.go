@@ -67,13 +67,16 @@ type Node struct {
 	Target string
 	// Sealed is what the API sent in place of the decrypted fields, kept only
 	// when the caller asked for it (vfs.Options.KeepSealed): a store that must
-	// not hold a decrypted name stores it instead of them.
-	Sealed Sealed
+	// not hold a decrypted name stores it instead of them. Nil when the node
+	// has no sealed form: a pointer, because most nodes have none and a node
+	// is held several times over (a listing, the inodes of a mount). Copies
+	// of a node share it: it is replaced, never modified.
+	Sealed *Sealed
 }
 
 // Sealed holds the encrypted fields of a node exactly as the API answered
 // them: nothing here is encrypted by this process for a store. A node whose
-// Sealed.Name is empty has no sealed form.
+// Sealed is nil, or whose Sealed.Name is empty, has no sealed form.
 //
 // Name, Target and MIMEType each hold one AGE payload for the dataroom session
 // key, in one of two forms: armored, the text the API sends
@@ -150,7 +153,7 @@ func SealedLeft(ctx context.Context) bool {
 // (see LeaveSealed): its Name, Target and MIMEType are still to be filled by
 // Codec.Open. A node always has a name once opened.
 func (n *Node) Unopened() bool {
-	return n.Name == "" && n.Sealed.Name != ""
+	return n.Name == "" && n.Sealed != nil && n.Sealed.Name != ""
 }
 
 // HasMode tells that the API stores a mode for n, an explicit 0 included:

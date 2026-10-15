@@ -220,7 +220,7 @@ func TestCodec_NeedsTheSessionAndNeverResolvesIt(t *testing.T) {
 	if hash, ok := store.codec.Hash("dr1", "name"); ok || hash != "" {
 		t.Errorf("Hash without a session = (%q, %v), want ok false", hash, ok)
 	}
-	if err := store.codec.Open(context.Background(), "dr1", &Node{Sealed: metastore.Sealed{Name: "x"}}); err == nil {
+	if err := store.codec.Open(context.Background(), "dr1", &Node{Sealed: &metastore.Sealed{Name: "x"}}); err == nil {
 		t.Error("Open without a session succeeded")
 	}
 	if resolved != 0 {
@@ -255,11 +255,11 @@ func TestCodec_NeedsTheSessionAndNeverResolvesIt(t *testing.T) {
 
 		return enc
 	}
-	n := Node{ID: "n1", Type: TypeSymlink, Sealed: metastore.Sealed{Name: seal("link"), Target: seal("../t")}}
+	n := Node{ID: "n1", Type: TypeSymlink, Sealed: &metastore.Sealed{Name: seal("link"), Target: seal("../t")}}
 	if err := store.codec.Open(context.Background(), "dr1", &n); err != nil || n.Name != "link" || n.Target != "../t" {
 		t.Errorf("Open = %v, node %q -> %q, want link -> ../t", err, n.Name, n.Target)
 	}
-	n = Node{ID: "n2", Type: TypeFile, Sealed: metastore.Sealed{Name: seal("f.txt"), MIMEType: seal("text/plain")}}
+	n = Node{ID: "n2", Type: TypeFile, Sealed: &metastore.Sealed{Name: seal("f.txt"), MIMEType: seal("text/plain")}}
 	err = store.codec.Open(context.Background(), "dr1", &n)
 	if err != nil || n.Name != "f.txt" || n.MIMEType != "text/plain" {
 		t.Errorf("Open = %v, node %q (%q), want f.txt (text/plain)", err, n.Name, n.MIMEType)
@@ -291,7 +291,7 @@ func TestKeepSealed(t *testing.T) {
 		listed, _ := FindNode(nodes, "top.txt")
 		for label, n := range map[string]Node{"lookup by name": byName, "listing": listed} {
 			if !keep {
-				if n.Sealed != (metastore.Sealed{}) {
+				if n.Sealed != nil {
 					t.Errorf("%s: a node carries its sealed form without KeepSealed", label)
 				}
 
@@ -308,7 +308,7 @@ func TestKeepSealed(t *testing.T) {
 
 		// A rename leaves the node without the name it was sealed under.
 		fs.move("dr1", "/", "top.txt", "/", "renamed.txt", "")
-		if n, err := fs.Lookup(ctx, "dr1", "/", "renamed.txt"); err != nil || n.Sealed != (metastore.Sealed{}) {
+		if n, err := fs.Lookup(ctx, "dr1", "/", "renamed.txt"); err != nil || n.Sealed != nil {
 			t.Errorf("after a rename: (%+v, %v), want the node without a sealed form", n.Sealed, err)
 		}
 	}

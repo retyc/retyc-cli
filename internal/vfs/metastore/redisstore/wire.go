@@ -231,15 +231,19 @@ func (s *Store) appendNode(b []byte, n *metastore.Node) ([]byte, bool) {
 	}
 	var name, target, mime string
 	var flags byte
+	var sealed metastore.Sealed
+	if n.Sealed != nil {
+		sealed = *n.Sealed
+	}
 	if s.opts.HighConfidentiality {
 		flags |= flagSealed
-		if name, ok = unarmor(n.Sealed.Name); !ok || name == "" {
+		if name, ok = unarmor(sealed.Name); !ok || name == "" {
 			return nil, false
 		}
-		if target, ok = unarmor(n.Sealed.Target); !ok {
+		if target, ok = unarmor(sealed.Target); !ok {
 			return nil, false
 		}
-		if mime, ok = unarmor(n.Sealed.MIMEType); !ok {
+		if mime, ok = unarmor(sealed.MIMEType); !ok {
 			mime = ""
 		}
 	} else {
@@ -273,7 +277,7 @@ func (s *Store) appendNode(b []byte, n *metastore.Node) ([]byte, bool) {
 		b = appendTime(b, n.CreatedAt)
 	}
 	if flags&flagSealed != 0 {
-		b = appendIdent(b, n.Sealed.MIMETypeID)
+		b = appendIdent(b, sealed.MIMETypeID)
 	}
 	b = appendString(b, name)
 	b = appendString(b, target)
@@ -460,12 +464,13 @@ func (r *reader) node() (n metastore.Node, sealed, ok bool) {
 	}
 	if sealed {
 		// The payloads are not copied: they are most of the value.
-		n.Sealed.MIMETypeID = r.ident()
-		n.Sealed.Name, n.Sealed.Target, n.Sealed.MIMEType = r.take(r.uvarint()), r.take(r.uvarint()), r.take(r.uvarint())
+		s := &metastore.Sealed{MIMETypeID: r.ident()}
+		s.Name, s.Target, s.MIMEType = r.take(r.uvarint()), r.take(r.uvarint()), r.take(r.uvarint())
+		n.Sealed = s
 	} else {
 		n.Name, n.Target, n.MIMEType = r.str(), r.str(), r.str()
 	}
-	if r.bad || (n.Name == "" && n.Sealed.Name == "") {
+	if r.bad || (n.Name == "" && (n.Sealed == nil || n.Sealed.Name == "")) {
 		return metastore.Node{}, false, false
 	}
 

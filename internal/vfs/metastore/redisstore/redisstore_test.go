@@ -1,6 +1,7 @@
 package redisstore
 
 import (
+	"reflect"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -84,9 +85,12 @@ func unseal(v string) (string, bool) {
 
 // seal returns n with the sealed form of its decrypted fields.
 func seal(n metastore.Node) metastore.Node {
-	n.Sealed.Name = sealed(n.Name)
-	n.Sealed.Target = sealed(n.Target)
-	n.Sealed.MIMEType = sealed(n.MIMEType)
+	var s metastore.Sealed
+	if n.Sealed != nil {
+		s = *n.Sealed
+	}
+	s.Name, s.Target, s.MIMEType = sealed(n.Name), sealed(n.Target), sealed(n.MIMEType)
+	n.Sealed = &s
 
 	return n
 }
@@ -281,7 +285,7 @@ func TestListing_Conformance(t *testing.T) {
 	}))
 	l, ok, err := s.GetListing(ctx, lk("/a"))
 	must(t, err)
-	if !ok || len(l.Nodes) != 3 || l.Nodes[0] != dir || l.Nodes[1] != link || l.Nodes[2] != file("zz") {
+	if !ok || len(l.Nodes) != 3 || !reflect.DeepEqual(l.Nodes, []metastore.Node{dir, link, file("zz")}) {
 		t.Fatalf("listing read back: ok=%v %+v", ok, l)
 	}
 	if l.ETag != `W/"etag1"` {
@@ -357,7 +361,7 @@ func TestListing_Large(t *testing.T) {
 		t.Fatalf("large listing: %d nodes, ok=%v", len(got), ok)
 	}
 	for i := range got {
-		if got[i] != nodes[i] {
+		if !reflect.DeepEqual(got[i], nodes[i]) {
 			t.Fatalf("node %d: %+v, want %+v", i, got[i], nodes[i])
 		}
 	}
@@ -659,15 +663,15 @@ func TestHighConfidentiality(t *testing.T) {
 	// Both configurations read the sealed values.
 	for _, s := range []*Store{clear, high} {
 		nodes, ok := held(t, s, dir)
-		if !ok || len(nodes) != 2 || nodes[0] != link || nodes[1] != doc {
+		if !ok || len(nodes) != 2 || !reflect.DeepEqual(nodes, []metastore.Node{link, doc}) {
 			t.Fatalf("sealed listing read back: %+v ok=%v", nodes, ok)
 		}
 		n, _, isHeld, err := s.GetNode(ctx, lk(dir), doc.Name)
-		if err != nil || !isHeld || n == nil || *n != doc {
+		if err != nil || !isHeld || n == nil || !reflect.DeepEqual(*n, doc) {
 			t.Fatalf("sealed node read back: %+v held=%v err=%v", n, isHeld, err)
 		}
 		en, ok, err := s.GetEntry(ctx, ek(dir, doc.Name))
-		if err != nil || !ok || en.Node == nil || *en.Node != doc {
+		if err != nil || !ok || en.Node == nil || !reflect.DeepEqual(*en.Node, doc) {
 			t.Fatalf("sealed entry read back: %+v ok=%v err=%v", en, ok, err)
 		}
 		if en, ok, _ := s.GetEntry(ctx, ek(dir, "missing-name")); !ok || en.Node != nil {

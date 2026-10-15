@@ -119,9 +119,9 @@ func TestSealed_StoredBinary(t *testing.T) {
 	const dir = "/d"
 
 	doc := metastore.Node{ID: "id-doc", Name: "secret-report.pdf", Type: metastore.TypeFile, Size: 7}
-	doc.Sealed = metastore.Sealed{Name: armored(doc.Name), MIMEType: armored("application/x-secret-mime")}
+	doc.Sealed = &metastore.Sealed{Name: armored(doc.Name), MIMEType: armored("application/x-secret-mime")}
 	link := metastore.Node{ID: "id-link", Name: "secret-link", Type: metastore.TypeSymlink}
-	link.Sealed = metastore.Sealed{
+	link.Sealed = &metastore.Sealed{
 		Name: armored(link.Name), Target: armored("/secret-target"), MIMEType: armored("inode/x-secret-kind"),
 		MIMETypeID: "0b1f0c5e-0000-4000-8000-000000000001",
 	}
@@ -232,7 +232,7 @@ func TestSealed_StoredBinary(t *testing.T) {
 	fc, _ := clear.folder(dr, "/c")
 	dh, _ := fc.hash(doc.Name)
 	v := e.raw.HGet(ctx, fc.ls, nodePrefix+dh).Val()
-	if n, sealed, ok := decodeNode(v); !ok || sealed || n.Name != doc.Name || n.Sealed != (metastore.Sealed{}) ||
+	if n, sealed, ok := decodeNode(v); !ok || sealed || n.Name != doc.Name || n.Sealed != nil ||
 		strings.Contains(v, "age-encryption.org") || len(v) > 64 {
 		t.Errorf("a clear node holds more than its fields: %q", v)
 	}
@@ -249,7 +249,7 @@ func TestSealed_InvalidArmor(t *testing.T) {
 	ctx := context.Background()
 	const dir = "/d"
 	good := metastore.Node{ID: "id-good", Name: "good", Type: metastore.TypeFile}
-	good.Sealed.Name = armored(good.Name)
+	good.Sealed = &metastore.Sealed{Name: armored(good.Name)}
 	broken := armor.Header + "\nnot base64 !!!\n" + armor.Footer + "\n"
 	cut := good.Sealed.Name[:len(good.Sealed.Name)/2]
 	empty := armor.Header + "\n" + armor.Footer + "\n"
@@ -260,7 +260,7 @@ func TestSealed_InvalidArmor(t *testing.T) {
 		"empty name":    {Name: empty},
 		"broken target": {Name: armored("victim"), Target: broken},
 	} {
-		victim := metastore.Node{ID: "id-victim", Name: "victim", Type: metastore.TypeSymlink, Sealed: bad}
+		victim := metastore.Node{ID: "id-victim", Name: "victim", Type: metastore.TypeSymlink, Sealed: &bad}
 
 		put(t, high, dir, good)
 		before := gen(t, high, dir)
@@ -288,10 +288,11 @@ func TestSealed_InvalidArmor(t *testing.T) {
 
 	// The MIME type is cosmetic: a type_enc that does not decode is left out.
 	odd := good
-	odd.Sealed.MIMEType = broken
+	odd.Sealed = &metastore.Sealed{Name: good.Sealed.Name, MIMEType: broken}
 	put(t, high, dir, odd)
 	nodes, ok := held(t, high, dir)
-	if !ok || len(nodes) != 1 || nodes[0].Name != "good" || nodes[0].Sealed.MIMEType != "" {
+	if !ok || len(nodes) != 1 || nodes[0].Name != "good" || nodes[0].Sealed == nil ||
+		nodes[0].Sealed.MIMEType != "" {
 		t.Errorf("node with a broken type_enc: %+v ok=%v", nodes, ok)
 	}
 	if strings.Contains(e.dump(), "not base64") {
@@ -333,9 +334,9 @@ func TestSealed_InconsistentValues_Absent(t *testing.T) {
 	ctx := context.Background()
 	const dir = "/d"
 	x := metastore.Node{ID: "id-x", Name: "x", Type: metastore.TypeSymlink}
-	x.Sealed = metastore.Sealed{Name: armored("x"), Target: armored("/t"), MIMEType: armored("text/plain")}
+	x.Sealed = &metastore.Sealed{Name: armored("x"), Target: armored("/t"), MIMEType: armored("text/plain")}
 	y := metastore.Node{ID: "id-y", Name: "y", Type: metastore.TypeFile}
-	y.Sealed.Name = armored("y")
+	y.Sealed = &metastore.Sealed{Name: armored("y")}
 	f, _ := s.folder(dr, dir)
 	xh, _ := f.hash("x")
 
@@ -454,9 +455,13 @@ func TestDecodeNode_Lengths(t *testing.T) {
 		{1 << 63, 2, 3, false, metastore.Sealed{}},
 	} {
 		n, sealed, ok := decodeNode(rawSealed("i", [3]uint64{c.name, c.target, c.mime}, payloads))
-		if ok != c.ok || sealed != c.ok || n.Sealed != c.want {
+		var got metastore.Sealed
+		if n.Sealed != nil {
+			got = *n.Sealed
+		}
+		if ok != c.ok || sealed != c.ok || got != c.want {
 			t.Errorf("lengths (%d, %d, %d): ok=%v sealed=%v %+v, want %v %+v",
-				c.name, c.target, c.mime, ok, sealed, n.Sealed, c.ok, c.want)
+				c.name, c.target, c.mime, ok, sealed, got, c.ok, c.want)
 		}
 	}
 }

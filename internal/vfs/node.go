@@ -62,9 +62,8 @@ func NodeFromInfo(n service.DataroomNodeInfo) Node {
 // when the route that produced it answers them.
 func (fs *FS) nodeFromInfo(n service.DataroomNodeInfo) Node {
 	node := NodeFromInfo(n)
-	if fs.opts.KeepSealed {
-		sealed := n.Sealed()
-		node.Sealed = metastore.Sealed{
+	if sealed := n.Sealed(); fs.opts.KeepSealed && sealed.NameEnc != "" {
+		node.Sealed = &metastore.Sealed{
 			Name: sealed.NameEnc, Target: sealed.TargetEnc, MIMETypeID: sealed.MIMETypeID, MIMEType: sealed.TypeEnc,
 		}
 	}

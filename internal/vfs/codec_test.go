@@ -155,7 +155,7 @@ func TestCodec_OpenRemembersWhatItDecrypted(t *testing.T) {
 	fs.SeedSession("dr1", &service.DataroomSession{Identity: identity, PublicKey: pub})
 	c := codec{fs: fs}
 	ctx := context.Background()
-	link := metastore.Sealed{Name: seal("link"), Target: seal("../target")}
+	link := &metastore.Sealed{Name: seal("link"), Target: seal("../target")}
 
 	n := Node{ID: "n1", Type: TypeSymlink, Sealed: link}
 	if err := c.Open(ctx, "dr1", &n); err != nil || n.Name != "link" || n.Target != "../target" {
@@ -175,7 +175,7 @@ func TestCodec_OpenRemembersWhatItDecrypted(t *testing.T) {
 	if err := c.Open(ctx, "dr1", &again); err != nil || again.Name != "link" || again.Target != "../target" {
 		t.Errorf("second Open = %v, node %+v: it decrypted again", err, again)
 	}
-	unseen := Node{ID: "n2", Sealed: metastore.Sealed{Name: seal("unseen")}}
+	unseen := Node{ID: "n2", Sealed: &metastore.Sealed{Name: seal("unseen")}}
 	if err := c.Open(ctx, "dr1", &unseen); err == nil || unseen.Name != "" {
 		t.Errorf("Open of a payload never seen = %v, name %q: want a failure", err, unseen.Name)
 	}

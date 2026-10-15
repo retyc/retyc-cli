@@ -31,9 +31,7 @@ const unboundedBytes = 1 << 50
 //
 // It holds no state of the node. go-fuse keeps the object of the first lookup
 // of an inode and drops those of the later ones, so what the driver knows of
-// an inode is in the inode table, reached through state. seed is the node the
-// lookup that made this object saw: only what the table starts from when it
-// holds nothing for the inode.
+// an inode is in the inode table, reached through state.
 type base struct {
 	fs.Inode
 	ident
@@ -45,12 +43,21 @@ type ident struct {
 	ino uint64
 	// dataroomID is empty for the root of the "all datarooms" mode.
 	dataroomID string
-	seed       vfs.Node
+	// nodeID and typ are those of the node the lookup that made this object
+	// saw, empty nodeID for a dataroom root or a file not sent yet. Not the
+	// whole node: every object of a mount would hold one more copy of what
+	// the table and the listings already hold.
+	nodeID string
+	typ    vfs.NodeType
 }
 
-// state returns the state of the inode in the table.
+// state returns the state of the inode in the table. When the table holds
+// none (an inode the kernel forgot, reached through a child it still holds)
+// it starts from the identity of the object alone: such a state has no
+// location, so no path goes through it, and the next lookup of the inode
+// records the node it finds.
 func (b *base) state() *inodeState {
-	return b.drv.inodes.state(b.ino, b.seed)
+	return b.drv.inodes.state(b.ino, vfs.Node{ID: b.nodeID, Type: b.typ})
 }
 
 var (
@@ -126,7 +133,7 @@ func (b *base) Setattr(
 	_, sized := in.GetSize()
 	switch {
 	case node.Type == vfs.TypeFile:
-		ctx, span := startSpan(ctx, "setattr", b.dataroomID, b.seed.ID)
+		ctx, span := startSpan(ctx, "setattr", b.dataroomID, b.nodeID)
 		err := b.setFileAttr(ctx, st, in, unlinked)
 		span.End(err)
 		if err != nil {
@@ -379,7 +386,7 @@ func (n *dirNode) revive(ctx context.Context) error {
 			return err
 		})
 		switch {
-		case err == nil && node.ID == n.seed.ID:
+		case err == nil && node.ID == n.nodeID:
 			return nil
 		case err != nil && toErrno(err) != syscall.ENOENT:
 			return err
@@ -463,7 +470,7 @@ func (d *driver) child(ctx context.Context, parent *fs.Inode, e dirEntry, out *f
 		return live
 	}
 
-	id := ident{drv: d, ino: e.ino, dataroomID: e.dataroomID, seed: e.node}
+	id := ident{drv: d, ino: e.ino, dataroomID: e.dataroomID, nodeID: e.node.ID, typ: e.node.Type}
 	var ops fs.InodeEmbedder
 	switch e.node.Type {
 	case vfs.TypeDir:
@@ -537,7 +544,7 @@ func (n *dirNode) Lookup(
 		return n.drv.child(ctx, n.EmbeddedInode(), sp.entry(n.drv.stamp()), out), 0
 	}
 
-	ctx, span := startSpan(ctx, "lookup", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "lookup", n.dataroomID, n.nodeID)
 	seen := n.drv.stamp()
 	node, err := n.lookup(ctx, name)
 	span.End(unlessErrno(err, syscall.ENOENT))
@@ -635,7 +642,7 @@ func (n *dirNode) OpendirHandle(
 // with their current size and modification time, and, for those created here
 // and not flushed yet, although the API holds nothing of them.
 func (n *dirNode) list(ctx context.Context) ([]dirEntry, syscall.Errno) {
-	ctx, span := startSpan(ctx, "readdir", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "readdir", n.dataroomID, n.nodeID)
 	seen := n.drv.stamp()
 	err := n.drv.checkDataroom(ctx, n.dataroomID)
 	var nodes []vfs.Node
@@ -756,7 +763,7 @@ func (n *dirNode) Mkdir(
 	defer c.end(&errno)
 	ctx = c.guard(ctx)
 
-	ctx, span := startSpan(ctx, "mkdir", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "mkdir", n.dataroomID, n.nodeID)
 	seen := n.drv.stamp()
 	var node vfs.Node
 	err := n.drv.checkDataroom(ctx, n.dataroomID)
@@ -803,7 +810,7 @@ func (n *dirNode) Rmdir(ctx context.Context, name string) (errno syscall.Errno) 
 			return syscall.ENOTEMPTY
 		}
 	}
-	ctx, span := startSpan(ctx, "rmdir", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "rmdir", n.dataroomID, n.nodeID)
 	var err error
 	if child != nil {
 		// The files removed from the folder are still in it at the API until
@@ -864,7 +871,7 @@ func (n *dirNode) Unlink(ctx context.Context, name string) (errno syscall.Errno)
 			return errno
 		}
 	}
-	ctx, span := startSpan(ctx, "unlink", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "unlink", n.dataroomID, n.nodeID)
 	err := n.withPath(ctx, func(path string) error {
 		return n.drv.tree.Remove(ctx, n.dataroomID, joinPath(path, name), false)
 	})
@@ -969,7 +976,7 @@ func (n *dirNode) Rename(
 	}
 	newPath := joinPath(newDir, newName)
 
-	ctx, span := startSpan(ctx, "rename", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "rename", n.dataroomID, n.nodeID)
 	sent := func() error {
 		return n.withPath(ctx, func(path string) error {
 			return n.drv.tree.Rename(ctx, n.dataroomID, joinPath(path, name), newPath, replace)
@@ -1129,7 +1136,7 @@ func (n *dirNode) Create(
 		return nil, nil, 0, taken
 	}
 
-	ctx, span := startSpan(ctx, "create", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "create", n.dataroomID, n.nodeID)
 	sp, err := n.create(ctx, at, mode, flags&syscall.O_EXCL != 0, n.drv.localName(name))
 	span.End(err)
 	switch {
@@ -1142,7 +1149,7 @@ func (n *dirNode) Create(
 	}
 
 	node, _ := sp.st.view()
-	id := ident{drv: n.drv, ino: sp.ino, dataroomID: n.dataroomID, seed: node}
+	id := ident{drv: n.drv, ino: sp.ino, dataroomID: n.dataroomID, nodeID: node.ID, typ: node.Type}
 	// A number of its own: no object of it can be live yet.
 	n.drv.inodes.lend("", sp.ino)
 	child = n.NewInode(ctx, &fileNode{base: base{ident: id}}, fs.StableAttr{Mode: syscall.S_IFREG, Ino: sp.ino})
@@ -1234,7 +1241,7 @@ func (n *dirNode) Symlink(
 	if n.drv.spools.find(location{parent: n.EmbeddedInode(), name: name}) != nil {
 		return nil, syscall.EEXIST
 	}
-	ctx, span := startSpan(ctx, "symlink", n.dataroomID, n.seed.ID)
+	ctx, span := startSpan(ctx, "symlink", n.dataroomID, n.nodeID)
 	seen := n.drv.stamp()
 	var node vfs.Node
 	err := n.drv.checkDataroom(ctx, n.dataroomID)

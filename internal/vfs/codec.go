@@ -60,6 +60,9 @@ func (c codec) Open(_ context.Context, dataroomID string, n *Node) error {
 	if !ok || sess == nil {
 		return fmt.Errorf("opening a sealed node: the session of dataroom %s is not resolved", dataroomID)
 	}
+	if n.Sealed == nil || n.Sealed.Name == "" {
+		return fmt.Errorf("opening a sealed node: node %s has no sealed name", n.ID)
+	}
 	memo := &c.fs.sealed
 	name, err := memo.open(dataroomID, n.Sealed.Name, sess.OpenSealedName)
 	if err != nil {

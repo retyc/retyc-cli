@@ -318,7 +318,7 @@ func Mount(ctx context.Context, tree *vfs.FS, mountpoint string, opts Options) (
 		mountOpts = append(mountOpts, "ro")
 	}
 
-	id := ident{drv: d, ino: rootIno, seed: vfs.Node{Type: vfs.TypeDir}}
+	id := ident{drv: d, ino: rootIno, typ: vfs.TypeDir}
 	var root fs.InodeEmbedder
 	source := "retyc://"
 	if opts.All {

@@ -27,7 +27,7 @@ var (
 func wireNodes() map[string]metastore.Node {
 	const id, parent, version = "0b1f0c5e-1a2b-4c3d-8e9f-0123456789ab", "ffffffff-ffff-4fff-bfff-ffffffffffff",
 		"00000000-0000-0000-0000-000000000000"
-	sealed := metastore.Sealed{Name: "age-encryption.org/v1\nname\x00\xff", MIMETypeID: parent}
+	sealed := &metastore.Sealed{Name: "age-encryption.org/v1\nname\x00\xff", MIMETypeID: parent}
 
 	return map[string]metastore.Node{
 		"file": {
@@ -44,16 +44,16 @@ func wireNodes() map[string]metastore.Node {
 		},
 		"symlink": {
 			ID: id, ParentID: parent, Name: "link", Type: metastore.TypeSymlink, Target: "../a/b", Size: 6,
-			Sealed: metastore.Sealed{Name: "n", Target: "t", MIMEType: "m"},
+			Sealed: &metastore.Sealed{Name: "n", Target: "t", MIMEType: "m"},
 		},
 		"identifiers that are not canonical UUIDs": {
 			ID: "n1", ParentID: strings.ToUpper(parent), VersionID: "0b1f0c5e-1a2b-4c3d-8e9f-0123456789a", Name: "x",
-			Type: metastore.TypeFile, Sealed: metastore.Sealed{Name: "n", MIMETypeID: "0b1f0c5e_1a2b-4c3d-8e9f-0123456789ab"},
+			Type: metastore.TypeFile, Sealed: &metastore.Sealed{Name: "n", MIMETypeID: "0b1f0c5e_1a2b-4c3d-8e9f-0123456789ab"},
 		},
 		"no type, odd numbers, names with zero bytes": {
 			ID: "", Name: "a\x00b\nc é", MIMEType: "\x00", Size: -1, ChunkCount: -2, Mode: fs.ModeDir | fs.ModeSetuid | 0o777,
 			ModTime: time.Unix(-1, 999999999).UTC(), CreatedAt: time.Date(9999, 12, 31, 23, 59, 59, 1, time.UTC),
-			Sealed: metastore.Sealed{Name: "\x00"},
+			Sealed: &metastore.Sealed{Name: "\x00"},
 		},
 		"dates no calendar text holds": {
 			ID: id, Name: "far", Type: metastore.TypeFile,
@@ -72,7 +72,7 @@ func wireNodes() map[string]metastore.Node {
 func TestWire_RoundTrip(t *testing.T) {
 	for name, n := range wireNodes() {
 		clear := n
-		clear.Sealed = metastore.Sealed{}
+		clear.Sealed = nil
 		sealed := metastore.Node{
 			ID: n.ID, ParentID: n.ParentID, Type: n.Type, VersionID: n.VersionID, ChunkCount: n.ChunkCount,
 			Size: n.Size, Mode: n.Mode, ModeSet: n.ModeSet, ModTime: n.ModTime, CreatedAt: n.CreatedAt, Sealed: n.Sealed,
@@ -115,7 +115,7 @@ func TestWire_RoundTrip(t *testing.T) {
 // instant; the sizes the format was chosen for hold.
 func TestWire_TimesAndSize(t *testing.T) {
 	n := wireNodes()["file"]
-	n.Sealed = metastore.Sealed{}
+	n.Sealed = nil
 	n.ModTime = time.Now().In(time.FixedZone("x", 3600))
 	value, _ := clearWire.encodeNode(&n)
 	got, _, ok := decodeNode(value)
@@ -142,7 +142,8 @@ func TestWire_NotEncoded(t *testing.T) {
 	if _, ok := sealedWire.encodeNode(&metastore.Node{ID: "i", Name: "x"}); ok {
 		t.Error("a node without sealed name was encoded in high confidentiality")
 	}
-	if _, ok := sealedWire.encodeNode(&metastore.Node{ID: "i", Sealed: metastore.Sealed{Name: armor.Header + "\n!"}}); ok {
+	broken := &metastore.Sealed{Name: armor.Header + "\n!"}
+	if _, ok := sealedWire.encodeNode(&metastore.Node{ID: "i", Sealed: broken}); ok {
 		t.Error("a sealed name whose armor does not decode was encoded")
 	}
 }
@@ -153,7 +154,7 @@ func TestWire_NotEncoded(t *testing.T) {
 func TestWire_Evolution(t *testing.T) {
 	n := wireNodes()["file"]
 	want := n
-	want.Sealed = metastore.Sealed{}
+	want.Sealed = nil
 	value, _ := clearWire.encodeNode(&n)
 	fields := []byte(fieldsOf(t, value))
 
@@ -202,7 +203,7 @@ func TestWire_Evolution(t *testing.T) {
 // when it is 0. An explicit 0 is flagged, and described as "0000".
 func TestWire_ModeSet(t *testing.T) {
 	n := wireNodes()["file"]
-	n.Sealed = metastore.Sealed{}
+	n.Sealed = nil
 	for name, c := range map[string]struct {
 		mode    fs.FileMode
 		flagged bool
