@@ -159,7 +159,9 @@ type WebdavConfig struct {
 // EntryTTL and AttrTTL are how long the kernel keeps a name and the
 // attributes of an inode without asking again; zero follows cache.ttl (see
 // KernelTTLs). KernelCache lets the kernel keep the pages of a file between
-// two opens of one version. SpoolDir is where a file being written is kept
+// two opens of one version. ReadDirPlus lets a listing carry the attributes of
+// its entries (FUSE READDIRPLUS), which gives every entry listed an inode.
+// SpoolDir is where a file being written is kept
 // until it is sent, the temporary directory of the system when empty. UID and
 // GID are the owner every file is presented with, -1 meaning those of the
 // process. FileMode and DirMode are octal strings: the permissions presented
@@ -173,6 +175,7 @@ type MountConfig struct {
 	EntryTTL     time.Duration `yaml:"entry_ttl" mapstructure:"entry_ttl"`
 	AttrTTL      time.Duration `yaml:"attr_ttl" mapstructure:"attr_ttl"`
 	KernelCache  bool          `yaml:"kernel_cache" mapstructure:"kernel_cache"`
+	ReadDirPlus  bool          `yaml:"readdir_plus" mapstructure:"readdir_plus"`
 	SpoolDir     string        `yaml:"spool_dir" mapstructure:"spool_dir"`
 	AllowOther   bool          `yaml:"allow_other" mapstructure:"allow_other"`
 	UID          int64         `yaml:"uid" mapstructure:"uid"`
@@ -379,6 +382,8 @@ func SetDefaults() {
 	viper.SetDefault("mount.entry_ttl", time.Duration(0))
 	viper.SetDefault("mount.attr_ttl", time.Duration(0))
 	viper.SetDefault("mount.kernel_cache", true)
+	// Off: a folder listed gives an inode to no entry (see retycfs.Options).
+	viper.SetDefault("mount.readdir_plus", false)
 	// Empty: the temporary directory of the system.
 	viper.SetDefault("mount.spool_dir", "")
 	viper.SetDefault("mount.allow_other", false)
