@@ -20,6 +20,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/vfs"
+	"github.com/retyc/retyc-cli/internal/vfs/metastore"
 )
 
 // — Inode table —————————————————————————————————————————————————————————————
@@ -363,6 +364,25 @@ func TestInodeTable_StateIsPerInodeNotPerObject(t *testing.T) {
 	second.observe(vfs.Node{ID: "f", Type: vfs.TypeFile, VersionID: "v2", Size: 2}, location{}, 0)
 	if got := first.current(); got.VersionID != "v2" || got.Size != 2 {
 		t.Errorf("the first object sees %+v, want the node observed through the second", got)
+	}
+}
+
+// A state keeps its node for as long as the kernel holds the inode: never
+// the sealed form a store hands over with it.
+func TestInodeState_KeepsNoSealedForm(t *testing.T) {
+	table := newTestInodeTable(t)
+	sealed := &metastore.Sealed{Name: "name_enc", MIMEType: "type_enc"}
+	st := table.state(table.ino("f"), vfs.Node{ID: "f", Name: "f", Type: vfs.TypeFile, VersionID: "v1", Sealed: sealed})
+	if st.current().Sealed != nil {
+		t.Error("a new state keeps the sealed form of its node")
+	}
+	st.observe(vfs.Node{ID: "f", Name: "f", Type: vfs.TypeFile, VersionID: "v2", Sealed: sealed}, location{}, 1)
+	if got := st.current(); got.VersionID != "v2" || got.Sealed != nil {
+		t.Errorf("observed node = %+v, want v2 without its sealed form", got)
+	}
+	st.adopt(vfs.Node{ID: "f", Name: "f", Type: vfs.TypeFile, VersionID: "v3", Sealed: sealed}, 2)
+	if got := st.current(); got.VersionID != "v3" || got.Sealed != nil {
+		t.Errorf("adopted node = %+v, want v3 without its sealed form", got)
 	}
 }
 
