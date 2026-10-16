@@ -94,7 +94,8 @@ jobs:
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
 
   # Dev build (no `prod` tag: dev API default, `--insecure`), amd64 only, GHCR only.
-  # Same events as above, with the images named retyc-cli-dev; never a release tag.
+  # Same events as above, with the image named retyc-cli-dev, except that it never
+  # gets `latest`.
   docker-dev:
     name: ${{ inputs.push && 'Push dev image' || 'Build dev image' }}
     runs-on: ubuntu-latest
@@ -114,6 +115,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      #   push of a v1.2.3 tag (or -rc1) -> that tag only, no latest
       #   push to the default branch -> its name (master)
       #   manual run, any ref       -> commit-<short sha>
       - name: Image tags
@@ -121,15 +123,22 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/retyc/retyc-cli-dev
+          flavor: latest=false
           tags: |
+            type=semver,pattern={{raw}},enable=${{ github.event_name == 'push' }}
             type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
             type=sha,prefix=commit-,enable=${{ github.event_name == 'workflow_dispatch' }}
 
-      # `git describe` version, as in the job above: the API refuses `dev` (426).
+      # Same version as in the job above: the API refuses `dev` (426).
       - name: Image version and build date
         id: meta
         run: |
-          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="$(git describe --tags --always)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push

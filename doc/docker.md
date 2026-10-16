@@ -61,5 +61,6 @@ docker pull ghcr.io/retyc/retyc-cli:latest
 
 `ghcr.io/retyc/retyc-cli-dev` is built without the `prod` tag (dev API default,
 `--insecure` available), for `linux/amd64` only and on GitHub Container Registry only.
-Tags: `master` (head of the branch) and `commit-<sha>` (manual run). Locally:
+Tags: `vX.Y.Z` (each release, pre-releases included, never `latest`), `master` (head of
+the branch) and `commit-<sha>` (manual run). Locally:
 `docker build --build-arg BUILD_TAGS= --build-arg VERSION=v0.0.0-dev .`
