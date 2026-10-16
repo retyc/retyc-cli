@@ -1,0 +1,67 @@
+# retyc — full example of config.yaml, every key set to its default value.
+#
+# Precedence: flag > environment (RETYC_A_B for key a.b) > env file > this file > default.
+# Everything below is optional: delete what you do not change.
+# Reference: doc/configuration.md. Effective values: `retyc config show`.
+#
+# Not in this file (environment only): RETYC_TOKEN, RETYC_KEY_PASSPHRASE,
+# RETYC_WEBDAV_PASSWORD, RETYC_CONFIG_DIR, RETYC_ENV_FILE.
+
+api:
+  base_url: https://api.retyc.com   # dev build (no -tags prod): https://api.triplesfer.traefik.me
+  unsafe_write: false               # acknowledge uploads before the API has stored them
+  concurrency:                      # 1 to 32
+    list: 4                         # listing pages fetched at once
+    upload: 4                       # chunks uploaded at once, per file
+    download: 4                     # chunks downloaded at once, per file
+  retry:                            # 429 handling
+    max_wait: 30s                   # 1s to 10m
+    max_attempts: 10                # 1 to 100
+
+keyring:                            # Linux session keyring cache of the unlocked key
+  enabled: true
+  ttl: 60                           # seconds
+
+admin:                              # `retyc admin` commands
+  base_url: ""                      # empty: <api.base_url>/v1
+  api_key: ""                       # organization API key (ryc_...)
+  private_key_file: ""              # organization AGE identity, only to decrypt / rekey
+
+cache:                              # metadata cache of retycfs (`retyc fs mount`)
+  ttl: 1m                           # how long a listing is served without asking the API
+  max_stale: 5m                     # 0 disables
+  negative_ttl: 1s                  # how long a name found missing is answered missing; 0 disables
+  store: memory                     # memory (per process) | redis (shared between instances)
+  redis:
+    url: ""                         # required with store: redis; redis:// or rediss:// URL, password included (secret)
+    high_confidentiality: false     # keep in Redis the encrypted names sent by the API, never the decrypted ones
+
+webdav:                             # `retyc fs webdav serve`
+  addr: 127.0.0.1:8888
+
+mount:                              # `retyc fs mount` (Linux)
+  entry_ttl: 0s                     # kernel name cache; 0 follows cache.ttl
+  attr_ttl: 0s                      # kernel attribute cache; 0 follows cache.ttl
+  kernel_cache: true                # kernel keeps file content between two opens
+  readdir_plus: false               # FUSE READDIRPLUS
+  spool_dir: ""                     # files being written; empty: system temp dir
+  allow_other: false                # -o allow_other
+  uid: -1                           # -1: the user running the command
+  gid: -1                           # -1: the group running the command
+  file_mode: "0644"                 # octal, quoted
+  dir_mode: "0755"                  # octal, quoted
+  read_only: false
+  drain_timeout: 5m                 # wait for files being sent at unmount; 0: not at all
+  mirror_locks: false               # API lock on a file open for writing
+  background_delete: false          # answer a removal at once, delete at the API later
+  local_files:                      # never sent; `none` (RETYC_MOUNT_LOCAL_FILES) for no pattern
+    - ".*.swp"
+    - ".*.swx"
+    - "*~"
+    - "4913"
+  metrics:
+    addr: ""                        # metrics and probes listener; empty: disabled
+    labels: []                      # constant labels, "key=value"
+
+# Dev builds only (go build . without -tags prod):
+# insecure: false                   # skip TLS verification (-k)
