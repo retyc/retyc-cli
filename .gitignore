@@ -5,6 +5,7 @@
 *.exe
 /dist
 /config*.yaml
+!/config.example.yaml
 
 # Config
 /.retyc

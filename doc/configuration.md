@@ -27,6 +27,10 @@ environment variables. The config directory also holds your login token
 - `--config /some/file.yaml` reads another config file, but the token stays in
   the default directory.
 
+[`config.example.yaml`](../config.example.yaml) lists every `config.yaml` key
+with its default value and a short comment: copy it to start a config file, and
+keep only the lines you change.
+
 An environment variable wins over `config.yaml`, which wins over the default.
 Variables can also come from an [environment file](#keep-the-secrets-in-an-environment-file-boot-mounts-systemd-csi)
 (`--env-file`), which the real environment wins over.
@@ -55,6 +59,8 @@ same two variables, see [MCP](mcp.md).
 A service that starts without a terminal reads its secrets from a file,
 designated with `--env-file` or `RETYC_ENV_FILE` (the flag wins). It works on
 every system and for every command.
+[`retyc.env.example`](../retyc.env.example) lists every variable with its
+default value, commented out: copy it and uncomment what you set.
 
 ```sh
 # /etc/retyc/env    (chmod 600, owned by the user the service runs as)
