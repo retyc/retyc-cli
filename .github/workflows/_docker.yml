@@ -92,3 +92,56 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+
+  # Dev build (no `prod` tag: dev API default, `--insecure`), amd64 only, GHCR only.
+  # Same events as above, with the images named retyc-cli-dev; never a release tag.
+  docker-dev:
+    name: ${{ inputs.push && 'Push dev image' || 'Build dev image' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: inputs.push
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      #   push to the default branch -> its name (master)
+      #   manual run, any ref       -> commit-<short sha>
+      - name: Image tags
+        id: tags
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/retyc/retyc-cli-dev
+          tags: |
+            type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
+            type=sha,prefix=commit-,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      # `git describe` version, as in the job above: the API refuses `dev` (426).
+      - name: Image version and build date
+        id: meta
+        run: |
+          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: ${{ inputs.push }}
+          platforms: linux/amd64
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            BUILD_TAGS=
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}

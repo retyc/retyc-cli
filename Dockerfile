@@ -5,6 +5,8 @@ FROM --platform=$BUILDPLATFORM golang:1.26.9 AS builder
 ARG VERSION=dev
 ARG TARGETOS
 ARG TARGETARCH
+# Empty for a development build (honours RETYC_INSECURE): --build-arg BUILD_TAGS=
+ARG BUILD_TAGS=prod
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -15,7 +17,7 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -tags prod \
+    -tags "${BUILD_TAGS}" \
     -ldflags "-s -w -X github.com/retyc/retyc-cli/cmd.Version=${VERSION}" \
     -o /retyc .
 
@@ -52,7 +54,9 @@ LABEL org.opencontainers.image.title="retyc-cli" \
       org.opencontainers.image.version="${VERSION}"
 
 USER 1000:1000
-ENV HOME=/home/retyc \
+# Explicit so that a dev build (no `prod` tag, config in .retyc/ of the CWD) uses the volume too.
+ENV RETYC_CONFIG_DIR=/home/retyc/.config/retyc \
+    HOME=/home/retyc \
     XDG_CONFIG_HOME=/home/retyc/.config \
     XDG_CACHE_HOME=/home/retyc/.cache \
     XDG_DATA_HOME=/home/retyc/.local/share

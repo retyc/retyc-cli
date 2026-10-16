@@ -56,3 +56,10 @@ docker pull ghcr.io/retyc/retyc-cli:latest
 | `vX.Y.Z`       | That release; pre-releases (`vX.Y.Z-rc1`, `-beta1`) are published under their own tag only |
 | `master`       | Head of the `master` branch, not released — for testing only                               |
 | `commit-<sha>` | One-off build of a single commit, GitHub Container Registry only — for testing only        |
+
+## Dev image
+
+`ghcr.io/retyc/retyc-cli-dev` is built without the `prod` tag (dev API default,
+`--insecure` available), for `linux/amd64` only and on GitHub Container Registry only.
+Tags: `master` (head of the branch) and `commit-<sha>` (manual run). Locally:
+`docker build --build-arg BUILD_TAGS= --build-arg VERSION=v0.0.0-dev .`
