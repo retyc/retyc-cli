@@ -403,9 +403,15 @@ type DataroomUpdate struct {
 
 // CreateDataroom creates a new dataroom with the given title, session keypair, and
 // optionally an encrypted name salt (nodeNameSaltEnc). Pass nil to omit the salt.
+//
+// organizationKey, when not empty, is the organization key the session
+// private key was also encrypted for: the API then attaches the
+// organization's service account to the dataroom, or answers 409
+// MASTER_KEY_MISMATCH when the key is no longer the organization's. Empty, it
+// is not sent and nothing is attached.
 func (c *Client) CreateDataroom(
 	ctx context.Context, title, sessionPrivKeyEnc, sessionPubKey string, nodeNameSaltEnc *string,
-	opts DataroomOptions,
+	organizationKey string, opts DataroomOptions,
 ) (*Dataroom, error) {
 	body := map[string]any{
 		"title":                   title,
@@ -414,6 +420,9 @@ func (c *Client) CreateDataroom(
 	}
 	if nodeNameSaltEnc != nil {
 		body["node_name_salt_enc"] = *nodeNameSaltEnc
+	}
+	if organizationKey != "" {
+		body["master_public_key"] = organizationKey
 	}
 	if opts.VersioningEnabled != nil {
 		body["versioning_enabled"] = *opts.VersioningEnabled

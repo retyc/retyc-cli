@@ -148,6 +148,27 @@ func SendTransfer(
 		titlePtr = &p.Title
 	}
 
+	// POST /share adds the organization key to public_keys: read it first to
+	// tell it apart from the recipients' keys. Only needed with recipients.
+	// The status is ignored on purpose: whatever the server put in
+	// public_keys, the organization key is never a recipient.
+	var orgKey string
+	orgKeyKnown := true
+	if len(p.ToEmails) > 0 {
+		sa, saErr := client.GetOrganizationServiceAccount(ctx)
+		switch {
+		case saErr != nil && passphrase == "":
+			// Without the key the recipients' keys cannot be counted, so a
+			// passphrase is required: fail before creating anything.
+			return nil, fmt.Errorf("could not read the organization key to check the recipients' keys "+
+				"(%w); provide or generate a transfer passphrase", saErr)
+		case saErr != nil:
+			orgKeyKnown = false
+		case sa != nil && sa.PublicKey != nil:
+			orgKey = *sa.PublicKey
+		}
+	}
+
 	share, err := client.CreateShare(ctx, p.ExpireSecs, titlePtr, true, p.ToEmails)
 	if err != nil {
 		return nil, fmt.Errorf("creating transfer: %w", err)
@@ -166,7 +187,7 @@ func SendTransfer(
 		}
 	}()
 
-	allHaveKeys := len(p.ToEmails) > 0 && len(share.PublicKeys) == len(p.ToEmails)
+	allHaveKeys := recipientsAllHaveKeys(p.ToEmails, share.PublicKeys, orgKey, orgKeyKnown)
 	needPassphrase := !allHaveKeys || p.Passphrase != "" || p.GeneratePassphrase
 
 	if needPassphrase && passphrase == "" {
@@ -248,6 +269,28 @@ func SendTransfer(
 	}
 
 	return out, nil
+}
+
+// recipientsAllHaveKeys reports whether every recipient of a new transfer
+// can open it with their own key, which spares the passphrase. publicKeys is
+// the list POST /share answers: one key per recipient that has one, plus the
+// organization key (orgKey) when the organization has one; the latter is not a
+// recipient and is left out of the count. When the organization key could not
+// be read (orgKeyKnown false), the keys cannot be told apart and the answer is
+// false: a passphrase is then required rather than a recipient left without
+// access.
+func recipientsAllHaveKeys(emails, publicKeys []string, orgKey string, orgKeyKnown bool) bool {
+	if len(emails) == 0 || !orgKeyKnown {
+		return false
+	}
+	n := 0
+	for _, k := range publicKeys {
+		if orgKey == "" || k != orgKey {
+			n++
+		}
+	}
+
+	return n == len(emails)
 }
 
 // DownloadTransfer downloads and decrypts all files from a transfer into outputDir.

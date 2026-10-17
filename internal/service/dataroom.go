@@ -1489,6 +1489,12 @@ func ListDatarooms(ctx context.Context, client *api.Client) (*ListDataroomsResul
 
 // CreateDataroom creates a new dataroom with the given title and settings.
 // reader is used to obtain the user's AGE key passphrase.
+//
+// The session key is also encrypted for the organization key when the
+// organization has an active one, as the web app does, so that the
+// organization can recover the dataroom. A key that changed between its read
+// and the creation (409 MASTER_KEY_MISMATCH) is read again and the creation
+// retried once.
 func CreateDataroom(
 	ctx context.Context, cfg *config.Config, client *api.Client, title string, opts api.DataroomOptions,
 	reader PassphraseReader,
@@ -1501,6 +1507,26 @@ func CreateDataroom(
 		return nil, fmt.Errorf("no active encryption key - set up your key in the web interface first")
 	}
 
+	dr, err := createDataroom(ctx, client, title, userKey.PublicKey, organizationKey(ctx, client), opts)
+	if api.ErrorCode(err) == api.CodeMasterKeyMismatch {
+		dr, err = createDataroom(ctx, client, title, userKey.PublicKey, organizationKey(ctx, client), opts)
+	}
+	if api.ErrorCode(err) == api.CodeMasterKeyMismatch {
+		return nil, fmt.Errorf("creating dataroom: the organization key changed during the creation, retry: %w", err)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("creating dataroom: %w", err)
+	}
+
+	return &CreateDataroomResult{ID: dr.ID, Title: dr.Title}, nil
+}
+
+// createDataroom generates the session material of a new dataroom, encrypts
+// its private key for the user (and the organization key when not empty) and
+// creates the dataroom.
+func createDataroom(
+	ctx context.Context, client *api.Client, title, userPubKey, orgKey string, opts api.DataroomOptions,
+) (*api.Dataroom, error) {
 	sessionIdentity, err := crypto.GenerateKeyPair()
 	if err != nil {
 		return nil, fmt.Errorf("generating session key: %w", err)
@@ -1508,7 +1534,11 @@ func CreateDataroom(
 	sessionPrivKey := sessionIdentity.String()
 	sessionPubKey := sessionIdentity.Recipient().String()
 
-	sessionPrivKeyEnc, err := crypto.EncryptStringForKeys(sessionPrivKey, []string{userKey.PublicKey})
+	keys := []string{userPubKey}
+	if orgKey != "" && orgKey != userPubKey {
+		keys = append(keys, orgKey)
+	}
+	sessionPrivKeyEnc, err := crypto.EncryptStringForKeys(sessionPrivKey, keys)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting session key: %w", err)
 	}
@@ -1523,12 +1553,25 @@ func CreateDataroom(
 		return nil, fmt.Errorf("encrypting name salt: %w", err)
 	}
 
-	dr, err := client.CreateDataroom(ctx, title, sessionPrivKeyEnc, sessionPubKey, &nameSaltEnc, opts)
+	return client.CreateDataroom(ctx, title, sessionPrivKeyEnc, sessionPubKey, &nameSaltEnc, orgKey, opts)
+}
+
+// organizationKey returns the organization key to add to a new dataroom, ""
+// when there is none. A failed read is not fatal, as in the web app: the
+// dataroom is then created without the organization key, with a warning.
+func organizationKey(ctx context.Context, client *api.Client) string {
+	sa, err := client.GetOrganizationServiceAccount(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("creating dataroom: %w", err)
+		if ctx.Err() != nil {
+			return "" // interrupted: the creation fails on the same context
+		}
+		fmt.Fprintf(os.Stderr,
+			"warning: could not read the organization key (%v); the dataroom is created without it\n", err)
+
+		return ""
 	}
 
-	return &CreateDataroomResult{ID: dr.ID, Title: dr.Title}, nil
+	return sa.OrganizationKey()
 }
 
 // UpdateDataroom changes a dataroom's title or settings; only the fields set in

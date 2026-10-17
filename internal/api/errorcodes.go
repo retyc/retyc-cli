@@ -40,6 +40,9 @@ const (
 	CodeConcurrentUpdate        = "CONCURRENT_UPDATE"
 	CodeLockConflict            = "LOCK_CONFLICT"
 	CodeMimeTypeUnknown         = "MIME_TYPE_UNKNOWN"
+	// CodeMasterKeyMismatch: the organization key announced at dataroom
+	// creation (master_public_key) is no longer the organization's key.
+	CodeMasterKeyMismatch = "MASTER_KEY_MISMATCH"
 )
 
 // ErrorCode returns the X-Error-Code of the HTTPError in err's chain, or ""
