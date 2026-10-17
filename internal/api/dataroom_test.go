@@ -160,7 +160,7 @@ func TestCreateDataroom(t *testing.T) {
 	defer srv.Close()
 
 	dr, err := newTestClient(srv).CreateDataroom(
-		context.Background(), "My DR", "priv-enc", "pub-key", &saltEnc, DataroomOptions{})
+		context.Background(), "My DR", "priv-enc", "pub-key", &saltEnc, "", DataroomOptions{})
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
 	}
@@ -182,9 +182,31 @@ func TestCreateDataroom_NoSalt(t *testing.T) {
 	defer srv.Close()
 
 	_, err := newTestClient(srv).CreateDataroom(
-		context.Background(), "My DR", "priv-enc", "pub-key", nil, DataroomOptions{})
+		context.Background(), "My DR", "priv-enc", "pub-key", nil, "", DataroomOptions{})
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
+	}
+}
+
+func TestCreateDataroom_OrganizationKey(t *testing.T) {
+	var got []any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		got = append(got, body["master_public_key"])
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(Dataroom{ID: "new-dr"})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	for _, key := range []string{"age1pq1org", ""} {
+		if _, err := c.CreateDataroom(context.Background(), "T", "p", "k", nil, key, DataroomOptions{}); err != nil {
+			t.Fatalf("CreateDataroom() error = %v", err)
+		}
+	}
+	if len(got) != 2 || got[0] != "age1pq1org" || got[1] != nil {
+		t.Errorf("master_public_key sent = %v, want [age1pq1org <absent>]", got)
 	}
 }
 
@@ -205,7 +227,7 @@ func TestCreateDataroom_Options(t *testing.T) {
 
 	off, capacity := false, int64(1<<30)
 	opts := DataroomOptions{VersioningEnabled: &off, StorageCapacity: &capacity}
-	if _, err := newTestClient(srv).CreateDataroom(context.Background(), "T", "p", "k", nil, opts); err != nil {
+	if _, err := newTestClient(srv).CreateDataroom(context.Background(), "T", "p", "k", nil, "", opts); err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
 	}
 }
