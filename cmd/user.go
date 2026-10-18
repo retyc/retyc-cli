@@ -38,11 +38,26 @@ var userInfoCmd = &cobra.Command{
 			fullName = *u.FullName
 		}
 
+		orgID := "-"
+		if u.MainOrganizationID != nil && *u.MainOrganizationID != "" {
+			orgID = *u.MainOrganizationID
+		}
+
+		keyID := "-"
+		if u.KeyID != nil && *u.KeyID != "" {
+			keyID = *u.KeyID
+		}
+
 		fmt.Printf("ID:            %s\n", u.ID)
+		fmt.Printf("Kind:          %s\n", u.Kind)
+		fmt.Printf("Status:        %s\n", u.Status)
+		fmt.Printf("Created:       %s\n", u.CreatedAt.Local().Format("2006-01-02 15:04"))
 		fmt.Printf("Email:         %s\n", ui.Escape(u.Email))
 		fmt.Printf("Full name:     %s\n", ui.Escape(fullName))
+		fmt.Printf("Organization:  %s\n", orgID)
 		fmt.Printf("Role:          %s\n", u.OrganizationRole)
 		fmt.Printf("Plan:          %s\n", u.OrganizationPlanID)
+		fmt.Printf("Key ID:        %s\n", keyID)
 		fmt.Printf("Public key:    %s\n", u.PublicKey)
 
 		return nil
