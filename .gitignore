@@ -6,6 +6,7 @@
 /dist
 /config*.yaml
 !/config.example.yaml
+/.env.local
 
 # Config
 /.retyc
