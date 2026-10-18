@@ -2148,6 +2148,55 @@ func RemoveDataroomUser(
 	return rekeyDataroom(ctx, client, dataroomID, sess.PrivateKey, "")
 }
 
+// ResolveNewDataroomOwner finds the member, given by user ID or e-mail, who
+// may receive the dataroom: an admin of it. Refusals come before any change,
+// so a command can ask for confirmation with the resolved member.
+func ResolveNewDataroomOwner(
+	ctx context.Context, client *api.Client, dataroomID, user string,
+) (api.DataroomUser, error) {
+	users, err := client.GetDataroomUsers(ctx, dataroomID)
+	if err != nil {
+		return api.DataroomUser{}, fmt.Errorf("fetching users: %w", err)
+	}
+	var target *api.DataroomUser
+	for i := range users {
+		if users[i].UserID == user || strings.EqualFold(users[i].UserEmail, user) {
+			target = &users[i]
+
+			break
+		}
+	}
+	if target == nil {
+		return api.DataroomUser{}, fmt.Errorf("%s is not a member of dataroom %s", user, dataroomID)
+	}
+	switch target.Role {
+	case "owner":
+		return api.DataroomUser{}, fmt.Errorf("%s already owns dataroom %s", user, dataroomID)
+	case "admin":
+	default:
+		return api.DataroomUser{}, fmt.Errorf(
+			"%s is %s of the dataroom: only an admin can become owner (remove and re-add them with --role admin)",
+			user, target.Role)
+	}
+
+	return *target, nil
+}
+
+// TransferDataroomOwnership hands the dataroom to an admin member (see
+// ResolveNewDataroomOwner); the caller, who must be the owner, becomes admin.
+// The members are unchanged, so no rekey follows.
+func TransferDataroomOwnership(ctx context.Context, client *api.Client, dataroomID, userID string) error {
+	err := client.TransferDataroomOwnership(ctx, dataroomID, userID)
+	if api.ErrorCode(err) == api.CodeRoleForbidden {
+		return fmt.Errorf("only the owner of the dataroom can transfer it: %w", err)
+	}
+	if err != nil {
+		return fmt.Errorf("transferring ownership: %w", err)
+	}
+
+	return nil
+}
+
 // rekeyDataroom re-encrypts the session private key for all current dataroom members.
 // subject is informational (email for add, empty for remove) and used only in warning messages.
 func rekeyDataroom(ctx context.Context, client *api.Client, dataroomID, sessionPrivKey, subject string) error {

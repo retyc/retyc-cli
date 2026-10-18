@@ -470,6 +470,12 @@ func (c *Client) RemoveDataroomUser(ctx context.Context, dataroomID, userID stri
 	return c.Delete(ctx, "/dataroom/"+dataroomID+"/user/"+userID)
 }
 
+// TransferDataroomOwnership hands the owner role to an admin member of the
+// dataroom; the caller, who must be the owner, becomes admin.
+func (c *Client) TransferDataroomOwnership(ctx context.Context, dataroomID, userID string) error {
+	return c.Put(ctx, "/dataroom/"+dataroomID+"/ownership/"+userID, nil, nil)
+}
+
 // RekeyDataroom re-encrypts the session private key for all current members.
 // Call this after adding or removing a user to update their access.
 func (c *Client) RekeyDataroom(ctx context.Context, dataroomID, sessionPrivKeyEnc string) error {

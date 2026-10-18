@@ -12,7 +12,7 @@ Every command accepts the global `--json` flag for scripting:
   Warnings printed before it stay plain text lines; spinners are drawn only
   when stderr is a terminal.
 - Commands that ask for confirmation (`transfer create`, `transfer download`,
-  `dataroom cp`, `dataroom rm`, `admin member rm`, `admin dataroom rm`,
+  `dataroom cp`, `dataroom rm`, `dataroom user chown`, `admin member rm`, `admin dataroom rm`,
   `admin dataroom user rm`, `admin transfer rm`) refuse to prompt under
   `--json`: pass `--yes` / `-y` explicitly.
 - Listings are `{"items": [...]}` (plus `total`/`page`/`pages` when the API
@@ -150,6 +150,7 @@ Glob patterns (`*`, `?`, `[...]`) are supported in remote paths.
 | `retyc dataroom mkdir retyc://<id>/<path>`                                                 | Create a folder                                               |
 | `retyc dataroom user add <id> <email> [--role viewer\|editor\|admin]`                      | Add a member                                                  |
 | `retyc dataroom user rm <id> <user-id>`                                                    | Remove a member                                               |
+| `retyc dataroom user chown <id> <user-id\|email> [--yes]`                                  | Transfer the ownership to an admin member (you become admin)  |
 
 ## Admin
 

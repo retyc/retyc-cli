@@ -414,6 +414,61 @@ var dataroomUserRmCmd = &cobra.Command{
 	},
 }
 
+// — dataroom user chown ——————————————————————————————————————————————————————
+
+var dataroomUserChownCmd = &cobra.Command{
+	Use:   "chown <dataroom_id> <user_id|email>",
+	Short: "Transfer the dataroom ownership to an admin member",
+	Long: `Transfer the dataroom ownership to a member who is already admin of it.
+You become admin and cannot take the ownership back yourself. The dataroom
+then counts against the new owner's plan (dataroom count and storage).`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		drID := args[0]
+
+		ctx := cmd.Context()
+		_, client, err := newAPIClient(ctx)
+		if err != nil {
+			return err
+		}
+		owner, err := service.ResolveNewDataroomOwner(ctx, client, drID, args[1])
+		if err != nil {
+			return err
+		}
+
+		yes, _ := cmd.Flags().GetBool("yes")
+		ok, err := confirm(fmt.Sprintf("Transfer the ownership of dataroom %s to %s? You will become admin.",
+			drID, ui.Escape(owner.UserEmail)), yes)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Aborted.")
+
+			return nil
+		}
+
+		s := ui.NewSpinner()
+		s.Start()
+		err = service.TransferDataroomOwnership(ctx, client, drID, owner.UserID)
+		s.Stop()
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(struct {
+				DataroomID string `json:"dataroom_id"`
+				OwnerID    string `json:"owner_id"`
+				OwnerEmail string `json:"owner_email"`
+			}{drID, owner.UserID, owner.UserEmail})
+		}
+		fmt.Printf("Dataroom %s ownership transferred to %s.\n", drID, ui.Escape(owner.UserEmail))
+
+		return nil
+	},
+}
+
 // — dataroom cp ——————————————————————————————————————————————————————————————
 
 // dataroomCopyRemote copies one file between two paths of the same dataroom
@@ -780,6 +835,8 @@ func init() {
 
 	dataroomUserCmd.AddCommand(dataroomUserAddCmd)
 	dataroomUserCmd.AddCommand(dataroomUserRmCmd)
+	dataroomUserChownCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
+	dataroomUserCmd.AddCommand(dataroomUserChownCmd)
 
 	dataroomCmd.AddCommand(dataroomLsCmd)
 	dataroomCmd.AddCommand(dataroomCreateCmd)
