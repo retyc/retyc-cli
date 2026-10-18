@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestGetMe_Success(t *testing.T) {
@@ -15,14 +16,9 @@ func TestGetMe_Success(t *testing.T) {
 			t.Errorf("path = %q, want /user/me", r.URL.Path)
 		}
 
-		name := "Alice Dupont"
-		_ = json.NewEncoder(w).Encode(userMeResponse{
-			User: UserInfo{
-				ID:       "user-123",
-				Email:    "alice@example.com",
-				FullName: &name,
-			},
-		})
+		_, _ = w.Write([]byte(`{"user":{"id":"user-123","email":"alice@example.com",` +
+			`"full_name":"Alice Dupont","main_organization_id":"org-456",` +
+			`"kind":"machine_account","status":"active","created_at":"2026-10-18T09:30:00Z","key_id":"key-789"}}`))
 	}))
 	defer srv.Close()
 
@@ -37,6 +33,22 @@ func TestGetMe_Success(t *testing.T) {
 
 	if user.Email != "alice@example.com" {
 		t.Errorf("Email = %q, want alice@example.com", user.Email)
+	}
+
+	if user.MainOrganizationID == nil || *user.MainOrganizationID != "org-456" {
+		t.Errorf("MainOrganizationID = %v, want org-456", user.MainOrganizationID)
+	}
+
+	if user.Kind != "machine_account" || user.Status != "active" {
+		t.Errorf("Kind, Status = %q, %q, want machine_account, active", user.Kind, user.Status)
+	}
+
+	if want := time.Date(2026, 10, 18, 9, 30, 0, 0, time.UTC); !user.CreatedAt.Equal(want) {
+		t.Errorf("CreatedAt = %v, want %v", user.CreatedAt, want)
+	}
+
+	if user.KeyID == nil || *user.KeyID != "key-789" {
+		t.Errorf("KeyID = %v, want key-789", user.KeyID)
 	}
 }
 

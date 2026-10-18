@@ -8,12 +8,17 @@ import (
 
 // UserInfo holds the authenticated user's profile information as returned by GET /user/me.
 type UserInfo struct {
-	ID                 string  `json:"id"`
-	Email              string  `json:"email"`
-	FullName           *string `json:"full_name"`
-	OrganizationRole   string  `json:"organization_role"`
-	OrganizationPlanID string  `json:"organization_plan_id"`
-	PublicKey          string  `json:"public_key"`
+	ID                 string    `json:"id"`
+	Kind               string    `json:"kind"`   // standard_account, service_account, machine_account
+	Status             string    `json:"status"` // active, inactive, deleted
+	CreatedAt          time.Time `json:"created_at"`
+	Email              string    `json:"email"`
+	FullName           *string   `json:"full_name"`
+	MainOrganizationID *string   `json:"main_organization_id"` // nil without organization
+	OrganizationRole   string    `json:"organization_role"`
+	OrganizationPlanID string    `json:"organization_plan_id"`
+	KeyID              *string   `json:"key_id"` // nil without active key
+	PublicKey          string    `json:"public_key"`
 }
 
 // userMeResponse is the top-level wrapper returned by GET /user/me.
