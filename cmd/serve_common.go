@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -53,16 +52,6 @@ func serveStartupCheck(
 // for a check.
 const tokenKeepaliveInterval = 60 * time.Second
 
-// tokenKeepalive pings tokenSource every 60s to keep the access token warm.
-// When the login is lost for good (see authWatch.run) it invokes onFail(err)
-// and returns, letting the caller shut the server down gracefully (so
-// in-flight uploads, orphaned-node cleanup, and temp-dir removal all run). A
-// check that fails for another reason is tried again. Stops when ctx is
-// cancelled.
-func tokenKeepalive(ctx context.Context, src oauth2.TokenSource, onFail func(error)) {
-	newAuthWatch(src).run(ctx, onFail)
-}
-
 // authRefreshInterval is the least time between two refreshes of the access
 // token forced by a 401: an API that answers 401 for another reason than the
 // login costs one refresh per interval, not one per request.
@@ -90,26 +79,42 @@ type authWatch struct {
 	failing bool
 	// logf reports those failures, and their end.
 	logf func(format string, args ...any)
+	// machine is set for a machine account, whose revocation shows as a
+	// token that keeps being obtained yet keeps being refused.
+	machine bool
 }
+
+// machineRefusedChecks is how many checks asked for after a 401 may obtain a
+// fresh token (a refresh forced by distrust, so at least authRefreshInterval
+// apart) before the machine account is taken as revoked: the API refused the
+// requests signed with the tokens before, which takes over a minute.
+const machineRefusedChecks = 3
 
 func newAuthWatch(src oauth2.TokenSource) *authWatch {
 	return &authWatch{
 		src: src, interval: tokenKeepaliveInterval, asked: make(chan struct{}, 1), now: time.Now,
-		logf: func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) },
+		machine: config.MachineMode(),
+		logf:    func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) },
 	}
 }
 
 // distrust makes the next check refresh the access token, when the source
-// can be told to and none was forced for authRefreshInterval.
-func (w *authWatch) distrust() {
+// can be told to and none was forced for authRefreshInterval. It tells
+// whether the token was expired: only then does the next check obtain a
+// fresh one.
+func (w *authWatch) distrust() bool {
 	src, ok := w.src.(interface{ Expire() })
 	if !ok {
-		return
+		return false
 	}
 	if now := w.now(); w.refreshed.IsZero() || now.Sub(w.refreshed) >= authRefreshInterval {
 		w.refreshed = now
 		src.Expire()
+
+		return true
 	}
+
+	return false
 }
 
 // run checks the login every interval, and whenever checkNow asks, until ctx
@@ -124,15 +129,38 @@ func (w *authWatch) distrust() {
 func (w *authWatch) run(ctx context.Context, onFail func(error)) {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
+	// refused counts the checks asked for after a 401 that obtained a fresh
+	// token, the old one having been expired by distrust (machine mode only):
+	// a check that reuses the token refreshed less than authRefreshInterval
+	// ago says nothing new. A tick with no 401 since the previous one starts
+	// the count again.
+	refused := 0
+	askedSinceTick := false
 	for {
+		forced := false
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if !askedSinceTick {
+				refused = 0
+			}
+			askedSinceTick = false
 		case <-w.asked:
-			w.distrust()
+			askedSinceTick = true
+			forced = w.distrust()
 		}
 		err := checkToken(w.src)
+		if w.machine {
+			if forced && err == nil {
+				refused++
+			}
+			if refused >= machineRefusedChecks {
+				onFail(fmt.Errorf("the API keeps refusing the token of the machine account: %w", auth.ErrMachineRevoked))
+
+				return
+			}
+		}
 		switch {
 		case err == nil:
 			if w.failing {
@@ -176,7 +204,9 @@ func (t authWatchTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	resp, err := t.base.RoundTrip(req)
 	switch {
 	case err != nil:
-		if errors.Is(err, auth.ErrNoToken) || errors.Is(err, auth.ErrNoRefreshToken) {
+		// A login lost for good (refused refresh, machine account refused
+		// by the token endpoint) is checked at once, not at the next tick.
+		if auth.IsPermanent(err) {
 			t.watch.checkNow()
 		}
 	case resp.StatusCode == http.StatusUnauthorized:
@@ -188,12 +218,19 @@ func (t authWatchTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 // apiTransportWatching is the transport of `fs mount`: tracing outermost
 // (one CLIENT span per round trip, traceparent injected), Prometheus metrics
-// inside it, around the wrapper that reports a 401 to watch. The other
+// inside it, around the wrapper that reports a 401 to watch. `fs webdav
+// serve` uses the wrapper alone (webdavTransportWatching); the other
 // commands use the bare transport.
 func apiTransportWatching(watch *authWatch) api.Option {
 	return api.WrapTransport(func(base http.RoundTripper) http.RoundTripper {
 		return telemetry.RoundTripper(metrics.RoundTripper(watch.roundTripper(base)))
 	})
+}
+
+// webdavTransportWatching is the transport of `fs webdav serve`: the wrapper
+// that reports a 401 to watch, without the tracing and metrics of the mount.
+func webdavTransportWatching(watch *authWatch) api.Option {
+	return api.WrapTransport(watch.roundTripper)
 }
 
 // checkToken asks src for a valid token (refreshing it when needed) and feeds
@@ -212,6 +249,34 @@ func checkToken(src oauth2.TokenSource) error {
 		metrics.TokenExpiry.Set(0)
 	} else {
 		metrics.TokenExpiry.Set(max(time.Until(tok.Expiry).Seconds(), 0))
+	}
+
+	return nil
+}
+
+// authLostAdvice is what to do once the login of a serving command is lost
+// for good, then restart (e.g. "mount again"): log in again, or, for a
+// machine account, which has no login to renew, have it enabled again.
+func authLostAdvice(restart string) string {
+	if config.MachineMode() {
+		return "The machine account was refused (disabled or deleted?): ask an organization admin to enable it again " +
+			"(`retyc machine enable`), or re-enroll it if it was deleted, and " + restart
+	}
+
+	return "Run `retyc auth login` and " + restart
+}
+
+// requireIdentitySource fails fast, before any network call, when the key that
+// unlocks the account is not available: the machine configuration in machine
+// mode (no passphrase exists there), the key passphrase otherwise.
+func requireIdentitySource() error {
+	if config.MachineMode() {
+		_, err := config.LoadMachine()
+
+		return err
+	}
+	if config.KeyPassphrase() == "" {
+		return config.ErrNoKeyPassphrase
 	}
 
 	return nil

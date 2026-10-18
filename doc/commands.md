@@ -65,6 +65,8 @@ retyc --json user quota | jq .used_storage
 | `cli_too_old`        | The API answered 426: this CLI is older than the minimum it accepts                                                     |
 | `invalid`            | Any other 400 or 422                                                                                                    |
 | `api_error`          | Any other refusal of the API                                                                                            |
+| `enrollment_expired` | `machine enroll`: the request expired unanswered (exit code `1`: run it again)                                          |
+| `enrollment_denied`  | `machine enroll`: an administrator refused the request (exit code `78`)                                                 |
 | `error`              | Anything else (network, local file, argument)                                                                           |
 
 The four storage kinds come from the API's code. A refusal without a code
@@ -81,9 +83,9 @@ treat an unknown one as `error`.
 |------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `0`  | Success                                                                                                                                                                                     |
 | `1`  | Any failure, including transient ones (network, API or identity provider unreachable)                                                                                                       |
-| `77` | Authentication required: no stored token, or the refresh token was rejected (expired or revoked). Retrying cannot help: run `retyc auth login` or provide a new `RETYC_TOKEN`               |
+| `77` | Authentication required: no stored token, or the refresh token was rejected (expired or revoked), or a machine account disabled or refused (token endpoint `invalid_client`, or API 401 in machine mode). Retrying cannot help: run `retyc auth login`, provide a new `RETYC_TOKEN`, or have the machine enabled again (`retyc machine enable`; re-enroll it only if it was deleted). Nothing is deleted on 77: the machine keeps its keys |
 | `75` | `fs mount` only: the mount ran, but files being written (or removed in the background) did not reach the API before it went away. Their changes are lost; each is reported on stderr by IDs |
-| `78` | Key passphrase missing (`RETYC_KEY_PASSPHRASE` unset and no TTY to prompt) or wrong. Retrying cannot help: fix the passphrase                                                               |
+| `78` | Key passphrase missing (`RETYC_KEY_PASSPHRASE` unset and no TTY to prompt) or wrong, or a configuration error; `machine enroll` also uses it for a refused request. Retrying cannot help: fix the passphrase or the configuration |
 
 Codes `77` (`EX_NOPERM` in `sysexits.h`) and `78` (`EX_CONFIG`) are stable: a
 supervisor restarting `retyc fs webdav serve` or `retyc fs mount` should stop on them
@@ -114,7 +116,7 @@ themselves.
 |------------------------------|--------------------------------------------------------|
 | `retyc auth login`           | Authenticate via OIDC device flow                      |
 | `retyc auth login --offline` | Authenticate and print an offline token for CI/CD use  |
-| `retyc auth status`          | Check authentication status (silently refreshes token) |
+| `retyc auth status`          | Check authentication status (silently refreshes token); with a machine account, checks the token endpoint and that `age.key` matches the active key |
 | `retyc auth logout`          | Sign out                                               |
 
 ## Transfer
@@ -228,6 +230,47 @@ file per activity page, chat decrypted when possible) and `data/` (the
 decrypted file tree). Datarooms the organization key cannot open get their
 `meta.json` and messages but no `data/`, and are listed in the manifest.
 Transfers are not exported: the admin API exposes no transfer file download.
+
+## Machine
+
+```bash
+# Enroll a server, a CI runner or a cluster (no login needed)
+retyc machine enroll --org <uuid> --output-dir ./machine [--name <name>] [--cluster-uid <id>]
+```
+
+Generates the keys in `--output-dir` (reused if already there), asks to join the
+organization and waits until an administrator approves it in Organization >
+Machines, after comparing the fingerprint. Text goes to stderr; with `--json`,
+stdout carries one event per line:
+
+```json
+{"event":"pending","enrollment_id":"...","fingerprint":"K7QF-2MXA-PD9R-H3TB","approval_uri":"...","expires_at":"2026-10-17T18:30:00Z"}
+{"event":"approved","machine_id":"...","organization_id":"...","client_id":"machine-..."}
+```
+
+`denied` and `expired` events carry `enrollment_id`. Exit codes: `0` approved,
+`1` expired (run it again; the keys are kept), `78` denied or misconfigured
+(`--org` unknown, API without machine accounts, plan without them).
+
+A machine creates its datarooms like a user: encrypted for itself and the
+organization key, if any. It adds the people who need access with
+`retyc dataroom user add`.
+
+```bash
+# Organization admins, with their own login
+retyc machine requests                       # pending enrollments
+retyc machine approve <enrollment-id> [--fingerprint K7QF-...] [--name <name>] [-y]
+retyc machine deny <enrollment-id> [-y]
+retyc machine ls                             # machine accounts and their status
+retyc machine disable <machine-id> [-y]      # refused at once (exit 77), keys kept
+retyc machine enable <machine-id> [-y]
+retyc machine rm <machine-id> [-y]           # refused while it owns datarooms (chown them first); must enroll again
+```
+
+`approve` shows the request and asks for confirmation, unless `--fingerprint`
+matches the one the machine printed. An approved machine takes a seat.
+In an organization with no organization key, it asks again before approving
+(`-y` accepts).
 
 ## RetycFS
 

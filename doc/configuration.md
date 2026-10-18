@@ -305,6 +305,15 @@ last request gives up prints its error only.
 | Offline token                                                                                                                                                                      | *secret, environment only*                    | `RETYC_TOKEN`                                                     | stored login                                                                            |
 | Key passphrase                                                                                                                                                                     | *secret, environment only*                    | `RETYC_KEY_PASSPHRASE`                                            | prompted                                                                                |
 | WebDAV password                                                                                                                                                                    | *secret, environment only*                    | `RETYC_WEBDAV_PASSWORD`                                           | generated at startup                                                                    |
+| Machine account: enrollment directory (`machine.json`, `client.key`, `age.key`); exclusive of `RETYC_TOKEN` and `RETYC_KEY_PASSPHRASE` | — | `RETYC_MACHINE_DIR` | — (user account) |
+| Machine account: client ID (overrides `machine.json`) | — | `RETYC_CLIENT_ID` | from `machine.json` |
+| Machine account: token endpoint (overrides `machine.json`) | — | `RETYC_TOKEN_ENDPOINT` | from `machine.json` |
+| Machine account: signing key file | — | `RETYC_CLIENT_KEY_FILE` | `$RETYC_MACHINE_DIR/client.key` |
+| Machine account: AGE key file | — | `RETYC_AGE_KEY_FILE` | `$RETYC_MACHINE_DIR/age.key` |
+
+Machine account files must not be accessible to others (`0600` or `0440`;
+symlinks are followed, so a mounted Kubernetes Secret with `defaultMode: 0440`
+works). A missing variable or a bad mode exits with code 78.
 
 Environment variables must carry the `RETYC_` prefix; an empty variable counts
 as unset. Proxy and CA variables (`HTTPS_PROXY`, `SSL_CERT_FILE`, ...) are the

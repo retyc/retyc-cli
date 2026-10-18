@@ -43,6 +43,7 @@ func printJSON(v any) error {
 // newErrorJSON ({"error", "kind"}, plus "status" and "detail" for an API
 // refusal).
 func printError(err error) {
+	err = explainMachineForbidden(err)
 	if !jsonOutput {
 		// Errors quote names and server messages: escape them, keeping line breaks.
 		fmt.Fprintln(os.Stderr, ui.EscapeLines(err.Error()))
@@ -56,6 +57,26 @@ func printError(err error) {
 		return
 	}
 	fmt.Fprintln(os.Stderr, string(b))
+}
+
+// machineForbiddenError prefixes the API's refusal with what it means to the
+// user; it unwraps to the refusal, so errors.Is/As and the kind are unchanged.
+type machineForbiddenError struct{ err error }
+
+func (e machineForbiddenError) Error() string {
+	return "this command is not available to a machine account: " + e.err.Error()
+}
+
+func (e machineForbiddenError) Unwrap() error { return e.err }
+
+// explainMachineForbidden wraps the refusal of an endpoint a machine account
+// may not call, at print time, so the user is told why the API said 403.
+func explainMachineForbidden(err error) error {
+	if api.IsMachineForbidden(err) {
+		return machineForbiddenError{err}
+	}
+
+	return err
 }
 
 // confirm asks the user to confirm prompt on stderr and returns true when
@@ -155,6 +176,10 @@ type authStatusJSON struct {
 	Refreshed     bool       `json:"refreshed"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	Reason        string     `json:"reason,omitempty"`
+	// Machine mode only.
+	Mode      string `json:"mode,omitempty"`
+	ClientID  string `json:"client_id,omitempty"`
+	MachineID string `json:"machine_id,omitempty"`
 }
 
 type versionJSON struct {
@@ -280,4 +305,43 @@ type rekeyJSON struct {
 
 func newRekeyJSON(r *service.AdminRekeyResult) rekeyJSON {
 	return rekeyJSON{Reencrypted: r.Reencrypted, Skipped: nonNil(r.Skipped)}
+}
+
+// machineActionJSON is the result of `machine deny`, `enable` and `disable`:
+// the ID acted on and what it became (denied, enabled, disabled).
+type machineActionJSON struct {
+	ID     string `json:"id"`
+	Result string `json:"result"`
+}
+
+// enrollEventJSON is the line `machine enroll --json` writes on stdout for
+// each event. Only event is always present: the other fields belong to the
+// events that carry them (doc/commands.md).
+type enrollEventJSON struct {
+	Event          string `json:"event"`
+	EnrollmentID   string `json:"enrollment_id,omitempty"`
+	Fingerprint    string `json:"fingerprint,omitempty"`
+	ApprovalURI    string `json:"approval_uri,omitempty"`
+	ExpiresAt      string `json:"expires_at,omitempty"`
+	MachineID      string `json:"machine_id,omitempty"`
+	OrganizationID string `json:"organization_id,omitempty"`
+	ClientID       string `json:"client_id,omitempty"`
+}
+
+// newEnrollEventJSON builds the JSON view of an enrollment event.
+func newEnrollEventJSON(ev service.EnrollEvent) enrollEventJSON {
+	v := enrollEventJSON{
+		Event:          ev.Kind,
+		EnrollmentID:   ev.EnrollmentID,
+		Fingerprint:    ev.Fingerprint,
+		ApprovalURI:    ev.ApprovalURI,
+		MachineID:      ev.MachineID,
+		OrganizationID: ev.OrganizationID,
+		ClientID:       ev.ClientID,
+	}
+	if !ev.ExpiresAt.IsZero() {
+		v.ExpiresAt = ev.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+
+	return v
 }

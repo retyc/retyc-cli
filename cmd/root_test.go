@@ -109,3 +109,13 @@ func TestExitCode(t *testing.T) {
 		})
 	}
 }
+
+func TestExitCodeMachineConfig(t *testing.T) {
+	err := fmt.Errorf("loading: %w", config.ErrMachineConfig)
+	if got := exitCode(err); got != exitConfig {
+		t.Errorf("exitCode = %d, want %d", got, exitConfig)
+	}
+	if got := errorKind(err); got != kindConfig {
+		t.Errorf("errorKind = %q, want %q", got, kindConfig)
+	}
+}

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,10 +30,23 @@ var authCmd = &cobra.Command{
 
 var offlineLogin bool
 
+// refuseInMachineMode fails, before any network call, a command that only makes
+// sense for an interactive login.
+func refuseInMachineMode() error {
+	if config.MachineMode() {
+		return fmt.Errorf("%w: machine account mode: no interactive login", config.ErrMachineConfig)
+	}
+
+	return nil
+}
+
 var authLoginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate using OIDC device flow",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := refuseInMachineMode(); err != nil {
+			return err
+		}
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
@@ -90,6 +105,9 @@ var authLogoutCmd = &cobra.Command{
 	Use:   "logout",
 	Short: "Revoke server-side token and remove stored credentials",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := refuseInMachineMode(); err != nil {
+			return err
+		}
 		var baseURL string
 		if cfg, err := config.Load(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: loading config: %v\n", err)
@@ -121,6 +139,10 @@ var authStatusCmd = &cobra.Command{
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
+		}
+
+		if config.MachineMode() {
+			return machineAuthStatus(cmd.Context(), cfg)
 		}
 
 		envToken := config.Token()
@@ -200,6 +222,67 @@ var authStatusCmd = &cobra.Command{
 	},
 }
 
+// machineAuthStatus reports the status of a machine account: the token
+// endpoint must hand out a token and the API's active key must be the one of
+// age.key. token.json and the OIDC discovery are never touched.
+// machineRevokedStatus reports a machine account refused by the identity
+// provider or the API: a status, not a failure (exit code 0).
+func machineRevokedStatus() error {
+	if jsonOutput {
+		return printJSON(authStatusJSON{Authenticated: false, Reason: "machine_revoked"})
+	}
+	fmt.Println("Machine account refused (disabled or deleted?): ask an organization admin to enable it again.")
+
+	return nil
+}
+
+func machineAuthStatus(ctx context.Context, cfg *config.Config) error {
+	m, err := config.LoadMachine()
+	if err != nil {
+		return err
+	}
+	src, err := mustGetToken(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	tok, err := src.Token()
+	if err != nil {
+		if errors.Is(err, auth.ErrMachineRevoked) {
+			return machineRevokedStatus()
+		}
+
+		return err
+	}
+
+	client := api.New(cfg.API.BaseURL, cliUserAgent(), src, insecure, debug,
+		apiRetry(cfg), api.WithUnsafeWrite(cfg.API.UnsafeWrite))
+	userKey, err := client.GetActiveKey(ctx)
+	var httpErr *api.HTTPError
+	if errors.As(err, &httpErr) && httpErr.Status == http.StatusUnauthorized {
+		// A token was issued but the API refuses the account (disabled).
+		return machineRevokedStatus()
+	}
+	if err != nil {
+		return fmt.Errorf("fetching active key: %w", err)
+	}
+	if _, err := service.MachineIdentity(ctx, userKey); err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		expiry := tok.Expiry
+
+		return printJSON(authStatusJSON{
+			Authenticated: true, ExpiresAt: &expiry,
+			Mode: "machine", ClientID: m.ClientID, MachineID: m.MachineID,
+		})
+	}
+	fmt.Printf("Authenticated — machine account %s (expires: %s)\n",
+		m.ClientID, tok.Expiry.Format("2006-01-02 15:04:05"))
+
+	return nil
+}
+
 // newHTTPClient returns an HTTP client configured according to the insecure and debug flags.
 // Proxy settings and custom root CAs come from the environment through
 // api.BaseTransport.
@@ -244,7 +327,7 @@ func (t *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	fmt.Fprintf(os.Stderr, "< %s\n", resp.Status)
 	if len(body) > 0 {
 		var buf bytes.Buffer
-		if json.Indent(&buf, body, "  ", "  ") == nil {
+		if json.Indent(&buf, redactDebugBody(body), "  ", "  ") == nil {
 			fmt.Fprintf(os.Stderr, "  %s\n", buf.String())
 		} else {
 			fmt.Fprintf(os.Stderr, "  (%d bytes, binary)\n", len(body))
@@ -254,6 +337,20 @@ func (t *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 
 	return resp, nil
+}
+
+// accessTokenField matches the access_token member of a JSON token response.
+var accessTokenField = regexp.MustCompile(`("access_token"\s*:\s*)"[^"]*"`)
+
+// clientAssertionField matches the client_assertion field of a form body.
+var clientAssertionField = regexp.MustCompile(`(client_assertion=)[^&\s]*`)
+
+// redactDebugBody hides what --debug must never print: the access token of a
+// token response and the signed assertion of a machine token request.
+func redactDebugBody(body []byte) []byte {
+	body = accessTokenField.ReplaceAll(body, []byte(`${1}"[redacted]"`))
+
+	return clientAssertionField.ReplaceAll(body, []byte("${1}[redacted]"))
 }
 
 // isOfflineToken reports whether the given JWT refresh token is a Keycloak

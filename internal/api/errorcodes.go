@@ -43,6 +43,9 @@ const (
 	// CodeMasterKeyMismatch: the organization key announced at dataroom
 	// creation (master_public_key) is no longer the organization's key.
 	CodeMasterKeyMismatch = "MASTER_KEY_MISMATCH"
+	// CodeMachineOtherOrganization: a machine account was added to a dataroom
+	// of another organization.
+	CodeMachineOtherOrganization = "MACHINE_OTHER_ORGANIZATION"
 )
 
 // ErrorCode returns the X-Error-Code of the HTTPError in err's chain, or ""
@@ -54,4 +57,19 @@ func ErrorCode(err error) string {
 	}
 
 	return ""
+}
+
+// MachineForbiddenDetail is the detail of the 403 an endpoint answers to a
+// machine account that is not allowed to call it.
+const MachineForbiddenDetail = "machine_account_forbidden"
+
+// IsMachineForbidden reports whether err is the refusal of an endpoint that a
+// machine account may not call: a 403 whose detail is MachineForbiddenDetail.
+func IsMachineForbidden(err error) bool {
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		return false
+	}
+
+	return httpErr.Status == 403 && httpErr.Detail() == MachineForbiddenDetail
 }

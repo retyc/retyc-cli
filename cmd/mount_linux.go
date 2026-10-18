@@ -194,8 +194,8 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	if err := checkFUSE(fuseDevice); err != nil {
 		return err
 	}
-	if config.KeyPassphrase() == "" {
-		return config.ErrNoKeyPassphrase
+	if err := requireIdentitySource(); err != nil {
+		return err
 	}
 
 	resolveMountFlags(cmd.Flags())
@@ -405,7 +405,7 @@ func serveMount(srv mountServer, stop <-chan os.Signal, authExpired <-chan error
 	err := srv.Shutdown(ctx)
 	if authErr != nil {
 		// Wrapped: the exit code tells a supervisor not to restart (77).
-		authErr = fmt.Errorf("authentication expired: %w\nRun `retyc auth login` and mount again", authErr)
+		authErr = fmt.Errorf("authentication expired: %w\n%s", authErr, authLostAdvice("mount again"))
 		// The files lost on the way are still told: the count, never a name.
 		var lost *retycfs.LostWritesError
 		if errors.As(err, &lost) {

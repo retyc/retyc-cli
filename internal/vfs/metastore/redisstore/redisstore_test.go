@@ -1,7 +1,6 @@
 package redisstore
 
 import (
-	"reflect"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"

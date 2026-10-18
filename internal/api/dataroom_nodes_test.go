@@ -219,9 +219,9 @@ func TestCreateDataroomSymlink(t *testing.T) {
 func TestDataroom_RoleAndWritable(t *testing.T) {
 	var listed, detail, old Dataroom
 	for raw, into := range map[string]*Dataroom{
-		`{"id":"a","role":"viewer"}`:   &listed,
+		`{"id":"a","role":"viewer"}`:  &listed,
 		`{"id":"a","writable":false}`: &detail,
-		`{"id":"a"}`:                   &old,
+		`{"id":"a"}`:                  &old,
 	} {
 		if err := json.Unmarshal([]byte(raw), into); err != nil {
 			t.Fatalf("Unmarshal(%s): %v", raw, err)
