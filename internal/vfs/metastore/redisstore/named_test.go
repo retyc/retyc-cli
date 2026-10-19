@@ -1,8 +1,8 @@
 package redisstore
 
 import (
-	"reflect"
 	"context"
+	"reflect"
 	"testing"
 	"time"
 

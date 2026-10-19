@@ -521,7 +521,7 @@ func (s *flakyTokenSource) Token() (*oauth2.Token, error) {
 // asked (network, 5xx, timeout) stops nothing: it is reported once, tried
 // again at the next tick, and the watch goes on. Only a login the provider
 // refuses, or that has no refresh token, stops the command. `fs webdav serve`
-// runs the same watch (tokenKeepalive).
+// runs the same watch.
 func TestAuthWatch_TransientFailureKeepsServing(t *testing.T) {
 	transient := map[string]error{
 		"network":  fmt.Errorf("refreshing token: %w", &net.OpError{Op: "dial", Err: errors.New("connection refused")}),

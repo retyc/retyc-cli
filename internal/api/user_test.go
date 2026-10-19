@@ -131,3 +131,18 @@ func TestGetQuota_Success(t *testing.T) {
 		t.Errorf("UsedStorage = %d, want %d", quota.UsedStorage, 1024*1024)
 	}
 }
+
+func TestGetActiveKeyNullPrivateKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"public_key":"age1pq1abc","private_key_enc":null}`)
+	}))
+	defer srv.Close()
+
+	key, err := newTestClient(srv).GetActiveKey(context.Background())
+	if err != nil {
+		t.Fatalf("GetActiveKey() error = %v", err)
+	}
+	if key == nil || key.PublicKey != "age1pq1abc" || key.PrivateKeyEnc != "" {
+		t.Errorf("GetActiveKey() = %+v, want public key and empty PrivateKeyEnc", key)
+	}
+}

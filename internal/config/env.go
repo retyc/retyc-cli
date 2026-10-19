@@ -24,6 +24,13 @@ const (
 	// EnvFileName designates the environment file (see envfile.go). It is read
 	// before anything else: the file may carry RETYC_CONFIG_DIR itself.
 	EnvFileName = "RETYC_ENV_FILE"
+
+	// Machine account (see machine.go). Paths and identifiers, not secrets.
+	EnvMachineDirName    = "RETYC_MACHINE_DIR"
+	EnvClientIDName      = "RETYC_CLIENT_ID"
+	EnvClientKeyFileName = "RETYC_CLIENT_KEY_FILE"
+	EnvTokenEndpointName = "RETYC_TOKEN_ENDPOINT" //nolint:gosec // G101: variable name, not a credential
+	EnvAgeKeyFileName    = "RETYC_AGE_KEY_FILE"
 )
 
 // ErrNoKeyPassphrase is returned when the key passphrase is required but the

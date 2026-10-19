@@ -245,7 +245,7 @@ func (e *RefreshError) transient() bool {
 // (a 4xx other than 408 and 429). Everything else may be gone at the next
 // attempt: a network error, a timeout, a 5xx, an answer that cannot be read.
 func IsPermanent(err error) bool {
-	if errors.Is(err, ErrNoToken) || errors.Is(err, ErrNoRefreshToken) {
+	if errors.Is(err, ErrNoToken) || errors.Is(err, ErrNoRefreshToken) || errors.Is(err, ErrMachineRevoked) {
 		return true
 	}
 	var refused *RefreshError

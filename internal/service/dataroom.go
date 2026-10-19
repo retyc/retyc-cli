@@ -238,7 +238,7 @@ func resolveDataroomSessionUncached(
 		return nil, fmt.Errorf("fetching encryption key: %w", kr.err)
 	}
 	if kr.v == nil {
-		return nil, fmt.Errorf("no active encryption key - set up your key in the web interface first")
+		return nil, errNoActiveKey()
 	}
 
 	userIdentity, err := ResolveUserIdentity(ctx, cfg, kr.v, reader)
@@ -1487,6 +1487,10 @@ func ListDatarooms(ctx context.Context, client *api.Client) (*ListDataroomsResul
 	return &ListDataroomsResult{Items: items, Total: len(items)}, nil
 }
 
+// createAttempts is the number of POST /dataroom a creation may send: one
+// retry when the organization key changed between its read and the creation.
+const createAttempts = 2
+
 // CreateDataroom creates a new dataroom with the given title and settings.
 // reader is used to obtain the user's AGE key passphrase.
 //
@@ -1494,7 +1498,7 @@ func ListDatarooms(ctx context.Context, client *api.Client) (*ListDataroomsResul
 // organization has an active one, as the web app does, so that the
 // organization can recover the dataroom. A key that changed between its read
 // and the creation (409 MASTER_KEY_MISMATCH) is read again and the creation
-// retried once.
+// retried once with fresh session material.
 func CreateDataroom(
 	ctx context.Context, cfg *config.Config, client *api.Client, title string, opts api.DataroomOptions,
 	reader PassphraseReader,
@@ -1504,22 +1508,40 @@ func CreateDataroom(
 		return nil, fmt.Errorf("fetching encryption key: %w", err)
 	}
 	if userKey == nil {
-		return nil, fmt.Errorf("no active encryption key - set up your key in the web interface first")
+		return nil, errNoActiveKey()
 	}
 
-	dr, err := createDataroom(ctx, client, title, userKey.PublicKey, organizationKey(ctx, client), opts)
-	if api.ErrorCode(err) == api.CodeMasterKeyMismatch {
-		dr, err = createDataroom(ctx, client, title, userKey.PublicKey, organizationKey(ctx, client), opts)
-	}
-	if api.ErrorCode(err) == api.CodeMasterKeyMismatch {
-		return nil, fmt.Errorf("creating dataroom: the organization key changed during the creation, retry: %w", err)
-	}
+	machine := config.MachineMode()
+	orgKey, err := organizationKey(ctx, client, machine)
 	if err != nil {
-		return nil, fmt.Errorf("creating dataroom: %w", err)
+		return nil, err
 	}
 
-	return &CreateDataroomResult{ID: dr.ID, Title: dr.Title}, nil
+	for attempt := 1; ; attempt++ {
+		dr, err := createDataroom(ctx, client, title, userKey.PublicKey, orgKey, opts)
+		if err == nil {
+			if machine && orgKey == "" {
+				fmt.Fprintln(warnWriter, "warning: the organization has no organization key: only this machine "+
+					"can decrypt the dataroom; add members with `retyc dataroom user add`")
+			}
+
+			return &CreateDataroomResult{ID: dr.ID, Title: dr.Title}, nil
+		}
+		if api.ErrorCode(err) != api.CodeMasterKeyMismatch {
+			return nil, fmt.Errorf("creating dataroom: %w", err)
+		}
+		if attempt >= createAttempts {
+			return nil, fmt.Errorf("creating dataroom: the organization key changed during the creation, retry: %w", err)
+		}
+		if orgKey, err = organizationKey(ctx, client, machine); err != nil {
+			return nil, err
+		}
+	}
 }
+
+// warnWriter receives the warning of a machine dataroom no one else can
+// decrypt; tests replace it.
+var warnWriter io.Writer = os.Stderr
 
 // createDataroom generates the session material of a new dataroom, encrypts
 // its private key for the user (and the organization key when not empty) and
@@ -1557,21 +1579,38 @@ func createDataroom(
 }
 
 // organizationKey returns the organization key to add to a new dataroom, ""
-// when there is none. A failed read is not fatal, as in the web app: the
-// dataroom is then created without the organization key, with a warning.
-func organizationKey(ctx context.Context, client *api.Client) string {
+// when there is none. For a user, a failed read is not fatal, as in the web
+// app: the dataroom is then created without the organization key, with a
+// warning. A machine account fails instead: its datarooms must stay
+// recoverable by the organization, and an organization with no service
+// account (nil, a 404) is the only "no key" it accepts.
+func organizationKey(ctx context.Context, client *api.Client, machine bool) (string, error) {
 	sa, err := client.GetOrganizationServiceAccount(ctx)
 	if err != nil {
+		if machine {
+			return "", fmt.Errorf("reading the organization key: %w", err)
+		}
 		if ctx.Err() != nil {
-			return "" // interrupted: the creation fails on the same context
+			return "", nil // interrupted: the creation fails on the same context
 		}
 		fmt.Fprintf(os.Stderr,
 			"warning: could not read the organization key (%v); the dataroom is created without it\n", err)
 
-		return ""
+		return "", nil
 	}
 
-	return sa.OrganizationKey()
+	return sa.OrganizationKey(), nil
+}
+
+// errNoActiveKey is the error of an account with no active encryption key.
+// For a machine account it is a configuration error (exit code 78): its key
+// is set at enrollment, not in the web interface.
+func errNoActiveKey() error {
+	if config.MachineMode() {
+		return fmt.Errorf("%w: the machine account has no active key", config.ErrMachineConfig)
+	}
+
+	return errors.New("no active encryption key - set up your key in the web interface first")
 }
 
 // UpdateDataroom changes a dataroom's title or settings; only the fields set in
@@ -2125,10 +2164,20 @@ func AddDataroomUser(
 	}
 
 	if _, err := client.AddDataroomUser(ctx, dataroomID, email, role); err != nil {
-		return fmt.Errorf("adding user: %w", err)
+		return machineAddUserError(err)
 	}
 
 	return rekeyDataroom(ctx, client, dataroomID, sess.PrivateKey, email)
+}
+
+// machineAddUserError wraps the failure of AddDataroomUser, with an explicit
+// message for the refusal of a machine account joining another organization.
+func machineAddUserError(err error) error {
+	if api.ErrorCode(err) == api.CodeMachineOtherOrganization {
+		return fmt.Errorf("adding user: a machine account can only join datarooms of its organization: %w", err)
+	}
+
+	return fmt.Errorf("adding user: %w", err)
 }
 
 // RemoveDataroomUser removes a user from the dataroom and rekeys it for remaining members.

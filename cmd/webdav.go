@@ -1379,9 +1379,10 @@ Example:
 			return err
 		}
 
-		// Fail-fast: passphrase must be set before any crypto operation.
-		if config.KeyPassphrase() == "" {
-			return config.ErrNoKeyPassphrase
+		// Fail-fast: the passphrase (or the machine configuration) must be set
+		// before any crypto operation.
+		if err := requireIdentitySource(); err != nil {
+			return err
 		}
 
 		bindUnsafeWrite(cmd.Flags())
@@ -1394,8 +1395,12 @@ Example:
 		if err != nil {
 			return err
 		}
+		// A request the API answers 401 has the login checked at once, as in
+		// `fs mount`: a lost login (or a refused machine account) stops the
+		// server without waiting for the next tick of the keepalive.
+		watch := newAuthWatch(tokSrc)
 		client := api.New(cfg.API.BaseURL, cliUserAgent(), tokSrc, insecure, debug,
-			apiRetry(cfg), api.WithUnsafeWrite(cfg.API.UnsafeWrite))
+			webdavTransportWatching(watch), apiRetry(cfg), api.WithUnsafeWrite(cfg.API.UnsafeWrite))
 
 		// Fail-fast before binding the port: auth + API reachability, then the
 		// key passphrase itself (a wrong one would otherwise only surface on the
@@ -1512,7 +1517,10 @@ Example:
 		}()
 
 		authErrCh := make(chan error, 1)
-		go tokenKeepalive(ctx, tokSrc, func(err error) {
+		// Keep the access token warm; when the login is lost for good, shut
+		// the server down gracefully (in-flight uploads, orphaned-node cleanup
+		// and temp-dir removal all run).
+		go watch.run(ctx, func(err error) {
 			select {
 			case authErrCh <- err:
 			default:
@@ -1549,8 +1557,7 @@ Example:
 		// Surface an auth-expiry shutdown as a non-zero exit with a clear message.
 		select {
 		case err := <-authErrCh:
-			return fmt.Errorf(
-				"authentication expired: %w\nRun `retyc auth login` and restart the WebDAV server", err)
+			return fmt.Errorf("authentication expired: %w\n%s", err, authLostAdvice("restart the WebDAV server"))
 		default:
 		}
 

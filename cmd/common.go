@@ -54,6 +54,16 @@ func spinnerReader(s *ui.Spinner) func() (string, error) {
 // mustGetToken retrieves a refreshing OAuth2 token source, returning a
 // user-friendly error if authentication is missing or expired.
 func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, error) {
+	m, err := config.LoadMachine()
+	if err != nil {
+		return nil, err
+	}
+	if m != nil {
+		// Machine mode: no OIDC discovery, nothing read from or written to
+		// token.json.
+		return machineTokenSource(m)
+	}
+
 	persist := config.Token() == ""
 
 	// When using stored tokens, check the token file before making any HTTP
@@ -97,6 +107,37 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, 
 	}
 
 	return auth.NewRefreshingTokenSource(tok, *oidcCfg, httpClient, persist), nil
+}
+
+// machineSource is the token source of the machine account, shared by every
+// caller of the process (the MCP server asks for it once per tool call, and
+// the access token it caches must be reused).
+var machineSource struct {
+	mu  sync.Mutex
+	src *auth.MachineTokenSource
+}
+
+// machineTokenSource returns the process-wide machine token source, built on
+// first use.
+func machineTokenSource(m *config.Machine) (oauth2.TokenSource, error) {
+	machineSource.mu.Lock()
+	defer machineSource.mu.Unlock()
+	if machineSource.src == nil {
+		src, err := auth.NewMachineTokenSource(m, newHTTPClient(insecure, debug))
+		if err != nil {
+			return nil, err
+		}
+		machineSource.src = src
+	}
+
+	return machineSource.src, nil
+}
+
+// resetMachineTokenSource forgets the memoized source (tests only).
+func resetMachineTokenSource() {
+	machineSource.mu.Lock()
+	defer machineSource.mu.Unlock()
+	machineSource.src = nil
 }
 
 // newAPIClient loads config, obtains a valid token, and returns both the config

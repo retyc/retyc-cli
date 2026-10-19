@@ -50,6 +50,8 @@ const (
 	kindInvalid          = "invalid"
 	kindCLITooOld        = "cli_too_old"
 	kindAPIError         = "api_error"
+	kindEnrollExpired    = "enrollment_expired"
+	kindEnrollDenied     = "enrollment_denied"
 	kindError            = "error"
 )
 
@@ -87,13 +89,22 @@ func errorKind(err error) string {
 	legacy := code == ""
 	var lost lostWritesError
 	switch {
-	case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrNoRefreshToken):
+	case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrNoRefreshToken),
+		errors.Is(err, auth.ErrMachineRevoked), machineUnauthorized(err):
 		return kindAuthRequired
+	case errors.Is(err, config.ErrMachineConfig) && status == http.StatusForbidden:
+		// The plan of the organization has no machine accounts: told as the
+		// refusal it is, though the exit code stays the configuration one.
+		return kindForbidden
 	case errors.Is(err, config.ErrNoKeyPassphrase), errors.Is(err, service.ErrWrongKeyPassphrase),
-		errors.Is(err, config.ErrEnvFile):
+		errors.Is(err, config.ErrEnvFile), errors.Is(err, config.ErrMachineConfig):
 		return kindConfig
+	case errors.Is(err, service.ErrEnrollmentDenied):
+		return kindEnrollDenied
 	case errors.As(err, &lost):
 		return kindLostWrites
+	case errors.Is(err, service.ErrEnrollmentExpired):
+		return kindEnrollExpired
 	case errors.Is(err, errJSONNeedsYes):
 		return kindNeedsYes
 	case errors.Is(err, api.ErrRateLimited):

@@ -18,6 +18,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/spf13/cobra"
+	"golang.org/x/oauth2"
 )
 
 var mcpCmd = &cobra.Command{
@@ -207,6 +208,44 @@ func registerMCPTools(srv *server.MCPServer) {
 
 // — Auth tools ————————————————————————————————————————————————————————————————
 
+// refuseInMachineModeTool is the error of the interactive auth tools in
+// machine mode, returned before any network call.
+func refuseInMachineModeTool() error {
+	if config.MachineMode() {
+		return errors.New("machine account: no interactive login")
+	}
+
+	return nil
+}
+
+// machineAuthStatusTool is the cheap auth_status of a machine account: a token
+// must be obtainable, the age.key is not checked here.
+func machineAuthStatusTool(ctx context.Context, cfg *config.Config) (*mcp.CallToolResult, error) {
+	m, err := config.LoadMachine()
+	if err != nil {
+		return toolErr(err)
+	}
+	src, err := mustGetToken(ctx, cfg)
+	if err == nil {
+		var t *oauth2.Token
+		if t, err = src.Token(); err == nil {
+			return mcp.NewToolResultText(toJSON(map[string]any{
+				"authenticated": true,
+				"mode":          "machine",
+				"client_id":     m.ClientID,
+				"machine_id":    m.MachineID,
+				"expires_at":    t.Expiry.UTC().Format(time.RFC3339),
+			})), nil
+		}
+	}
+
+	return mcp.NewToolResultText(toJSON(map[string]any{
+		"authenticated": false,
+		"mode":          "machine",
+		"error":         err.Error(),
+	})), nil
+}
+
 func registerAuthTools(srv *server.MCPServer) {
 	srv.AddTool(
 		mcp.NewTool("auth_status",
@@ -214,7 +253,8 @@ func registerAuthTools(srv *server.MCPServer) {
 			mcp.WithDescription(
 				"Check authentication status and token validity. "+
 					"If the result is authenticated=false, do NOT tell the user to run any CLI command — "+
-					"call auth_login_start immediately to initiate the login flow directly from this MCP server.",
+					"call auth_login_start immediately to initiate the login flow directly from this MCP server"+
+					" (not applicable to machine accounts, which cannot log in interactively).",
 			),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
@@ -222,6 +262,9 @@ func registerAuthTools(srv *server.MCPServer) {
 			cfg, err := config.Load()
 			if err != nil {
 				return toolErr(fmt.Errorf("loading config: %w", err))
+			}
+			if config.MachineMode() {
+				return machineAuthStatusTool(ctx, cfg)
 			}
 			tok, err := mustGetToken(ctx, cfg)
 			if err != nil {
@@ -254,6 +297,9 @@ func registerAuthTools(srv *server.MCPServer) {
 			mcp.WithDestructiveHintAnnotation(false),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := refuseInMachineModeTool(); err != nil {
+				return toolErr(err)
+			}
 			cfg, err := config.Load()
 			if err != nil {
 				return toolErr(fmt.Errorf("loading config: %w", err))
@@ -294,6 +340,9 @@ func registerAuthTools(srv *server.MCPServer) {
 			mcp.WithString("device_code", mcp.Required(), mcp.Description("device_code returned by auth_login_start")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := refuseInMachineModeTool(); err != nil {
+				return toolErr(err)
+			}
 			deviceCode := req.GetString("device_code", "")
 			if deviceCode == "" {
 				return toolErr(fmt.Errorf("device_code is required"))
@@ -332,6 +381,9 @@ func registerAuthTools(srv *server.MCPServer) {
 			mcp.WithDestructiveHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := refuseInMachineModeTool(); err != nil {
+				return toolErr(err)
+			}
 			cfg, err := config.Load()
 			if err != nil {
 				return toolErr(fmt.Errorf("loading config: %w", err))

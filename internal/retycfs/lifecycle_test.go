@@ -4,7 +4,7 @@ package retycfs
 
 import (
 	"context"
-"errors"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"

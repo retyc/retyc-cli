@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
@@ -129,14 +130,25 @@ type lostWritesError struct{ error }
 
 func (e lostWritesError) Unwrap() error { return e.error }
 
+// machineUnauthorized reports whether err carries a 401 of the API while the
+// process authenticates as a machine account: its token is refused, which
+// no login can fix, so it is a lost login (77) like a revoked account.
+func machineUnauthorized(err error) bool {
+	var httpErr *api.HTTPError
+
+	return config.MachineMode() && errors.As(err, &httpErr) && httpErr.Status == http.StatusUnauthorized
+}
+
 // exitCode maps the error a command returned to the process exit code.
 func exitCode(err error) int {
 	var lost lostWritesError
 	switch {
-	case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrNoRefreshToken):
+	case errors.Is(err, auth.ErrNoToken), errors.Is(err, auth.ErrNoRefreshToken),
+		errors.Is(err, auth.ErrMachineRevoked), machineUnauthorized(err):
 		return exitAuthRequired
 	case errors.Is(err, config.ErrNoKeyPassphrase), errors.Is(err, service.ErrWrongKeyPassphrase),
-		errors.Is(err, config.ErrEnvFile):
+		errors.Is(err, config.ErrEnvFile), errors.Is(err, config.ErrMachineConfig),
+		errors.Is(err, service.ErrEnrollmentDenied):
 		return exitConfig
 	case errors.As(err, &lost):
 		return exitLostWrites

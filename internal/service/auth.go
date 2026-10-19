@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,74 @@ import (
 // ErrWrongKeyPassphrase is returned when the key passphrase does not decrypt
 // the user's private key. Retrying with the same passphrase cannot succeed.
 var ErrWrongKeyPassphrase = errors.New("wrong key passphrase")
+
+// ErrAgeKeyMismatch is returned when the machine's age.key is not the private
+// half of the account's active key. It is wrapped with config.ErrMachineConfig.
+var ErrAgeKeyMismatch = errors.New("the AGE key does not match the machine account's key")
+
+// classicAgeKeyPrefix starts an X25519 identity, which this CLI never accepts.
+const classicAgeKeyPrefix = "AGE-SECRET-KEY-1"
+
+// MachineIdentity reads the machine's AGE identity from its key file and checks
+// that it is the private half of userKey. No passphrase, keyring or scrypt is
+// involved. Errors wrap config.ErrMachineConfig and never quote the file.
+func MachineIdentity(_ context.Context, userKey *api.UserKey) (*age.HybridIdentity, error) {
+	m, err := config.LoadMachine()
+	if err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return nil, fmt.Errorf("%w: not in machine mode", config.ErrMachineConfig)
+	}
+	if userKey == nil {
+		return nil, fmt.Errorf("%w: no active key", config.ErrMachineConfig)
+	}
+	data, err := config.ReadMachineFile(m.AgeKeyFile)
+	if err != nil {
+		return nil, err
+	}
+	identity, err := parseMachineAgeKey(data, m.AgeKeyFile)
+	if err != nil {
+		return nil, err
+	}
+	if identity.Recipient().String() != userKey.PublicKey {
+		return nil, fmt.Errorf("%w: %w", config.ErrMachineConfig, ErrAgeKeyMismatch)
+	}
+
+	return identity, nil
+}
+
+// parseMachineAgeKey parses the content of a machine age.key: comment lines
+// and blank lines are skipped, exactly one post-quantum identity must remain.
+// name is the file name used in errors, which wrap config.ErrMachineConfig and
+// never quote the content.
+func parseMachineAgeKey(data []byte, name string) (*age.HybridIdentity, error) {
+	// The standard age-keygen format puts comment lines before the key.
+	var keyLines []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		keyLines = append(keyLines, line)
+	}
+	if len(keyLines) != 1 {
+		return nil, fmt.Errorf("%w: %s must hold exactly one identity (expected one identity, found %d)",
+			config.ErrMachineConfig, name, len(keyLines))
+	}
+	content := keyLines[0]
+	if strings.HasPrefix(content, classicAgeKeyPrefix) {
+		return nil, fmt.Errorf("%w: %s holds a classic X25519 key, a post-quantum key is required",
+			config.ErrMachineConfig, name)
+	}
+	identity, err := crypto.ParseIdentity(content)
+	if err != nil {
+		// The parse error is dropped on purpose: it could quote the key.
+		return nil, fmt.Errorf("%w: %s is not a valid post-quantum AGE identity", config.ErrMachineConfig, name)
+	}
+
+	return identity, nil
+}
 
 // decryptKeyWithPassphrase runs the scrypt that unlocks a private key with a
 // passphrase, as one crypto.unlock_key span under the caller's span. kind is
@@ -49,6 +118,10 @@ func decryptKeyWithPassphrase(ctx context.Context, kind, ciphertext, passphrase 
 func ResolveUserIdentity(
 	ctx context.Context, cfg *config.Config, userKey *api.UserKey, reader PassphraseReader,
 ) (*age.HybridIdentity, error) {
+	if config.MachineMode() {
+		return MachineIdentity(ctx, userKey)
+	}
+
 	var identityStr string
 	fromKeyring := false
 
@@ -110,6 +183,10 @@ func UnlockUserIdentity(ctx context.Context, client *api.Client, reader Passphra
 	userKey, err := client.GetActiveKey(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetching user key: %w", err)
+	}
+	if config.MachineMode() {
+		// A nil key is reported by MachineIdentity as a machine configuration error.
+		return MachineIdentity(ctx, userKey)
 	}
 	if userKey == nil {
 		return nil, fmt.Errorf("no active encryption key - set up your key in the web interface first")

@@ -91,6 +91,7 @@ func WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) Option {
 
 // New creates a Client that attaches a valid OAuth2 token to every request.
 // tokSource is called before each request; it must refresh the token when expired.
+// A nil tokSource makes an anonymous client that sends no Authorization header.
 // userAgent is sent as the User-Agent header on all requests.
 // When insecure is true, TLS certificate verification is skipped, which allows
 // connecting to servers using self-signed certificates.
@@ -119,12 +120,16 @@ func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debu
 	// mid-transfer (e.g. stalled downloads).
 	base.IdleConnTimeout = 90 * time.Second
 
+	// A nil tokSource is an anonymous client (machine enrollment): no
+	// Authorization header at all.
+	var inner http.RoundTripper = base
+	if tokSource != nil {
+		inner = &oauth2.Transport{Source: tokSource, Base: base}
+	}
+
 	var transport http.RoundTripper = &UserAgentTransport{
 		UserAgent: userAgent,
-		Base: &oauth2.Transport{
-			Source: tokSource,
-			Base:   base,
-		},
+		Base:      inner,
 	}
 	if o.wrapTransport != nil {
 		transport = o.wrapTransport(transport)
