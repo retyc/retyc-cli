@@ -324,6 +324,16 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
 
+	// The warmup starts once the mount is ready and never delays it; it
+	// stops as soon as the mount is going away, and is waited for before the
+	// tree is closed.
+	warmCtx, stopWarmup := context.WithCancel(ctx)
+	warmDone := startWarmup(warmCtx, tree, target, settings)
+	defer func() {
+		stopWarmup()
+		<-warmDone
+	}()
+
 	authErrCh := make(chan error, 1)
 	go watch.run(ctx, func(err error) {
 		authErrCh <- err
@@ -333,7 +343,37 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
-	return serveMount(srv, sigCh, authErrCh, health)
+	return serveMount(srv, sigCh, authErrCh, health, stopWarmup)
+}
+
+// warmer is what the warmup walks (*vfs.FS).
+type warmer interface {
+	Warmup(ctx context.Context, dataroomID string, maxDepth int) vfs.WarmupStats
+}
+
+// startWarmup walks the mounted tree in the background (see vfs.FS.Warmup)
+// unless the settings turn it off, and tells the operator what it walked in
+// one line. The channel is closed once the walk is over, at once when there
+// is none.
+func startWarmup(ctx context.Context, tree warmer, target mountTarget, settings mountSettings) <-chan struct{} {
+	done := make(chan struct{})
+	if !settings.warmup {
+		close(done)
+
+		return done
+	}
+	go func() {
+		defer close(done)
+		stats := tree.Warmup(ctx, target.dataroomID, settings.warmupDepth)
+		how := "warmed"
+		if stats.Interrupted {
+			how = "warmup interrupted"
+		}
+		mountLogf("listing cache %s: %d folders, %d files, %d errors in %s",
+			how, stats.Folders, stats.Files, stats.Errors, stats.Duration.Round(time.Millisecond))
+	}()
+
+	return done
 }
 
 // stopObservability closes the observability listener, if any, once the mount
@@ -379,8 +419,11 @@ type mountServer interface {
 //
 // health stops answering ready as soon as one of the three happens, before the
 // drain: an orchestrator stops counting on a mount that is going away, or
-// whose login is lost.
-func serveMount(srv mountServer, stop <-chan os.Signal, authExpired <-chan error, health *serveHealth) error {
+// whose login is lost. stopping, when not nil, is called then too: what runs
+// in the background for the mount (the warmup) stops before the drain.
+func serveMount(
+	srv mountServer, stop <-chan os.Signal, authExpired <-chan error, health *serveHealth, stopping func(),
+) error {
 	var authErr error
 	select {
 	case <-stop:
@@ -391,6 +434,9 @@ func serveMount(srv mountServer, stop <-chan os.Signal, authExpired <-chan error
 	case <-srv.Done():
 	}
 	health.setReady(false)
+	if stopping != nil {
+		stopping()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

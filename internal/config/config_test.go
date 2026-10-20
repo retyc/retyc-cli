@@ -780,6 +780,7 @@ func TestMount_Defaults(t *testing.T) {
 		KernelCache: true, UID: MountProcessID, GID: MountProcessID,
 		FileMode: "0644", DirMode: "0755", DrainTimeout: 5 * time.Minute,
 		LocalFiles: []string{".*.swp", ".*.swx", "*~", "4913"},
+		Warmup:     true,
 		Metrics:    MetricsConfig{Labels: []string{}},
 	}
 	if !reflect.DeepEqual(cfg.Mount, want) {
@@ -801,6 +802,7 @@ func TestMount_FromEnv(t *testing.T) {
 		"RETYC_MOUNT_MIRROR_LOCKS": "true", "RETYC_MOUNT_METRICS_ADDR": "127.0.0.1:9091",
 		"RETYC_MOUNT_METRICS_LABELS": "pod=a volume=b",
 		"RETYC_MOUNT_LOCAL_FILES":    ".*.swp  *.tmp",
+		"RETYC_MOUNT_WARMUP":         "false", "RETYC_MOUNT_WARMUP_DEPTH": "2",
 	} {
 		t.Setenv(name, value)
 	}
@@ -816,6 +818,7 @@ func TestMount_FromEnv(t *testing.T) {
 		FileMode: "0600", DirMode: "700", ReadOnly: true, DrainTimeout: 2 * time.Minute,
 		MirrorLocks: true,
 		LocalFiles:  []string{".*.swp", "*.tmp"},
+		WarmupDepth: 2,
 		Metrics:     MetricsConfig{Addr: "127.0.0.1:9091", Labels: []string{"pod=a", "volume=b"}},
 	}
 	if !reflect.DeepEqual(cfg.Mount, want) {
@@ -861,6 +864,7 @@ func TestMount_Invalid(t *testing.T) {
 		"drain_timeout without a unit": {"mount.drain_timeout", 30},
 		"drain_timeout under a second": {"mount.drain_timeout", "200ms"},
 		"uid below -1":                 {"mount.uid", -2},
+		"warmup_depth below 0":         {"mount.warmup_depth", -1},
 		"gid past 32 bits":             {"mount.gid", int64(1) << 32},
 		"uid that is the chown no-op":  {"mount.uid", int64(1)<<32 - 1},
 		// YAML reads 0644 as 420 and 644 as 644: neither is what was written.

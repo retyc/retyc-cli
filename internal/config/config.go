@@ -185,7 +185,12 @@ type MountConfig struct {
 	// file (see retycfs.Options.BackgroundDelete).
 	BackgroundDelete bool          `yaml:"background_delete" mapstructure:"background_delete"`
 	LocalFiles       []string      `yaml:"local_files" mapstructure:"local_files"`
-	Metrics          MetricsConfig `yaml:"metrics" mapstructure:"metrics"`
+	// Warmup lists the whole tree in the background once mounted, to fill
+	// the listing cache; WarmupDepth bounds the levels listed, 0 for all
+	// (see vfs.FS.Warmup).
+	Warmup      bool          `yaml:"warmup" mapstructure:"warmup"`
+	WarmupDepth int           `yaml:"warmup_depth" mapstructure:"warmup_depth"`
+	Metrics     MetricsConfig `yaml:"metrics" mapstructure:"metrics"`
 }
 
 // Defaults of the mount (see MountConfig).
@@ -386,6 +391,8 @@ func SetDefaults() {
 	viper.SetDefault("mount.drain_timeout", DefaultMountDrainTimeout)
 	viper.SetDefault("mount.mirror_locks", false)
 	viper.SetDefault("mount.background_delete", false)
+	viper.SetDefault("mount.warmup", true)
+	viper.SetDefault("mount.warmup_depth", 0)
 	// Glob patterns; from the environment, separated by spaces.
 	viper.SetDefault("mount.local_files", DefaultMountLocalFiles())
 	// Empty means no metrics/probes listener (see cmd/observability.go).
@@ -508,6 +515,9 @@ func validateMount(m *MountConfig) error {
 			return fmt.Errorf("%s must be -1 (the process's own) or an ID between 0 and %d, got %d",
 				id.key, uint32(math.MaxUint32-1), id.value)
 		}
+	}
+	if m.WarmupDepth < 0 {
+		return fmt.Errorf("mount.warmup_depth must be 0 (every level) or more, got %d", m.WarmupDepth)
 	}
 	for _, mode := range []struct {
 		key   string
