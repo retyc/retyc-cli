@@ -76,6 +76,18 @@ var (
 		Help: "Refreshes of the dataroom list cache (one API listing each), by result (ok, error).",
 	}, []string{"result"})
 
+	// WarmupFolders counts the folders the listing cache warmup walked.
+	WarmupFolders = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "retycfs_warmup_folders_total",
+		Help: "Folders listed by the listing cache warmup at mount (--warmup), by result (ok, error).",
+	}, []string{"result"})
+
+	// WarmupDuration is how long the warmup walk took.
+	WarmupDuration = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "retycfs_warmup_duration_seconds",
+		Help: "Duration in seconds of the listing cache warmup at mount (--warmup), set when the walk ends.",
+	})
+
 	// SpoolBytes is the size of the spool files of the files being written.
 	SpoolBytes = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "retycfs_spool_bytes",
@@ -142,7 +154,7 @@ var (
 // all lists every collector, in the order of the declarations above.
 var all = []prometheus.Collector{
 	Ops, OpDuration, Bytes, OpenHandles, BackgroundDeletes,
-	CacheLookups, DataroomListRefreshes, SpoolBytes, Uploads, LocksHeld, StoreOpDuration,
+	CacheLookups, DataroomListRefreshes, WarmupFolders, WarmupDuration, SpoolBytes, Uploads, LocksHeld, StoreOpDuration,
 	APIRequests, APIRequestDuration, APIThrottleEpisodes, APIRateLimited,
 	TokenRefreshes, TokenExpiry,
 }
