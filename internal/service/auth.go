@@ -111,8 +111,23 @@ func decryptKeyWithPassphrase(ctx context.Context, kind, ciphertext, passphrase 
 	return plaintext, nil
 }
 
+// keyringLoad and keyringStore reach the session keyring; variables so that
+// tests leave the developer's keyring alone.
+var (
+	keyringLoad  = keyring.Load
+	keyringStore = keyring.Store
+)
+
+// identityMatches reports whether identityStr is the private half of pub.
+func identityMatches(identityStr, pub string) bool {
+	id, err := crypto.ParseIdentity(identityStr)
+
+	return err == nil && id.Recipient().String() == pub
+}
+
 // ResolveUserIdentity decrypts the user's AGE private key using the passphrase.
-// It checks the keyring cache first (when enabled), falling back to reader().
+// It checks the keyring cache first (when enabled), falling back to reader()
+// when the cache is empty or holds another key than userKey (a rotation).
 // A keyring hit is exported as a crypto.unlock_key span with key.source
 // "keyring", so a trace shows whether the scrypt ran.
 func ResolveUserIdentity(
@@ -131,14 +146,18 @@ func ResolveUserIdentity(
 		_, span := telemetry.Tracer().Start(ctx, "crypto.unlock_key", trace.WithAttributes(
 			telemetry.AttrKeyKind.String("user"), telemetry.AttrKeySource.String("keyring")))
 		var err error
-		identityStr, err = keyring.Load()
-		span.SetAttributes(telemetry.AttrCacheHit.Bool(err == nil && identityStr != ""))
-		span.End()
+		identityStr, err = keyringLoad()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: keyring load: %v\n", err)
-		} else if identityStr != "" {
-			fromKeyring = true
+			identityStr = ""
+		} else if identityStr != "" && !identityMatches(identityStr, userKey.PublicKey) {
+			// A previous key, cached before a rotation: ask the passphrase,
+			// which stores the identity of the active key below.
+			identityStr = ""
 		}
+		fromKeyring = identityStr != ""
+		span.SetAttributes(telemetry.AttrCacheHit.Bool(fromKeyring))
+		span.End()
 	}
 
 	if identityStr == "" {
@@ -163,7 +182,7 @@ func ResolveUserIdentity(
 	}
 
 	if cfg.Keyring.Enabled && !fromKeyring {
-		if err := keyring.Store(identityStr, cfg.Keyring.TTL); err != nil {
+		if err := keyringStore(identityStr, cfg.Keyring.TTL); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: keyring store: %v\n", err)
 		}
 	}

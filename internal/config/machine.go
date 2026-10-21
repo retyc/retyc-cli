@@ -129,7 +129,7 @@ func LoadMachine() (*Machine, error) {
 func checkMachineFile(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("%w: %s: %s", ErrMachineConfig, path, errReason(err))
+		return fmt.Errorf("%w: %s: %s", ErrMachineConfig, path, ErrReason(err))
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%w: %s is not a regular file", ErrMachineConfig, path)
@@ -141,9 +141,9 @@ func checkMachineFile(path string) error {
 	return nil
 }
 
-// errReason is the short reason of a file system error, without the path
+// ErrReason is the short reason of a file system error, without the path
 // (the caller already names it).
-func errReason(err error) string {
+func ErrReason(err error) string {
 	var pe *fs.PathError
 	if errors.As(err, &pe) {
 		return pe.Err.Error()
@@ -160,7 +160,7 @@ func ReadMachineFile(path string) ([]byte, error) {
 	}
 	data, err := os.ReadFile(path) //nolint:gosec // G304: operator-designated key file
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s: %s", ErrMachineConfig, path, errReason(err))
+		return nil, fmt.Errorf("%w: %s: %s", ErrMachineConfig, path, ErrReason(err))
 	}
 
 	return data, nil
@@ -175,7 +175,7 @@ func WriteMachineFile(dir, name string, data []byte) error {
 		if _, err := os.Lstat(target); err == nil {
 			return fmt.Errorf("%w: %s already exists, not overwriting", ErrMachineConfig, target)
 		} else if !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("%w: %s: %s", ErrMachineConfig, target, errReason(err))
+			return fmt.Errorf("%w: %s: %s", ErrMachineConfig, target, ErrReason(err))
 		}
 	}
 
@@ -198,6 +198,12 @@ func WriteMachineFile(dir, name string, data []byte) error {
 
 		return fmt.Errorf("writing %s: %w", target, err)
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+
+		return fmt.Errorf("writing %s: %w", target, err)
+	}
 	if err := tmp.Close(); err != nil {
 		cleanup()
 
@@ -211,12 +217,31 @@ func WriteMachineFile(dir, name string, data []byte) error {
 			return fmt.Errorf("writing %s: %w", target, err)
 		}
 
-		return nil
+		return SyncDir(dir)
 	}
 	if err := os.Rename(tmpName, target); err != nil {
 		cleanup()
 
 		return fmt.Errorf("writing %s: %w", target, err)
+	}
+
+	return SyncDir(dir)
+}
+
+// SyncDir flushes a directory so a link or rename survives a crash. It is a
+// no-op on Windows, which cannot open a directory for syncing. Errors wrap
+// ErrMachineConfig.
+func SyncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir) //nolint:gosec // G304: directory of an operator-designated file
+	if err != nil {
+		return fmt.Errorf("%w: syncing %s: %s", ErrMachineConfig, dir, ErrReason(err))
+	}
+	defer func() { _ = d.Close() }()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("%w: syncing %s: %s", ErrMachineConfig, dir, ErrReason(err))
 	}
 
 	return nil
@@ -263,4 +288,17 @@ func ReadEnrollmentInfo(dir string) (*EnrollmentInfo, error) {
 	}
 
 	return &info, nil
+}
+
+// MachineAgeKeyPath is the path of the machine age.key: RETYC_AGE_KEY_FILE,
+// else age.key in RETYC_MACHINE_DIR. It does not stat the file.
+func MachineAgeKeyPath() (string, error) {
+	if p := fromEnv(EnvAgeKeyFileName); p != "" {
+		return p, nil
+	}
+	if dir := fromEnv(EnvMachineDirName); dir != "" {
+		return filepath.Join(dir, MachineAgeKeyFile), nil
+	}
+
+	return "", fmt.Errorf("%w: neither %s nor %s is set", ErrMachineConfig, EnvAgeKeyFileName, EnvMachineDirName)
 }

@@ -1126,3 +1126,23 @@ func TestDataroomNode_Kinds(t *testing.T) {
 		t.Errorf("decoded symlink = %+v, want target_enc kept", decoded)
 	}
 }
+
+func TestListPendingRekeyDatarooms(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/dataroom/pending-rekey" {
+			t.Errorf("got %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `[{"dataroom_id":"d1","public_key":"old",`+
+			`"session_private_key_enc":"blob","user_public_keys":["a","b"]}]`)
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).ListPendingRekeyDatarooms(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].DataroomID != "d1" || got[0].PublicKey != "old" ||
+		got[0].SessionPrivateKeyEnc != "blob" || len(got[0].UserPublicKeys) != 2 {
+		t.Errorf("got = %+v", got)
+	}
+}
