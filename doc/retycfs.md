@@ -79,6 +79,34 @@ the kernel keeps what it read in memory until the file changes.
 | `--cache-ttl`          | `cache.ttl`, `RETYC_CACHE_TTL`                   | `1m`    | How long a listing or a name is trusted, by the mount and by the kernel. |
 | `--cache-negative-ttl` | `cache.negative_ttl`, `RETYC_CACHE_NEGATIVE_TTL` | `1s`    | How long a missing name is answered missing. `0` disables it.            |
 
+## Warmup
+
+The first `ls` or `stat` of a folder costs an API listing and the decryption of its
+names. Once mounted, the mount lists every folder in the background, like a `find` run
+right after mounting, so that an application scanning its volume at startup is answered
+from the cache. It is on by default; `--warmup=false` turns it off, `--warmup-depth=N`
+lists N levels of each dataroom only (its root is the first).
+
+- **The mount does not wait for it**: it is ready (`/readyz`) and answers at once. A
+  request for a folder being listed shares that listing.
+- **A few listings at a time**: the walk shares the `api.concurrency.list` slots with the
+  refreshes of expired listings.
+- **Only listings** (names and attributes) are warmed, never file contents.
+- **They stay fresh for `cache.ttl` only** (one minute by default): the mount never
+  serves an expired listing. For a lasting effect, raise `--cache-ttl` or use a
+  [shared Redis](#shared-metadata-cache-redis), where a listing another instance
+  fetched is not fetched again: a second mount of the same dataroom warms almost for
+  free.
+- **Each mount lists the whole dataroom once**, and holds it in memory while it is fresh
+  (see [Memory](#memory)). On very large datarooms, or many mounts without Redis,
+  consider `--warmup=false`.
+- A folder that cannot be listed is reported and skipped; the walk goes on. It stops at
+  the unmount, and when the login is lost. One line tells what it did:
+
+  ```
+  mount: listing cache warmed: 513 folders, 50000 files, 0 errors in 41.2s
+  ```
+
 ## Local files
 
 Files **created through the mount** whose name matches a `--local-file` pattern are kept
@@ -252,6 +280,8 @@ variable, then the [configuration file](configuration.md#settings).
 | `--drain-timeout`           | `mount.drain_timeout`, `RETYC_MOUNT_DRAIN_TIMEOUT`                                   | `5m`                       | Time given to pending uploads at the unmount. See [Unmounting](#unmounting).                                                         |
 | `--mirror-locks`            | `mount.mirror_locks`, `RETYC_MOUNT_MIRROR_LOCKS`                                     | `false`                    | See [Locks](#locks).                                                                                                                 |
 | `--background-delete`       | `mount.background_delete`, `RETYC_MOUNT_BACKGROUND_DELETE`                           | `false`                    | See [Deleting in the background](#deleting-in-the-background).                                                                       |
+| `--warmup`                  | `mount.warmup`, `RETYC_MOUNT_WARMUP`                                                 | `true`                     | See [Warmup](#warmup).                                                                                                               |
+| `--warmup-depth`            | `mount.warmup_depth`, `RETYC_MOUNT_WARMUP_DEPTH`                                     | `0` (all)                  | Levels of folders the warmup lists in each dataroom, its root being the first.                                                       |
 | `--local-file pattern`      | `mount.local_files`, `RETYC_MOUNT_LOCAL_FILES` (separated by spaces)                 | `.*.swp .*.swx *~ 4913`    | See [Local files](#local-files).                                                                                                     |
 | `--unsafe-write`            | `api.unsafe_write`, `RETYC_API_UNSAFE_WRITE`                                         | `false`                    | Faster `close`, at the risk of an unreadable file. See [Configuration](configuration.md#acknowledge-uploads-before-they-are-stored). |
 | `--metrics-addr`            | `mount.metrics.addr`, `RETYC_MOUNT_METRICS_ADDR`                                     | — (off)                    | See [Metrics and probes](#metrics-and-probes).                                                                                       |
@@ -289,6 +319,8 @@ Labels never carry an identifier, a name or a path. Every metric starts with
 | `retycfs_uploads_total{result}`                           | Files sent to the API                                                   |
 | `retycfs_spool_bytes`                                     | Bytes held in the spool directory                                       |
 | `retycfs_cache_lookups_total{result}`                     | Listing cache efficiency (`hit`, `stale`, `miss`)                       |
+| `retycfs_warmup_folders_total{result}`                    | Folders listed by the [warmup](#warmup) (`ok`, `error`)                 |
+| `retycfs_warmup_duration_seconds`                         | Duration of the warmup, set when it ends                                |
 | `retycfs_token_expiry_seconds`                            | Seconds left on the access token, 0 when unknown                        |
 
 Chunk counts are the `retycfs_api_requests_total` series of the chunk routes

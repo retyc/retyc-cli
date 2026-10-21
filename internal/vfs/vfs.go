@@ -93,9 +93,10 @@ type Options struct {
 	// Store keeps the listings, the results of single lookups and the list of
 	// datarooms; nil means a memstore of the FS's own.
 	Store metastore.MetaStore
-	// Identity is the user's AGE identity, unlocked once at startup: dataroom
-	// sessions are resolved from it, without fetching the user key or running
-	// scrypt again.
+	// Identity is the user's AGE identity, unlocked once at startup (or the
+	// machine account's, which has no passphrase): a dataroom session is
+	// resolved from it with one GetDataroom and local AGE decryptions, without
+	// fetching the user key or running scrypt.
 	Identity *age.HybridIdentity
 	// HideSymlinks makes Lookup and resolveFolderID treat a symbolic link as a name
 	// that does not exist. WebDAV has no symbolic links and sets it; ReadDir

@@ -42,7 +42,7 @@ type FS struct {
 	cancel context.CancelFunc
 
 	// sessions holds one resolved session per dataroom for the life of the
-	// process (no TTL, single-flight, one scrypt at a time — see
+	// process (no TTL, single-flight: one resolution per dataroom at a time, see
 	// service.SessionCache).
 	sessions service.SessionCache
 
@@ -261,8 +261,9 @@ func (fs *FS) Close() error {
 }
 
 // Session returns the session for dataroomID, resolved on first access and
-// cached for the life of the process. Caching avoids two API calls
-// (GetDataroom + GetActiveKey) and an scrypt per listing or download.
+// cached for the life of the process. Caching avoids, per listing or
+// download, a GetDataroom and the AGE decryptions of the session key (from
+// Options.Identity: no scrypt, no user-key fetch).
 func (fs *FS) Session(ctx context.Context, dataroomID string) (*service.DataroomSession, error) {
 	return fs.sessions.Get(ctx, dataroomID, fs.resolveSession)
 }

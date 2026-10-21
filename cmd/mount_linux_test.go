@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -124,9 +125,14 @@ func TestServeMount_ReadinessEndsBeforeTheDrain(t *testing.T) {
 			srv := &fakeMountServer{done: make(chan struct{}), health: health}
 			stop, expired := make(chan os.Signal, 1), make(chan error, 1)
 			trigger(stop, expired, srv)
-			_ = serveMount(srv, stop, expired, health)
+			// The warmup stops with the readiness, before the drain.
+			stoppedBeforeDrain := false
+			_ = serveMount(srv, stop, expired, health, func() { stoppedBeforeDrain = srv.unmounted == 0 })
 			if srv.readyAtShutdown {
 				t.Error("the mount was still ready when its shutdown started")
+			}
+			if !stoppedBeforeDrain {
+				t.Error("the background work of the mount was not stopped before its shutdown")
 			}
 			if code := probe(); code != http.StatusServiceUnavailable {
 				t.Errorf("/readyz once the mount is over = %d, want 503", code)
@@ -142,7 +148,7 @@ func TestServeMount(t *testing.T) {
 		srv := newServer()
 		stop := make(chan os.Signal, 1)
 		stop <- syscall.SIGTERM
-		if err := serveMount(srv, stop, nil, newServeHealth()); err != nil || srv.unmounted != 1 {
+		if err := serveMount(srv, stop, nil, newServeHealth(), nil); err != nil || srv.unmounted != 1 {
 			t.Errorf("serveMount = %v, %d unmounts; want nil and 1", err, srv.unmounted)
 		}
 	})
@@ -152,7 +158,7 @@ func TestServeMount(t *testing.T) {
 	t.Run("unmounted from outside", func(t *testing.T) {
 		srv := newServer()
 		close(srv.done)
-		if err := serveMount(srv, nil, nil, newServeHealth()); err != nil || srv.unmounted != 1 {
+		if err := serveMount(srv, nil, nil, newServeHealth(), nil); err != nil || srv.unmounted != 1 {
 			t.Errorf("serveMount = %v, %d unmounts; want nil and 1", err, srv.unmounted)
 		}
 	})
@@ -163,7 +169,7 @@ func TestServeMount(t *testing.T) {
 		srv := newServer()
 		expired := make(chan error, 1)
 		expired <- fmt.Errorf("refreshing the token: %w", auth.ErrNoRefreshToken)
-		err := serveMount(srv, nil, expired, newServeHealth())
+		err := serveMount(srv, nil, expired, newServeHealth(), nil)
 		if srv.unmounted != 1 {
 			t.Errorf("%d unmounts, want 1", srv.unmounted)
 		}
@@ -183,7 +189,7 @@ func TestServeMount(t *testing.T) {
 		stop := make(chan os.Signal, 2)
 		stop <- syscall.SIGINT
 		stop <- syscall.SIGINT
-		if err := serveMount(srv, stop, nil, newServeHealth()); err != nil || srv.unmounted != 1 {
+		if err := serveMount(srv, stop, nil, newServeHealth(), nil); err != nil || srv.unmounted != 1 {
 			t.Errorf("serveMount = %v, %d unmounts; want nil and 1", err, srv.unmounted)
 		}
 		select {
@@ -197,7 +203,7 @@ func TestServeMount(t *testing.T) {
 		srv := newServer()
 		srv.err = errors.New("busy")
 		close(srv.done)
-		if err := serveMount(srv, nil, nil, newServeHealth()); err == nil || err.Error() != "busy" {
+		if err := serveMount(srv, nil, nil, newServeHealth(), nil); err == nil || err.Error() != "busy" {
 			t.Errorf("serveMount = %v, want the unmount error", err)
 		}
 	})
@@ -386,7 +392,7 @@ func TestMount_A401StopsTheMountAtOnce(t *testing.T) {
 
 	mount := &fakeMountServer{done: make(chan struct{})}
 	result := make(chan error, 1)
-	go func() { result <- serveMount(mount, nil, expired, newServeHealth()) }()
+	go func() { result <- serveMount(mount, nil, expired, newServeHealth(), nil) }()
 
 	// A request that succeeds asks for nothing.
 	if _, err := service.ListDatarooms(ctx, client); err != nil {
@@ -625,7 +631,7 @@ func TestServeMount_TransientLoginFailureKeepsTheMount(t *testing.T) {
 	mount := &fakeMountServer{done: make(chan struct{})}
 	stop := make(chan os.Signal, 1)
 	result := make(chan error, 1)
-	go func() { result <- serveMount(mount, stop, expired, health) }()
+	go func() { result <- serveMount(mount, stop, expired, health, nil) }()
 
 	waitFor(t, func() bool { return src.checks() >= 3 })
 	select {
@@ -650,7 +656,7 @@ func TestServeMount_LostWrites(t *testing.T) {
 		srv := &fakeMountServer{done: make(chan struct{}), err: lost}
 		stop := make(chan os.Signal, 1)
 		stop <- syscall.SIGTERM
-		err := serveMount(srv, stop, nil, newServeHealth())
+		err := serveMount(srv, stop, nil, newServeHealth(), nil)
 		if !errors.Is(err, lost) || exitCode(err) != exitLostWrites || !strings.Contains(err.Error(), "2 files") {
 			t.Errorf("serveMount = %v (exit code %d), want the files lost and 75", err, exitCode(err))
 		}
@@ -658,7 +664,7 @@ func TestServeMount_LostWrites(t *testing.T) {
 	t.Run("unmounted from outside", func(t *testing.T) {
 		srv := &fakeMountServer{done: make(chan struct{}), err: lost}
 		close(srv.done)
-		if err := serveMount(srv, nil, nil, newServeHealth()); !errors.Is(err, lost) || exitCode(err) != exitLostWrites {
+		if err := serveMount(srv, nil, nil, newServeHealth(), nil); !errors.Is(err, lost) || exitCode(err) != exitLostWrites {
 			t.Errorf("serveMount = %v (exit code %d), want the files lost and 75", err, exitCode(err))
 		}
 	})
@@ -666,7 +672,7 @@ func TestServeMount_LostWrites(t *testing.T) {
 		srv := &fakeMountServer{done: make(chan struct{}), err: lost}
 		expired := make(chan error, 1)
 		expired <- fmt.Errorf("refreshing token: %w", auth.ErrNoRefreshToken)
-		err := serveMount(srv, nil, expired, newServeHealth())
+		err := serveMount(srv, nil, expired, newServeHealth(), nil)
 		if exitCode(err) != exitAuthRequired || !strings.Contains(err.Error(), "2 files") {
 			t.Errorf("serveMount = %v (exit code %d), want the files lost and %d", err, exitCode(err), exitAuthRequired)
 		}
@@ -683,4 +689,60 @@ func waitFor(t *testing.T, cond func() bool) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// fakeWarmer records the walks asked of it, and lasts until its context ends
+// when block is set.
+type fakeWarmer struct {
+	mu    sync.Mutex
+	walks []string
+	block bool
+}
+
+func (w *fakeWarmer) Warmup(ctx context.Context, dataroomID string, maxDepth int) vfs.WarmupStats {
+	w.mu.Lock()
+	w.walks = append(w.walks, fmt.Sprintf("%s depth %d", dataroomID, maxDepth))
+	w.mu.Unlock()
+	if w.block {
+		<-ctx.Done()
+
+		return vfs.WarmupStats{Interrupted: true}
+	}
+
+	return vfs.WarmupStats{Folders: 1}
+}
+
+// The warmup walks the dataroom mounted, all of them with --all, unless it is
+// turned off; it stops with its context.
+func TestStartWarmup(t *testing.T) {
+	on := mountSettings{warmup: true, warmupDepth: 2}
+	for label, tc := range map[string]struct {
+		target   mountTarget
+		settings mountSettings
+		want     []string
+	}{
+		"one dataroom":  {mountTarget{dataroomID: "dr-1"}, on, []string{"dr-1 depth 2"}},
+		"all datarooms": {mountTarget{all: true}, on, []string{" depth 2"}},
+		"--warmup=false": {mountTarget{dataroomID: "dr-1"}, mountSettings{warmupDepth: 2}, nil},
+	} {
+		t.Run(label, func(t *testing.T) {
+			w := &fakeWarmer{}
+			<-startWarmup(context.Background(), w, tc.target, tc.settings)
+			if !reflect.DeepEqual(w.walks, tc.want) {
+				t.Errorf("walks = %q, want %q", w.walks, tc.want)
+			}
+		})
+	}
+
+	t.Run("stopped", func(t *testing.T) {
+		w := &fakeWarmer{block: true}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := startWarmup(ctx, w, mountTarget{dataroomID: "dr-1"}, on)
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the warmup did not stop with its context")
+		}
+	})
 }

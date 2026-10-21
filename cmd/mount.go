@@ -87,6 +87,12 @@ Ctrl-C does not wait for them.
 for writing, so that other RETYC clients see it locked. --metrics-addr serves
 Prometheus metrics and health probes (/metrics, /healthz, /readyz).
 
+--warmup (on by default) lists every folder once the filesystem is mounted,
+in the background and a few at a time, so that the first walk of the tree is
+answered from the cache: the mount is ready without waiting for it. Only the
+listings are warmed, never file contents, and they stay fresh for --cache-ttl.
+--warmup=false turns it off.
+
 --background-delete makes the removal of a file answer at once: the file is
 deleted at the API afterwards, a few at a time. Removing many files is much
 faster, but a removal that succeeded no longer proves the API deleted the
@@ -137,6 +143,8 @@ var mountFlags = [][2]string{
 	{"mirror-locks", "mount.mirror_locks"},
 	{"background-delete", "mount.background_delete"},
 	{"local-file", "mount.local_files"},
+	{"warmup", "mount.warmup"},
+	{"warmup-depth", "mount.warmup_depth"},
 	{"unsafe-write", "api.unsafe_write"},
 	{"metrics-addr", "mount.metrics.addr"},
 	{"metrics-label", "mount.metrics.labels"},
@@ -174,6 +182,10 @@ type mountSettings struct {
 	backgroundDelete bool
 	// localFiles are the patterns of the names kept local, none when empty.
 	localFiles []string
+	// warmup lists the tree in the background once mounted, warmupDepth
+	// levels of it (0: all).
+	warmup      bool
+	warmupDepth int
 	// metrics is the observability listener, off while its address is empty.
 	metrics metricsSettings
 }
@@ -193,6 +205,8 @@ func newMountSettings(cfg *config.Config) (mountSettings, error) {
 		mirrorLocks:      m.MirrorLocks,
 		backgroundDelete: m.BackgroundDelete,
 		localFiles:       m.LocalFiles,
+		warmup:           m.Warmup,
+		warmupDepth:      m.WarmupDepth,
 		metrics:          metricsSettings{addr: m.Metrics.Addr, labels: m.Metrics.Labels},
 		uid:              mountID(m.UID),
 		gid:              mountID(m.GID),
@@ -286,6 +300,9 @@ func addMountFlags(cmd *cobra.Command) {
 		"name pattern of the files kept on this machine and never sent, e.g. '*.tmp' (repeatable; "+
 			"'"+config.MountLocalFilesNone+"' alone: no such file; default: "+
 			strings.Join(config.DefaultMountLocalFiles(), " ")+")")
+	flags.Bool("warmup", true,
+		"list the whole tree in the background once mounted, to fill the listing cache (--warmup=false: off)")
+	flags.Int("warmup-depth", 0, "levels of folders the warmup lists in each dataroom (0: all)")
 	flags.Bool("unsafe-write", false,
 		"let the API acknowledge uploads before they are stored (faster; a failed background store is not reported)")
 	flags.String("metrics-addr", "",
