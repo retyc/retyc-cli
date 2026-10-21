@@ -474,3 +474,66 @@ func TestDecryptKeyWithPassphrase_TransferKind(t *testing.T) {
 		t.Errorf("failed unlock status = %+v, want Error with empty description", spans[1].Status)
 	}
 }
+
+// stubKeyring replaces the session keyring with an in-memory one holding
+// cached, and records what is stored.
+func stubKeyring(t *testing.T, cached string) *[]string {
+	t.Helper()
+	var stored []string
+	prevLoad, prevStore := keyringLoad, keyringStore
+	keyringLoad = func() (string, error) { return cached, nil }
+	keyringStore = func(identity string, _ int) error {
+		stored = append(stored, identity)
+
+		return nil
+	}
+	t.Cleanup(func() { keyringLoad, keyringStore = prevLoad, prevStore })
+
+	return &stored
+}
+
+// After a rotation done elsewhere, the keyring may still hold the previous
+// identity: it must not be used for the new active key.
+func TestResolveUserIdentity_StaleKeyringIgnored(t *testing.T) {
+	stale, cur := genKey(t), genKey(t)
+	stored := stubKeyring(t, stale.String())
+	userKey := &api.UserKey{
+		ID: "k", PublicKey: cur.Recipient().String(), PrivateKeyEnc: cheapPassphraseEnc(t, cur, testPassphrase),
+	}
+	cfg := &config.Config{Keyring: config.KeyringConfig{Enabled: true, TTL: 60}}
+
+	asked := 0
+	got, err := ResolveUserIdentity(context.Background(), cfg, userKey, func() (string, error) {
+		asked++
+
+		return testPassphrase, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.String() != cur.String() || asked != 1 {
+		t.Errorf("identity is the active key: %v, passphrase asked %d times", got.String() == cur.String(), asked)
+	}
+	if len(*stored) != 1 || (*stored)[0] != cur.String() {
+		t.Errorf("keyring not refreshed with the active identity (%d stores)", len(*stored))
+	}
+}
+
+func TestResolveUserIdentity_MatchingKeyringUsed(t *testing.T) {
+	cur := genKey(t)
+	stored := stubKeyring(t, cur.String())
+	userKey := &api.UserKey{ID: "k", PublicKey: cur.Recipient().String(), PrivateKeyEnc: "unused"}
+	cfg := &config.Config{Keyring: config.KeyringConfig{Enabled: true, TTL: 60}}
+
+	got, err := ResolveUserIdentity(context.Background(), cfg, userKey, func() (string, error) {
+		t.Error("passphrase asked despite a matching keyring entry")
+
+		return "", errors.New("no")
+	})
+	if err != nil || got.String() != cur.String() {
+		t.Fatalf("ResolveUserIdentity = %v", err)
+	}
+	if len(*stored) != 0 {
+		t.Errorf("keyring stored again (%d)", len(*stored))
+	}
+}

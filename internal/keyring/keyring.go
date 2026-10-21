@@ -65,6 +65,23 @@ func Load() (string, error) {
 	return string(buf[:n]), nil
 }
 
+// Clear invalidates the cached identity. An absent key is not an error.
+func Clear() error {
+	id, err := unix.KeyctlSearch(unix.KEY_SPEC_SESSION_KEYRING, keyType, keyName, 0)
+	if err != nil {
+		if isAbsent(err) {
+			return nil
+		}
+
+		return fmt.Errorf("search: %w", err)
+	}
+	if _, err = unix.KeyctlInt(unix.KEYCTL_INVALIDATE, id, 0, 0, 0); err != nil && !isAbsent(err) {
+		return fmt.Errorf("invalidate: %w", err)
+	}
+
+	return nil
+}
+
 // isAbsent reports whether err means the key was not found or is no longer valid.
 func isAbsent(err error) bool {
 	return errors.Is(err, unix.ENOKEY) ||

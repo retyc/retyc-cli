@@ -32,27 +32,28 @@ type errorJSON struct {
 // The kinds of errorJSON. A new kind is added at need; an existing one is
 // never renamed nor given another meaning (doc/commands.md lists them).
 const (
-	kindAuthRequired     = "auth_required"
-	kindConfig           = "config"
-	kindLostWrites       = "lost_writes"
-	kindNeedsYes         = "needs_yes"
-	kindRateLimited      = "rate_limited"
-	kindStorageExceeded  = "storage_exceeded"
-	kindPlanExceeded     = "plan_exceeded"
-	kindCapacityTooSmall = "capacity_too_small"
-	kindCapacityShrink   = "capacity_shrink"
-	kindUnauthenticated  = "unauthenticated"
-	kindForbidden        = "forbidden"
-	kindNotFound         = "not_found"
-	kindGone             = "gone"
-	kindConflict         = "conflict"
-	kindLocked           = "locked"
-	kindInvalid          = "invalid"
-	kindCLITooOld        = "cli_too_old"
-	kindAPIError         = "api_error"
-	kindEnrollExpired    = "enrollment_expired"
-	kindEnrollDenied     = "enrollment_denied"
-	kindError            = "error"
+	kindAuthRequired          = "auth_required"
+	kindConfig                = "config"
+	kindLostWrites            = "lost_writes"
+	kindNeedsYes              = "needs_yes"
+	kindRateLimited           = "rate_limited"
+	kindStorageExceeded       = "storage_exceeded"
+	kindPlanExceeded          = "plan_exceeded"
+	kindCapacityTooSmall      = "capacity_too_small"
+	kindCapacityShrink        = "capacity_shrink"
+	kindUnauthenticated       = "unauthenticated"
+	kindForbidden             = "forbidden"
+	kindNotFound              = "not_found"
+	kindGone                  = "gone"
+	kindConflict              = "conflict"
+	kindLocked                = "locked"
+	kindInvalid               = "invalid"
+	kindCLITooOld             = "cli_too_old"
+	kindAPIError              = "api_error"
+	kindEnrollExpired         = "enrollment_expired"
+	kindEnrollDenied          = "enrollment_denied"
+	kindKeyRotationIncomplete = "key_rotation_incomplete"
+	kindError                 = "error"
 )
 
 // The former detail texts of the storage refusals, read only when the
@@ -107,6 +108,8 @@ func errorKind(err error) string {
 		return kindEnrollExpired
 	case errors.Is(err, errJSONNeedsYes):
 		return kindNeedsYes
+	case errors.Is(err, service.ErrKeyRotationIncomplete):
+		return kindKeyRotationIncomplete
 	case errors.Is(err, api.ErrRateLimited):
 		return kindRateLimited
 	case errors.Is(err, vfs.ErrStorageExceeded), api.IsStorageExceeded(err):

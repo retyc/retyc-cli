@@ -114,5 +114,6 @@ func formatCount(n *int) string {
 func init() {
 	userCmd.AddCommand(userInfoCmd)
 	userCmd.AddCommand(userQuotaCmd)
+	userCmd.AddCommand(userKeyCmd)
 	rootCmd.AddCommand(userCmd)
 }
