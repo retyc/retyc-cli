@@ -2,7 +2,7 @@ module github.com/retyc/retyc-cli
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	filippo.io/age v1.3.2
