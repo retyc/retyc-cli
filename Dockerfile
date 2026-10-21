@@ -1,6 +1,6 @@
 # The builder always runs on the build host's architecture and cross-compiles
 # for the target one: no emulation, the arm64 image costs the same as amd64.
-FROM --platform=$BUILDPLATFORM golang:1.26.9 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.10 AS builder
 
 ARG VERSION=dev
 ARG TARGETOS
