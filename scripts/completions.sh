@@ -2,8 +2,9 @@
 # Generates the shell completion scripts shipped in the Linux packages
 # (goreleaser `before` hook) into ./completions.
 #
-# Runs the prod build with a throwaway config dir, so that nothing is read
-# from or written to the config of the machine that builds the release.
+# Runs the prod build with an empty environment and a throwaway config dir:
+# `completion` goes through the root PersistentPreRunE, so a RETYC_* variable,
+# an env file or SSL_CERT_* of the build machine must not reach it.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -16,5 +17,6 @@ go build -tags prod -o "$tmp/retyc" .
 rm -rf completions
 mkdir completions
 for sh in bash zsh fish; do
-	RETYC_CONFIG_DIR="$tmp/config" "$tmp/retyc" completion "$sh" >"completions/retyc.$sh"
+	env -i PATH="$PATH" HOME="$tmp" RETYC_CONFIG_DIR="$tmp/config" \
+		"$tmp/retyc" completion "$sh" >"completions/retyc.$sh"
 done
