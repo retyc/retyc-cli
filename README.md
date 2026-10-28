@@ -33,6 +33,25 @@ required.
 
 Download the binary for your platform from the [latest release](https://github.com/retyc/retyc-cli/releases/latest).
 
+### Debian / Ubuntu
+
+Each release ships a `.deb` package (amd64, arm64) with shell completions for bash, zsh and fish:
+
+```sh
+curl -fsSLO https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc_X.Y.Z_amd64.deb
+sudo apt install ./retyc_X.Y.Z_amd64.deb
+```
+
+### Fedora / RHEL / Rocky / openSUSE
+
+Each release also ships an `.rpm` package (x86_64, aarch64):
+
+```sh
+sudo dnf install https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc-X.Y.Z-1.x86_64.rpm
+```
+
+With both packages, `fuse3`, needed by `retyc fs mount`, is installed as a recommended package.
+
 ### With `go install`
 
 ```sh
