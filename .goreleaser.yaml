@@ -114,5 +114,12 @@ checksum:
   name_template: '{{ .ProjectName }}_sha256_checksums.txt'
   algorithm: sha256
 
+# The release is usually created by hand on GitHub (which creates the tag);
+# goreleaser then updates it and always sends the pre-release flag. "auto"
+# derives it from the tag (v1.2.0-rc1 → pre-release, never "Latest") instead
+# of resetting it to false.
+release:
+  prerelease: auto
+
 changelog:
   use: github-native
