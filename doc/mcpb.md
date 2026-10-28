@@ -63,7 +63,8 @@ ZIP; the official `@anthropic-ai/mcpb` CLI is only used in CI for validation.
 
 On `v*` tags, the `goreleaser` job of `.github/workflows/release.yml`:
 
-1. runs goreleaser (binaries + universal binary, version injected from the tag);
+1. runs goreleaser (binaries + universal binary, `.deb` / `.rpm` packages, version
+   injected from the tag);
 2. `scripts/build-mcpb.sh --expect-version "${tag#v}"` — **fails the release if
    the manifest version does not match the tag**;
 3. validates the manifest with `npx @anthropic-ai/mcpb validate`;

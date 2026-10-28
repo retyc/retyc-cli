@@ -47,7 +47,10 @@ sudo apt install ./retyc_X.Y.Z_amd64.deb
 Each release also ships an `.rpm` package (x86_64, aarch64):
 
 ```sh
+# Fedora / RHEL / Rocky
 sudo dnf install https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc-X.Y.Z-1.x86_64.rpm
+# openSUSE
+sudo zypper install https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc-X.Y.Z-1.x86_64.rpm
 ```
 
 With both packages, `fuse3`, needed by `retyc fs mount`, is installed as a recommended package.

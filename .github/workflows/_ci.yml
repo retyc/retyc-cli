@@ -103,9 +103,11 @@ jobs:
           retyc version
           test -f /usr/share/bash-completion/completions/retyc
 
+      # Rocky (EL family, oldest rpm supported) rather than Fedora, whose
+      # releases reach end of life within a year.
       - name: Install test (rpm)
         run: |
-          docker run --rm -v "$PWD/dist:/dist:ro" fedora:42 sh -c '
+          docker run --rm -v "$PWD/dist:/dist:ro" rockylinux/rockylinux:9 sh -c '
             dnf install -y /dist/retyc-*.x86_64.rpm &&
             retyc version &&
             test -f /usr/share/zsh/site-functions/_retyc'
