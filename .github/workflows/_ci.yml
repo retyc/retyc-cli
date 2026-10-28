@@ -68,3 +68,46 @@ jobs:
 
       - name: Build (prod)
         run: CGO_ENABLED=0 go build -tags prod ./...
+
+  # Builds the release artifacts as a snapshot, so that a broken goreleaser
+  # config or Debian package fails here rather than on the release tag.
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: GoReleaser (snapshot)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
+
+      - name: Lintian
+        run: |
+          sudo apt-get update && sudo apt-get install -y lintian
+          lintian --fail-on error,warning dist/*.deb
+
+      - name: Install test (deb)
+        run: |
+          sudo apt-get install -y ./dist/retyc_*_amd64.deb
+          retyc version
+          test -f /usr/share/bash-completion/completions/retyc
+
+      # Rocky (EL family, oldest rpm supported) rather than Fedora, whose
+      # releases reach end of life within a year.
+      - name: Install test (rpm)
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" rockylinux/rockylinux:9 sh -c '
+            dnf install -y /dist/retyc-*.x86_64.rpm &&
+            retyc version &&
+            test -f /usr/share/zsh/site-functions/_retyc'

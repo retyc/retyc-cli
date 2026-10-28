@@ -8,6 +8,8 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'Dockerfile'
+      - '.goreleaser.yaml'
+      - 'scripts/completions.sh'
       - '.github/workflows/main.yml'
       - '.github/workflows/_ci.yml'
       - '.github/workflows/_docker.yml'

@@ -5,6 +5,7 @@ project_name: retyc
 before:
   hooks:
     - go mod verify
+    - scripts/completions.sh
 
 builds:
   - main: .
@@ -42,9 +43,83 @@ archives:
   - formats: [binary]
     name_template: "retyc-{{ .Os }}-{{ .Arch }}"
 
+# Debian and RPM packages of the Linux builds (amd64, arm64). The binary is
+# static, so one package fits every release of a distribution family. fuse3 is
+# only needed by `retyc fs mount` (non-root), hence a Recommends, not a Depends.
+# Paths that differ between the families are scoped with `packager`.
+nfpms:
+  - id: retyc
+    package_name: retyc
+    file_name_template: "{{ .ConventionalFileName }}"
+    formats: [deb, rpm]
+    vendor: Triplestack
+    homepage: https://retyc.com
+    maintainer: Triplestack <tech@retyc.net>
+    description: |-
+      Command-line client for the RETYC platform
+      End-to-end encrypted file transfers and datarooms from the command line:
+      send and receive transfers, manage datarooms, serve them over WebDAV,
+      mount them with FUSE, and expose them to AI assistants over MCP.
+    # Required by the RPM header; dpkg ignores it as an extra control field.
+    license: MIT
+    section: utils
+    priority: optional
+    bindir: /usr/bin
+    mtime: "{{ .CommitDate }}"
+    recommends:
+      - fuse3
+    contents:
+      - src: ./completions/retyc.bash
+        dst: /usr/share/bash-completion/completions/retyc
+        file_info:
+          mode: 0644
+      - src: ./completions/retyc.zsh
+        dst: /usr/share/zsh/vendor-completions/_retyc
+        packager: deb
+        file_info:
+          mode: 0644
+      - src: ./completions/retyc.zsh
+        dst: /usr/share/zsh/site-functions/_retyc
+        packager: rpm
+        file_info:
+          mode: 0644
+      - src: ./completions/retyc.fish
+        dst: /usr/share/fish/vendor_completions.d/retyc.fish
+        file_info:
+          mode: 0644
+      - src: ./LICENSE
+        dst: /usr/share/doc/retyc/copyright
+        packager: deb
+        file_info:
+          mode: 0644
+      - src: ./LICENSE
+        dst: /usr/share/licenses/retyc/LICENSE
+        type: license
+        packager: rpm
+        file_info:
+          mode: 0644
+    rpm:
+      summary: Command-line client for the RETYC platform
+    deb:
+      # Go binaries are static by design. No Debian changelog nor man page
+      # yet: the release notes live on GitHub, the help in `retyc --help`.
+      # License is the shared field the RPM needs (see above).
+      lintian_overrides:
+        - statically-linked-binary
+        - unknown-field License
+        - no-changelog
+        - no-manual-page
+
 checksum:
   name_template: '{{ .ProjectName }}_sha256_checksums.txt'
   algorithm: sha256
+
+# The release is usually created by hand on GitHub (which creates the tag);
+# goreleaser then updates it and always sends the pre-release flag. "auto"
+# derives it from the tag (v1.2.0-rc1 → pre-release, never "Latest") instead
+# of resetting it to false.
+release:
+  prerelease: auto
 
 changelog:
   use: github-native
