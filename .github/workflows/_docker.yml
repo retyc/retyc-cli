@@ -80,6 +80,7 @@ jobs:
           echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -93,9 +94,28 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
 
+      - name: Install cosign
+        if: inputs.push
+        uses: sigstore/cosign-installer@v4
+
+      # Keyless signature (GitHub OIDC identity, recorded in Rekor) of the index
+      # digest, once per pushed repository. The SBOM and provenance are
+      # referenced by that index, so the signature covers them too.
+      - name: Sign images
+        if: inputs.push
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          images=""
+          for tag in ${TAGS}; do
+            images+="${tag}@${DIGEST} "
+          done
+          cosign sign --yes ${images}
+
   # Dev build (no `prod` tag: dev API default, `--insecure`), amd64 only, GHCR only.
   # Same events as above, with the image named retyc-cli-dev, except that it never
-  # gets `latest`.
+  # gets `latest` and is not signed.
   docker-dev:
     name: ${{ inputs.push && 'Push dev image' || 'Build dev image' }}
     runs-on: ubuntu-latest

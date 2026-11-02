@@ -46,5 +46,16 @@ checksum:
   name_template: '{{ .ProjectName }}_sha256_checksums.txt'
   algorithm: sha256
 
+# Keyless cosign signature of the checksum file, which covers every binary.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - "sign-blob"
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+
 changelog:
   use: github-native

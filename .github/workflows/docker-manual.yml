@@ -17,6 +17,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # cosign keyless signature
     uses: ./.github/workflows/_docker.yml
     with:
       push: ${{ inputs.push }}

@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write # cosign keyless signature
 
     steps:
       - uses: actions/checkout@v5
@@ -36,6 +37,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # Used by goreleaser (`signs:`) and to sign the MCPB bundle below.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
@@ -53,7 +58,13 @@ jobs:
       - name: Validate MCPB manifest
         run: npx --yes @anthropic-ai/mcpb@2 validate dist/mcpb/manifest.json
 
+      - name: Sign MCPB bundle
+        run: |
+          for f in dist/retyc-*.mcpb; do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+          done
+
       - name: Upload MCPB bundle to release
-        run: gh release upload "${GITHUB_REF_NAME}" dist/retyc-*.mcpb
+        run: gh release upload "${GITHUB_REF_NAME}" dist/retyc-*.mcpb dist/retyc-*.mcpb.sigstore.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
