@@ -96,7 +96,7 @@ jobs:
 
       - name: Install cosign
         if: inputs.push
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.2
 
       # Keyless signature (GitHub OIDC identity, recorded in Rekor) of the index
       # digest, once per pushed repository. The SBOM and provenance are
