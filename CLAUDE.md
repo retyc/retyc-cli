@@ -283,4 +283,5 @@ spans: unregistered collectors and the no-op tracer cost nothing elsewhere.
 
 `main.yml` → `_ci.yml` (vet, race tests with `fuse3` installed and a `redis:8.10.2`
 service, dev + prod builds) → `_docker.yml`. `release.yml` on `v*` tags: goreleaser,
-MCPB bundle, GitHub release. See `doc/ci-cd.md`.
+MCPB bundle, GitHub release. Keyless cosign (`sigstore/cosign-installer`): pushed
+images except the dev one, checksum file (goreleaser `signs:`), MCPB bundle. See `doc/ci-cd.md`.

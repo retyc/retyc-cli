@@ -57,6 +57,19 @@ docker pull ghcr.io/retyc/retyc-cli:latest
 | `master`       | Head of the `master` branch, not released — for testing only                               |
 | `commit-<sha>` | One-off build of a single commit, GitHub Container Registry only — for testing only        |
 
+Pushed images are signed with [cosign](https://docs.sigstore.dev/) (keyless); the signature
+also covers their SBOM and provenance. They are signed by the reusable workflow, hence
+`_docker.yml` in the identity (`refs/heads/master` for `master`):
+
+```sh
+cosign verify \
+  --certificate-identity 'https://github.com/retyc/retyc-cli/.github/workflows/_docker.yml@refs/tags/vX.Y.Z' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  retyc/retyc-cli:vX.Y.Z
+```
+
+The dev image below is not signed.
+
 ## Dev image
 
 `ghcr.io/retyc/retyc-cli-dev` is built without the `prod` tag (dev API default,

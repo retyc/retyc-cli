@@ -33,6 +33,19 @@ required.
 
 Download the binary for your platform from the [latest release](https://github.com/retyc/retyc-cli/releases/latest).
 
+Releases are signed with [cosign](https://docs.sigstore.dev/) (keyless). To verify a binary, download it with
+`retyc_sha256_checksums.txt` and `retyc_sha256_checksums.txt.sigstore.json`, then:
+
+```sh
+cosign verify-blob \
+  --certificate-identity 'https://github.com/retyc/retyc-cli/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  --bundle retyc_sha256_checksums.txt.sigstore.json retyc_sha256_checksums.txt
+sha256sum --check --ignore-missing retyc_sha256_checksums.txt
+```
+
+The MCPB bundle has its own `.sigstore.json`, verified the same way.
+
 ### With `go install`
 
 ```sh
