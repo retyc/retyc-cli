@@ -40,7 +40,7 @@ jobs:
 
       # Used by goreleaser (`signs:`) and to sign the MCPB bundle below.
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
