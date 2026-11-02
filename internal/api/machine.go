@@ -110,3 +110,43 @@ func (c *Client) GetEnrollment(ctx context.Context, id string) (*EnrollmentStatu
 
 	return &out, nil
 }
+
+// ErrMachineKeyAlreadyActive is matched by the 409 of POST /machine/me/key
+// when the proposed key is already the active one.
+var ErrMachineKeyAlreadyActive = errors.New("this age key is already the active one")
+
+// ErrMachineRotationUnfinished is matched by the 409 of POST /machine/me/key
+// while the datarooms of the previous rotation are not rekeyed yet.
+var ErrMachineRotationUnfinished = errors.New("previous key rotation not finished")
+
+// Details of the 409 answers of POST /machine/me/key (no X-Error-Code).
+const (
+	machineKeyAlreadyActiveDetail   = "This age key is already the active one"
+	machineRotationUnfinishedDetail = "Previous key rotation not finished: some datarooms are not rekeyed yet"
+)
+
+// MachineKeyRotation is the answer of POST /machine/me/key.
+type MachineKeyRotation struct {
+	Fingerprint string `json:"fingerprint"`
+}
+
+// RotateMachineKey sends the signed rotation proof of a machine account. The
+// 409 answers are matched by ErrKeyRotationInProgress,
+// ErrMachineKeyAlreadyActive and ErrMachineRotationUnfinished.
+func (c *Client) RotateMachineKey(ctx context.Context, proof string) (*MachineKeyRotation, error) {
+	data, err := json.Marshal(map[string]string{"proof": proof})
+	if err != nil {
+		return nil, err
+	}
+
+	var out MachineKeyRotation
+	if err := c.Post(ctx, "/machine/me/key", bytes.NewReader(data), &out); err != nil {
+		return nil, conflictSentinel(err, map[string]error{
+			keyRotationInProgressDetail:     ErrKeyRotationInProgress,
+			machineKeyAlreadyActiveDetail:   ErrMachineKeyAlreadyActive,
+			machineRotationUnfinishedDetail: ErrMachineRotationUnfinished,
+		})
+	}
+
+	return &out, nil
+}

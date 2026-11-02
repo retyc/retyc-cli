@@ -10,3 +10,6 @@ func Store(_ string, _ int) error { return nil }
 
 // Load always returns an empty string on non-Linux platforms.
 func Load() (string, error) { return "", nil }
+
+// Clear is a no-op on non-Linux platforms.
+func Clear() error { return nil }

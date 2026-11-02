@@ -883,3 +883,27 @@ func (c *Client) DataroomChunkEncryptedSize(ctx context.Context, versionID strin
 
 	return size, nil
 }
+
+// PendingRekeyDataroom is one dataroom whose link still carries a key other
+// than the caller's active one. PublicKey is the key SessionPrivateKeyEnc is
+// encrypted for; UserPublicKeys are the active keys of all members.
+type PendingRekeyDataroom struct {
+	DataroomID           string   `json:"dataroom_id"`
+	PublicKey            string   `json:"public_key"`
+	SessionPrivateKeyEnc string   `json:"session_private_key_enc"`
+	UserPublicKeys       []string `json:"user_public_keys"`
+}
+
+// ListPendingRekeyDatarooms returns the datarooms the caller must rekey.
+func (c *Client) ListPendingRekeyDatarooms(ctx context.Context) ([]PendingRekeyDataroom, error) {
+	var out []PendingRekeyDataroom
+	if err := c.Get(ctx, "/dataroom/pending-rekey", &out); err != nil {
+		return nil, err
+	}
+
+	if out == nil {
+		out = []PendingRekeyDataroom{}
+	}
+
+	return out, nil
+}

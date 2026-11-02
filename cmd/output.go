@@ -157,6 +157,46 @@ func nonNil[T any](s []T) []T {
 	return s
 }
 
+// rekeyOutcomeJSON is the JSON shape of a service.RekeyOutcome.
+type rekeyOutcomeJSON struct {
+	Rekeyed int      `json:"rekeyed"`
+	Skipped []string `json:"skipped"`
+	Failed  []string `json:"failed"`
+}
+
+func newRekeyOutcomeJSON(o service.RekeyOutcome) rekeyOutcomeJSON {
+	return rekeyOutcomeJSON{Rekeyed: o.Rekeyed, Skipped: nonNil(o.Skipped), Failed: nonNil(o.Failed)}
+}
+
+// keyRotationJSON is the JSON shape of `retyc user key rotate`. KeyID is set
+// for a human user, Fingerprint for a machine account; the lists are never
+// null.
+type keyRotationJSON struct {
+	Machine     bool             `json:"machine,omitempty"`
+	Resumed     bool             `json:"resumed"`
+	KeyID       string           `json:"key_id,omitempty"`
+	PublicKey   string           `json:"public_key"`
+	Fingerprint string           `json:"fingerprint,omitempty"`
+	Datarooms   rekeyOutcomeJSON `json:"datarooms"`
+	Transfers   rekeyOutcomeJSON `json:"transfers"`
+	Revoked     []string         `json:"revoked"`
+	OldKeyKept  bool             `json:"old_key_kept"`
+}
+
+func newKeyRotationJSON(r *service.KeyRotationResult) keyRotationJSON {
+	return keyRotationJSON{
+		Machine:     r.Machine,
+		Resumed:     r.Resumed,
+		KeyID:       r.KeyID,
+		PublicKey:   r.PublicKey,
+		Fingerprint: r.Fingerprint,
+		Datarooms:   newRekeyOutcomeJSON(r.Datarooms),
+		Transfers:   newRekeyOutcomeJSON(r.Transfers),
+		Revoked:     nonNil(r.Revoked),
+		OldKeyKept:  r.OldKeyKept,
+	}
+}
+
 // idStatusJSON acknowledges a state change on a single resource.
 type idStatusJSON struct {
 	ID     string `json:"id"`

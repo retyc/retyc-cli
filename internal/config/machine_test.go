@@ -214,3 +214,36 @@ func TestWriteMachineFileNoOverwrite(t *testing.T) {
 		t.Fatalf("temp files left: %v", ents)
 	}
 }
+
+func TestMachineAgeKeyPath(t *testing.T) {
+	t.Run("file variable wins", func(t *testing.T) {
+		t.Setenv(EnvMachineDirName, "/some/dir")
+		t.Setenv(EnvAgeKeyFileName, "/elsewhere/my.key")
+		got, err := MachineAgeKeyPath()
+		if err != nil || got != "/elsewhere/my.key" {
+			t.Fatalf("got %q, %v", got, err)
+		}
+	})
+	t.Run("directory", func(t *testing.T) {
+		t.Setenv(EnvMachineDirName, "/some/dir")
+		t.Setenv(EnvAgeKeyFileName, "")
+		got, err := MachineAgeKeyPath()
+		if err != nil || got != filepath.Join("/some/dir", MachineAgeKeyFile) {
+			t.Fatalf("got %q, %v", got, err)
+		}
+	})
+	t.Run("nothing set", func(t *testing.T) {
+		t.Setenv(EnvMachineDirName, "")
+		t.Setenv(EnvAgeKeyFileName, "")
+		if _, err := MachineAgeKeyPath(); !errors.Is(err, ErrMachineConfig) {
+			t.Fatalf("err = %v, want ErrMachineConfig", err)
+		}
+	})
+	t.Run("absent file is not an error", func(t *testing.T) {
+		t.Setenv(EnvMachineDirName, "")
+		t.Setenv(EnvAgeKeyFileName, filepath.Join(t.TempDir(), "missing"))
+		if _, err := MachineAgeKeyPath(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

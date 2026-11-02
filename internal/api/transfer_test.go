@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -267,5 +268,25 @@ func TestDownloadChunk(t *testing.T) {
 
 	if string(got) != string(expected) {
 		t.Errorf("DownloadChunk() = %q, want %q", got, expected)
+	}
+}
+
+func TestRekeyTransfer_Body(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/share/s1/rekey" {
+			t.Errorf("got %s %s", r.Method, r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	if err := newTestClient(srv).RekeyTransfer(context.Background(), "s1", "blob"); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody != `{"session_private_key_enc":"blob"}` {
+		t.Errorf("body = %s", gotBody)
 	}
 }

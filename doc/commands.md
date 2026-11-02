@@ -67,6 +67,7 @@ retyc --json user quota | jq .used_storage
 | `api_error`          | Any other refusal of the API                                                                                            |
 | `enrollment_expired` | `machine enroll`: the request expired unanswered (exit code `1`: run it again)                                          |
 | `enrollment_denied`  | `machine enroll`: an administrator refused the request (exit code `78`)                                                 |
+| `key_rotation_incomplete` | `user key rotate`: some items could not be rekeyed, the previous key is kept (exit code `1`: run it again) |
 | `error`              | Anything else (network, local file, argument)                                                                           |
 
 The four storage kinds come from the API's code. A refusal without a code
@@ -231,7 +232,31 @@ decrypted file tree). Datarooms the organization key cannot open get their
 `meta.json` and messages but no `data/`, and are listed in the manifest.
 Transfers are not exported: the admin API exposes no transfer file download.
 
+## User
+
+```bash
+retyc user info
+retyc user quota
+retyc user key rotate [-y]   # new encryption key; the previous one is revoked once nothing needs it
+```
+
+`key rotate` generates a new key (same passphrase), rekeys the datarooms and the
+sent transfers still bound to the previous key, then revokes it. The previous
+key is revoked only when everything was rekeyed; otherwise the command exits
+`1` (`key_rotation_incomplete`) and running it again resumes. Items you received
+stay unreadable with the new key until their owner's client rekeys them. With
+`--json`: `{key_id, public_key, resumed, datarooms: {rekeyed, skipped, failed},
+transfers: {…}, revoked, old_key_kept}`.
+
+With a machine account, the same command writes the new key as `age.key.new`
+next to `age.key`, then swaps them (`age.key.old` is kept until nothing is
+encrypted for it any more); it prints the new fingerprint, the one the
+organization's Machines page shows (`fingerprint` in JSON, no `key_id`;
+`transfers` and `revoked` are empty).
+
 ## Machine
+
+Key rotation: `retyc user key rotate` (see [User](#user) for `age.key.new` / `age.key.old`).
 
 ```bash
 # Enroll a server, a CI runner or a cluster (no login needed)

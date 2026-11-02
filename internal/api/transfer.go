@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"time"
 )
 
@@ -56,6 +57,9 @@ type TransferRecipient struct {
 	IsExternal   bool    `json:"is_external"`
 	KeyEncrypted bool    `json:"key_encrypted"`
 	UserFullName *string `json:"user_full_name"`
+	// ExpectedPublicKey is the key the recipient is expected to hold, when the
+	// API records one (rotation of a transfer keeps it reachable).
+	ExpectedPublicKey *string `json:"expected_public_key"`
 }
 
 // TransferDetails is the full view of a transfer returned by GET /share/{id}/details.
@@ -227,4 +231,15 @@ func (c *Client) EnableTransfer(ctx context.Context, shareID string) error {
 // Use this to clean up a transfer that was interrupted during upload.
 func (c *Client) ForceDeleteTransfer(ctx context.Context, shareID string) error {
 	return c.Delete(ctx, "/share/"+shareID+"/force")
+}
+
+// RekeyTransfer replaces the session private key of an active or expired
+// transfer (the API answers 400 for any other status).
+func (c *Client) RekeyTransfer(ctx context.Context, shareID, sessionPrivKeyEnc string) error {
+	data, err := json.Marshal(map[string]string{"session_private_key_enc": sessionPrivKeyEnc})
+	if err != nil {
+		return err
+	}
+
+	return c.Put(ctx, "/share/"+url.PathEscape(shareID)+"/rekey", bytes.NewReader(data), nil)
 }

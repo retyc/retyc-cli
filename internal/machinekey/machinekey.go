@@ -21,10 +21,13 @@ import (
 )
 
 const (
-	pemType        = "PRIVATE KEY"
-	assertionTTL   = 30 * time.Second
-	coordinateSize = 32
-	fingerprintTag = "retyc-machine-v1\n"
+	pemType      = "PRIVATE KEY"
+	assertionTTL = 30 * time.Second
+	// RotationAudience is the aud claim of a machine key rotation proof.
+	RotationAudience = "retyc-machine-key-rotation"
+	rotationProofTTL = 120 * time.Second
+	coordinateSize   = 32
+	fingerprintTag   = "retyc-machine-v1\n"
 )
 
 // JWK is the public signing key sent at enrollment. The backend accepts
@@ -136,15 +139,44 @@ func SignAssertion(k *ecdsa.PrivateKey, kid, clientID, audience string, now time
 	if err != nil {
 		return "", err
 	}
+
+	return signES256(k, header, claims)
+}
+
+// signES256 returns the compact JWS of header and claims, signed with k. The
+// signature is R||S on 32+32 bytes (RFC 7518 3.4), base64url without padding.
+func signES256(k *ecdsa.PrivateKey, header, claims []byte) (string, error) {
 	signing := b64(header) + "." + b64(claims)
 	digest := sha256.Sum256([]byte(signing))
 	r, s, err := ecdsa.Sign(rand.Reader, k, digest[:])
 	if err != nil {
-		return "", fmt.Errorf("sign assertion: %w", err)
+		return "", fmt.Errorf("sign: %w", err)
 	}
 	var sig [2 * coordinateSize]byte
 	r.FillBytes(sig[:coordinateSize])
 	s.FillBytes(sig[coordinateSize:])
 
 	return signing + "." + b64(sig[:]), nil
+}
+
+// SignRotationProof returns the ES256 proof sent with POST /machine/me/key: it
+// binds the new AGE recipient to the machine's signing key for 120 s. The
+// header carries no typ.
+func SignRotationProof(k *ecdsa.PrivateKey, kid, clientID, ageRecipient string, now time.Time) (string, error) {
+	header, err := json.Marshal(map[string]string{"alg": "ES256", "kid": kid})
+	if err != nil {
+		return "", err
+	}
+	claims, err := json.Marshal(map[string]any{
+		"sub":           clientID,
+		"aud":           RotationAudience,
+		"iat":           now.Unix(),
+		"exp":           now.Add(rotationProofTTL).Unix(),
+		"age_recipient": ageRecipient,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return signES256(k, header, claims)
 }

@@ -170,3 +170,64 @@ func TestGetEnrollment404(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestRotateMachineKey_OK(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/machine/me/key" {
+			t.Errorf("got %s %s", r.Method, r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		_, _ = io.WriteString(w, `{"fingerprint":"ABCD-EFGH"}`)
+	}))
+	defer srv.Close()
+
+	got, err := newTestClient(srv).RotateMachineKey(context.Background(), "jws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Fingerprint != "ABCD-EFGH" {
+		t.Errorf("fingerprint = %q", got.Fingerprint)
+	}
+	if gotBody != `{"proof":"jws"}` {
+		t.Errorf("body = %s", gotBody)
+	}
+}
+
+func TestRotateMachineKey_Conflicts(t *testing.T) {
+	sentinels := []error{ErrKeyRotationInProgress, ErrMachineKeyAlreadyActive, ErrMachineRotationUnfinished}
+	tests := []struct {
+		detail string
+		want   error
+	}{
+		{"Key rotation already in progress", ErrKeyRotationInProgress},
+		{"This age key is already the active one", ErrMachineKeyAlreadyActive},
+		{
+			"Previous key rotation not finished: some datarooms are not rekeyed yet",
+			ErrMachineRotationUnfinished,
+		},
+		{"Machine client no longer exists in Keycloak", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.detail, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusConflict)
+				b, _ := json.Marshal(map[string]string{"detail": tt.detail})
+				_, _ = w.Write(b)
+			}))
+			defer srv.Close()
+
+			_, err := newTestClient(srv).RotateMachineKey(context.Background(), "jws")
+			var httpErr *HTTPError
+			if !errors.As(err, &httpErr) {
+				t.Fatalf("HTTPError not reachable: %v", err)
+			}
+			for _, s := range sentinels {
+				if got, want := errors.Is(err, s), s == tt.want; got != want {
+					t.Errorf("errors.Is(%v) = %v, want %v", s, got, want)
+				}
+			}
+		})
+	}
+}

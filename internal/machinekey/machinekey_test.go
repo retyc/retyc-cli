@@ -199,3 +199,50 @@ func TestSignAssertion(t *testing.T) {
 		t.Fatal("jti repeated")
 	}
 }
+
+func TestSignRotationProof(t *testing.T) {
+	k, err := GenerateSigningKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	tok, err := SignRotationProof(k, "kid-1", "client-1", "age1pq1abc", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		t.Fatalf("segments = %d, want 3", len(parts))
+	}
+	hdr, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(hdr) != `{"alg":"ES256","kid":"kid-1"}` {
+		t.Fatalf("header = %s", hdr)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		t.Fatal(err)
+	}
+	if claims["sub"] != "client-1" || claims["aud"] != RotationAudience || claims["age_recipient"] != "age1pq1abc" {
+		t.Fatalf("claims = %v", claims)
+	}
+	iat, ok1 := claims["iat"].(float64)
+	exp, ok2 := claims["exp"].(float64)
+	if !ok1 || !ok2 || int64(iat) != now.Unix() || int64(exp-iat) != 120 {
+		t.Fatalf("iat/exp = %v/%v", claims["iat"], claims["exp"])
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || len(sig) != 64 {
+		t.Fatalf("signature len %d err %v", len(sig), err)
+	}
+	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+	if !ecdsa.Verify(&k.PublicKey, digest[:], new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:])) {
+		t.Fatal("signature does not verify")
+	}
+}
