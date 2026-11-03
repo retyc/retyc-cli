@@ -111,6 +111,13 @@ func decryptKeyWithPassphrase(ctx context.Context, kind, ciphertext, passphrase 
 	return plaintext, nil
 }
 
+// keyringLoad and keyringStore reach the session keyring. Variables so that
+// tests do not touch the keyring of the session running them.
+var (
+	keyringLoad  = keyring.Load
+	keyringStore = keyring.Store
+)
+
 // ResolveUserIdentity decrypts the user's AGE private key using the passphrase.
 // It checks the keyring cache first (when enabled), falling back to reader().
 // A keyring hit is exported as a crypto.unlock_key span with key.source
@@ -122,53 +129,65 @@ func ResolveUserIdentity(
 		return MachineIdentity(ctx, userKey)
 	}
 
-	var identityStr string
-	fromKeyring := false
-
 	if cfg.Keyring.Enabled {
-		// The keyring lookup is the cheap path; its span shows whether the
-		// scrypt below was avoided.
-		_, span := telemetry.Tracer().Start(ctx, "crypto.unlock_key", trace.WithAttributes(
-			telemetry.AttrKeyKind.String("user"), telemetry.AttrKeySource.String("keyring")))
-		var err error
-		identityStr, err = keyring.Load()
-		span.SetAttributes(telemetry.AttrCacheHit.Bool(err == nil && identityStr != ""))
-		span.End()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: keyring load: %v\n", err)
-		} else if identityStr != "" {
-			fromKeyring = true
+		if identity := cachedUserIdentity(ctx, userKey); identity != nil {
+			return identity, nil
 		}
 	}
 
-	if identityStr == "" {
-		passphrase, err := reader()
-		if err != nil {
-			return nil, err
-		}
-		identityStr, err = decryptKeyWithPassphrase(ctx, "user", userKey.PrivateKeyEnc, passphrase)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrWrongKeyPassphrase, err)
-		}
-		// The scrypt above needs ~256 MiB of working memory (age work factor 2^18).
-		// Hand it back to the OS now rather than letting the runtime scavenge it over
-		// minutes: long-running servers (webdav, mcp) would otherwise sit at a
-		// misleading RSS and trip container memory limits.
-		debug.FreeOSMemory()
+	passphrase, err := reader()
+	if err != nil {
+		return nil, err
 	}
+	identityStr, err := decryptKeyWithPassphrase(ctx, "user", userKey.PrivateKeyEnc, passphrase)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrWrongKeyPassphrase, err)
+	}
+	// The scrypt above needs ~256 MiB of working memory (age work factor 2^18).
+	// Hand it back to the OS now rather than letting the runtime scavenge it over
+	// minutes: long-running servers (webdav, mcp) would otherwise sit at a
+	// misleading RSS and trip container memory limits.
+	debug.FreeOSMemory()
 
 	identity, err := crypto.ParseIdentity(identityStr)
 	if err != nil {
 		return nil, fmt.Errorf("parsing AGE identity: %w", err)
 	}
 
-	if cfg.Keyring.Enabled && !fromKeyring {
-		if err := keyring.Store(identityStr, cfg.Keyring.TTL); err != nil {
+	if cfg.Keyring.Enabled {
+		if err := keyringStore(userKey.ID, identityStr, cfg.Keyring.TTL); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: keyring store: %v\n", err)
 		}
 	}
 
 	return identity, nil
+}
+
+// cachedUserIdentity returns the identity of userKey cached in the keyring, or
+// nil. A cached identity whose recipient is not the public key of userKey (a
+// key ID reused, an entry written by hand) reads as a miss: it would decrypt
+// nothing of this account, and is overwritten once the key is unlocked.
+func cachedUserIdentity(ctx context.Context, userKey *api.UserKey) *age.HybridIdentity {
+	// The keyring lookup is the cheap path; its span shows whether the
+	// scrypt was avoided.
+	_, span := telemetry.Tracer().Start(ctx, "crypto.unlock_key", trace.WithAttributes(
+		telemetry.AttrKeyKind.String("user"), telemetry.AttrKeySource.String("keyring")))
+	defer span.End()
+
+	identityStr, err := keyringLoad(userKey.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: keyring load: %v\n", err)
+	}
+	var identity *age.HybridIdentity
+	if err == nil && identityStr != "" {
+		if parsed, perr := crypto.ParseIdentity(identityStr); perr == nil &&
+			parsed.Recipient().String() == userKey.PublicKey {
+			identity = parsed
+		}
+	}
+	span.SetAttributes(telemetry.AttrCacheHit.Bool(identity != nil))
+
+	return identity
 }
 
 // ResolveActiveUserIdentity fetches the user's active key and unlocks it as
