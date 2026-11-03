@@ -187,7 +187,7 @@ round trip. Folder listings and the dataroom list are therefore cached:
 
 | Age of the cached listing | Behaviour |
 |---|---|
-| under `cache.ttl` (default `1m`) | served from memory |
+| under `cache.ttl` (default `1m`) | served from memory; past 30 to 50% of it, renewed once in the background |
 | up to `cache.max_stale` more (default `5m`) | served from memory **while one background refresh replaces it** |
 | older | the request waits for a fresh listing |
 
@@ -200,6 +200,11 @@ time; a request that needs a listing a refresh is still queued for starts it at
 once. A failed refresh keeps the expired listing, except for a folder deleted
 elsewhere, which is dropped so the next request answers `404`.
 
+A listing in use is renewed before it expires: the first request that reads it
+past 30 to 50% of `cache.ttl` starts one background refresh (usually answered
+"not modified"). A folder used at least that often never makes a request wait for
+the API. With a shared Redis, one instance renews it for all.
+
 A refresh is conditional when the API supports it: the listing is kept with the
 `ETag` of its dataroom and sent back as `If-None-Match`. While nothing changed in
 the dataroom the API answers `304`, and the listing is kept for another TTL at the
@@ -209,7 +214,8 @@ next refresh of each of its folders a full listing.
 
 Mutations made through the server keep the cache exact. Changes made elsewhere
 (web app, another client, another `webdav serve`) appear once the listing is
-refreshed: after `cache.ttl` at best, after `ttl + max_stale` at worst, and
+refreshed: after 30 to 50% of `cache.ttl` for a folder in use, after `cache.ttl`
+otherwise, after `ttl + max_stale` at worst, and
 always one request late for an expired listing (that request still gets the
 previous one: an old size, version or `ETag`, a node deleted since). A name the
 expired listing does not hold is the exception: the request waits for the refresh
