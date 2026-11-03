@@ -63,8 +63,7 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
-      - name: Build (dev)
-        run: CGO_ENABLED=0 go build ./...
-
+      # The tests already compiled the dev build; this one checks the files
+      # behind the `prod` tag, without cgo as in the release.
       - name: Build (prod)
         run: CGO_ENABLED=0 go build -tags prod ./...

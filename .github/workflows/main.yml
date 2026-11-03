@@ -14,6 +14,13 @@ on:
   pull_request:
     paths: *code_paths
 
+# A new push to a branch cancels the run of the previous one. On the default
+# branch a running run (it pushes the `master` image) is never cancelled; a
+# queued one gives way to the newer push, whose image supersedes it anyway.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
 jobs:
   ci:
     name: CI
@@ -23,16 +30,18 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     uses: ./.github/workflows/_ci.yml
 
-  # Builds the image everywhere, pushes it (as `master`) from the default branch
-  # only. `latest` belongs to the release workflow.
+  # Pushes the image (as `master`) from the default branch only; `latest`
+  # belongs to the release workflow. Branches and pull requests do not build
+  # it: docker-check.yml does, when the Docker files change.
   docker:
     name: Docker
     needs: ci
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     permissions:
       contents: read
       packages: write
       id-token: write # cosign keyless signature
     uses: ./.github/workflows/_docker.yml
     with:
-      push: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') }}
+      push: true
     secrets: inherit
