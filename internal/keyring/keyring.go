@@ -3,24 +3,32 @@
 // Package keyring caches the decrypted AGE identity in the Linux kernel session keyring.
 // The key lives only in kernel memory, is shared across all processes in the same
 // terminal session, and is automatically wiped after TTL seconds.
+//
+// Each identity is stored under the ID of its user key ("retyc:identity:<key id>"),
+// so that two accounts (or the dev and prod builds) used in the same session do
+// not overwrite each other's cache.
 package keyring
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
 
-const (
-	keyType = "user"
-	keyName = "retyc:identity"
-)
+const keyType = "user"
 
-// Store saves the decrypted AGE identity string in the session keyring with the
-// given TTL (in seconds). It overwrites any existing entry and resets the TTL.
-func Store(identity string, ttl int) error {
-	id, err := unix.AddKey(keyType, keyName, []byte(identity), unix.KEY_SPEC_SESSION_KEYRING)
+// Store saves the decrypted AGE identity of key keyID in the session keyring
+// with the given TTL (in seconds). It overwrites any existing entry and resets
+// the TTL.
+func Store(keyID, identity string, ttl int) error {
+	name, err := keyName(keyID)
+	if err != nil {
+		return err
+	}
+	id, err := unix.AddKey(keyType, name, []byte(identity), unix.KEY_SPEC_SESSION_KEYRING)
 	if err != nil {
 		return fmt.Errorf("add_key: %w", err)
 	}
@@ -31,10 +39,14 @@ func Store(identity string, ttl int) error {
 	return nil
 }
 
-// Load retrieves the cached AGE identity from the user keyring.
+// Load retrieves the cached AGE identity of key keyID from the session keyring.
 // Returns ("", nil) if the key does not exist or has expired.
-func Load() (string, error) {
-	id, err := unix.KeyctlSearch(unix.KEY_SPEC_SESSION_KEYRING, keyType, keyName, 0)
+func Load(keyID string) (string, error) {
+	name, err := keyName(keyID)
+	if err != nil {
+		return "", err
+	}
+	id, err := unix.KeyctlSearch(unix.KEY_SPEC_SESSION_KEYRING, keyType, name, 0)
 	if err != nil {
 		if isAbsent(err) {
 			return "", nil
@@ -65,12 +77,36 @@ func Load() (string, error) {
 	return string(buf[:n]), nil
 }
 
-// Has reports whether an identity is cached, without reading it. Any error
-// (keyring unavailable, blocked by seccomp…) reads as "not cached".
-func Has() bool {
-	_, err := unix.KeyctlSearch(unix.KEY_SPEC_SESSION_KEYRING, keyType, keyName, 0)
+// HasAny reports whether the session keyring caches an identity, whatever its
+// key, without reading it. It lets a command check, before it knows the active
+// key, that it may not need a passphrase. Any error (keyring unavailable,
+// blocked by seccomp…) reads as "nothing cached".
+func HasAny() bool {
+	size, err := unix.KeyctlBuffer(unix.KEYCTL_READ, unix.KEY_SPEC_SESSION_KEYRING, nil, 0)
+	if err != nil || size <= 0 {
+		return false
+	}
+	// The payload of a keyring is the list of its key serials (native int32 each).
+	buf := make([]byte, size)
+	n, err := unix.KeyctlBuffer(unix.KEYCTL_READ, unix.KEY_SPEC_SESSION_KEYRING, buf, 0)
+	if err != nil {
+		return false
+	}
+	n = min(n, size)
+	for i := 0; i+4 <= n; i += 4 {
+		serial := int(int32(binary.NativeEndian.Uint32(buf[i:]))) //nolint:gosec // G115: a key serial is an int32
+		// "type;uid;gid;perm;description"
+		desc, err := unix.KeyctlString(unix.KEYCTL_DESCRIBE, serial)
+		if err != nil {
+			continue
+		}
+		parts := strings.SplitN(desc, ";", 5)
+		if len(parts) == 5 && parts[0] == keyType && strings.HasPrefix(parts[4], namePrefix) {
+			return true
+		}
+	}
 
-	return err == nil
+	return false
 }
 
 // isAbsent reports whether err means the key was not found or is no longer valid.

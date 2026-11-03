@@ -6,10 +6,10 @@
 package keyring
 
 // Store is a no-op on non-Linux platforms.
-func Store(_ string, _ int) error { return nil }
+func Store(_, _ string, _ int) error { return nil }
 
 // Load always returns an empty string on non-Linux platforms.
-func Load() (string, error) { return "", nil }
+func Load(_ string) (string, error) { return "", nil }
 
-// Has always reports false on non-Linux platforms.
-func Has() bool { return false }
+// HasAny always reports false on non-Linux platforms.
+func HasAny() bool { return false }

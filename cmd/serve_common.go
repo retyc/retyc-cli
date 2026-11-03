@@ -277,8 +277,9 @@ func authLostAdvice(restart string) string {
 // identity cached in the keyring, or a terminal to prompt on. Without any of
 // them the command stops with ErrNoKeyPassphrase (exit code 78), as before
 // the prompt existed: an unattended run is not changed. The check is
-// best-effort: a cached identity can expire before it is read (keyring.ttl),
-// and the command then stops with the same error, still before serving.
+// best-effort: a cached identity can expire before it is read (keyring.ttl)
+// or belong to another key than the active one; the command then stops with
+// the same error, still before serving.
 func requireIdentitySource(cfg *config.Config) error {
 	if config.MachineMode() {
 		_, err := config.LoadMachine()
@@ -295,6 +296,7 @@ func requireIdentitySource(cfg *config.Config) error {
 	return fmt.Errorf("no TTY detected and no identity cached in the keyring: %w", config.ErrNoKeyPassphrase)
 }
 
-// keyringHas reports whether the keyring caches the identity. A variable so
+// keyringHas reports whether the keyring caches an identity, of any key (the
+// active one is not known yet). A variable so
 // that tests do not depend on the keyring of the session running them.
-var keyringHas = keyring.Has
+var keyringHas = keyring.HasAny
