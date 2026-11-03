@@ -774,9 +774,8 @@ func newStartupTestClient(srv *httptest.Server) *api.Client {
 func TestWebdavStartupCheck_OK(t *testing.T) {
 	srv := newStartupTestServer(t, "good-pw")
 
-	identity, err := serveStartupCheck(context.Background(), newStartupTestClient(srv), func() (string, error) {
-		return "good-pw", nil
-	})
+	identity, err := serveStartupCheck(context.Background(), &config.Config{}, newStartupTestClient(srv),
+		func() (string, error) { return "good-pw", nil })
 	if err != nil {
 		t.Fatalf("serveStartupCheck() error = %v, want nil", err)
 	}
@@ -788,7 +787,7 @@ func TestWebdavStartupCheck_OK(t *testing.T) {
 func TestWebdavStartupCheck_WrongPassphrase(t *testing.T) {
 	srv := newStartupTestServer(t, "good-pw")
 
-	_, err := serveStartupCheck(context.Background(), newStartupTestClient(srv), func() (string, error) {
+	_, err := serveStartupCheck(context.Background(), &config.Config{}, newStartupTestClient(srv), func() (string, error) {
 		return "bad-pw", nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "wrong key passphrase") {
@@ -796,11 +795,45 @@ func TestWebdavStartupCheck_WrongPassphrase(t *testing.T) {
 	}
 }
 
+// A wrong passphrase set in the environment fails at startup.
+func TestWebdavStartupCheck_WrongEnvPassphrase(t *testing.T) {
+	srv := newStartupTestServer(t, "good-pw")
+	t.Setenv(config.EnvKeyPassphraseName, "bad-pw")
+	cfg := &config.Config{}
+
+	_, err := serveStartupCheck(context.Background(), cfg, newStartupTestClient(srv), func() (string, error) {
+		return config.KeyPassphrase(), nil
+	})
+	if !errors.Is(err, service.ErrWrongKeyPassphrase) {
+		t.Fatalf("serveStartupCheck() error = %v, want ErrWrongKeyPassphrase", err)
+	}
+}
+
+// Without the environment, the reader (the prompt) is asked once.
+func TestWebdavStartupCheck_PromptWithoutEnv(t *testing.T) {
+	srv := newStartupTestServer(t, "good-pw")
+	t.Setenv(config.EnvKeyPassphraseName, "")
+	calls := 0
+
+	identity, err := serveStartupCheck(context.Background(), &config.Config{}, newStartupTestClient(srv),
+		func() (string, error) {
+			calls++
+
+			return "good-pw", nil
+		})
+	if err != nil || identity == nil {
+		t.Fatalf("serveStartupCheck() = %v, %v, want an identity", identity, err)
+	}
+	if calls != 1 {
+		t.Fatalf("reader called %d times, want 1", calls)
+	}
+}
+
 func TestWebdavStartupCheck_APIUnreachable(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(srv.Close)
 
-	_, err := serveStartupCheck(context.Background(), newStartupTestClient(srv), func() (string, error) {
+	_, err := serveStartupCheck(context.Background(), &config.Config{}, newStartupTestClient(srv), func() (string, error) {
 		return "good-pw", nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "API connectivity check failed") {

@@ -65,6 +65,14 @@ func Load() (string, error) {
 	return string(buf[:n]), nil
 }
 
+// Has reports whether an identity is cached, without reading it. Any error
+// (keyring unavailable, blocked by seccomp…) reads as "not cached".
+func Has() bool {
+	_, err := unix.KeyctlSearch(unix.KEY_SPEC_SESSION_KEYRING, keyType, keyName, 0)
+
+	return err == nil
+}
+
 // isAbsent reports whether err means the key was not found or is no longer valid.
 func isAbsent(err error) bool {
 	return errors.Is(err, unix.ENOKEY) ||

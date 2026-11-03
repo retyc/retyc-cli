@@ -317,8 +317,8 @@ func TestRequireIdentitySourceMachineNoPassphrase(t *testing.T) {
 	setupMachine(t, "https://idp.example/token")
 	t.Setenv(config.EnvKeyPassphraseName, "")
 
-	if err := requireIdentitySource(); err != nil {
-		t.Fatalf("requireIdentitySource() in machine mode = %v, want nil", err)
+	if err := requireIdentitySource(&config.Config{}); err != nil {
+		t.Fatalf("requireIdentitySource(&config.Config{}) in machine mode = %v, want nil", err)
 	}
 }
 
@@ -326,7 +326,7 @@ func TestRequireIdentitySourceMachineBadConfig(t *testing.T) {
 	setupMachine(t, "https://idp.example/token")
 	t.Setenv(config.EnvClientKeyFileName, filepath.Join(t.TempDir(), "missing.key"))
 
-	err := requireIdentitySource()
+	err := requireIdentitySource(&config.Config{})
 	if !errors.Is(err, config.ErrMachineConfig) || errors.Is(err, config.ErrNoKeyPassphrase) {
 		t.Fatalf("err = %v, want ErrMachineConfig", err)
 	}
@@ -334,14 +334,45 @@ func TestRequireIdentitySourceMachineBadConfig(t *testing.T) {
 
 func TestRequireIdentitySourceUserMode(t *testing.T) {
 	isolateConfig(t)
+	stubIdentitySources(t, false, false)
 	t.Setenv(config.EnvKeyPassphraseName, "")
-	if err := requireIdentitySource(); !errors.Is(err, config.ErrNoKeyPassphrase) {
+	if err := requireIdentitySource(&config.Config{}); !errors.Is(err, config.ErrNoKeyPassphrase) {
 		t.Fatalf("err = %v, want ErrNoKeyPassphrase", err)
 	}
 	t.Setenv(config.EnvKeyPassphraseName, "pw")
-	if err := requireIdentitySource(); err != nil {
+	if err := requireIdentitySource(&config.Config{}); err != nil {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+// Without RETYC_KEY_PASSPHRASE, a terminal to prompt on or an identity in
+// the keyring is enough; the keyring counts only when it is enabled.
+func TestRequireIdentitySourcePromptOrKeyring(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvKeyPassphraseName, "")
+	enabled := &config.Config{Keyring: config.KeyringConfig{Enabled: true}}
+	disabled := &config.Config{}
+
+	stubIdentitySources(t, true, false)
+	if err := requireIdentitySource(disabled); err != nil {
+		t.Fatalf("with a terminal: err = %v, want nil", err)
+	}
+	stubIdentitySources(t, false, true)
+	if err := requireIdentitySource(enabled); err != nil {
+		t.Fatalf("with a cached identity: err = %v, want nil", err)
+	}
+	if err := requireIdentitySource(disabled); !errors.Is(err, config.ErrNoKeyPassphrase) {
+		t.Fatalf("keyring disabled: err = %v, want ErrNoKeyPassphrase", err)
+	}
+}
+
+// stubIdentitySources replaces the terminal and keyring probes for one test.
+func stubIdentitySources(t *testing.T, terminal, cached bool) {
+	t.Helper()
+	prevTerm, prevKeyring := stdinIsTerminal, keyringHas
+	t.Cleanup(func() { stdinIsTerminal, keyringHas = prevTerm, prevKeyring })
+	stdinIsTerminal = func() bool { return terminal }
+	keyringHas = func() bool { return cached }
 }
 
 // The transport of `fs webdav serve` asks the watch for a check on a 401, as

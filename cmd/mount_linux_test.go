@@ -24,6 +24,7 @@ import (
 
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
+	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/retycfs"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/vfs"
@@ -298,13 +299,16 @@ func commandWithContext() *cobra.Command {
 	return cmd
 }
 
-// The passphrase is asked for before anything else that could fail later:
-// without it the command stops with exit code 78, having mounted nothing.
+// The key is required before anything else that could fail later: without
+// a passphrase, a terminal to prompt on or a cached identity, the command
+// stops with exit code 78, having mounted nothing.
 func TestRunMount_NeedsThePassphrase(t *testing.T) {
 	if err := checkFUSE(fuseDevice); err != nil {
 		t.Skipf("FUSE unavailable: %v", err)
 	}
 	isolateConfig(t)
+	config.SetDefaults()
+	stubIdentitySources(t, false, false)
 	t.Setenv("RETYC_KEY_PASSPHRASE", "")
 	err := runMount(commandWithContext(), mountTarget{dataroomID: "dr-1", mountpoint: t.TempDir()})
 	if exitCode(err) != exitConfig {

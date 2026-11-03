@@ -171,11 +171,32 @@ func ResolveUserIdentity(
 	return identity, nil
 }
 
+// ResolveActiveUserIdentity fetches the user's active key and unlocks it as
+// ResolveUserIdentity does: from the keyring cache when it holds the identity,
+// otherwise with the passphrase returned by reader, the identity being cached
+// afterwards. The long-running servers use it when no passphrase is set in
+// the environment, so that a user who started them from a terminal is not
+// asked again for a key a one-shot command already unlocked.
+func ResolveActiveUserIdentity(
+	ctx context.Context, cfg *config.Config, client *api.Client, reader PassphraseReader,
+) (*age.HybridIdentity, error) {
+	userKey, err := client.GetActiveKey(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fetching user key: %w", err)
+	}
+	if userKey == nil && !config.MachineMode() {
+		// In machine mode a nil key is reported by MachineIdentity.
+		return nil, errNoActiveKey()
+	}
+
+	return ResolveUserIdentity(ctx, cfg, userKey, reader)
+}
+
 // UnlockUserIdentity fetches the user's active key and decrypts it with the
 // passphrase returned by reader. Unlike ResolveUserIdentity it deliberately
-// bypasses the keyring cache: long-running servers (webdav) must fail fast at
-// startup on a wrong passphrase, not hours later when the cached identity
-// expires. The returned identity can then be reused for the life of the process
+// bypasses the keyring cache: the long-running servers use it for a passphrase
+// set in the environment, which must fail fast at startup when wrong rather
+// than be masked by a cached identity. The returned identity can then be reused for the life of the process
 // (see GetDataroomSessionWithIdentity), so the scrypt runs exactly once.
 func UnlockUserIdentity(ctx context.Context, client *api.Client, reader PassphraseReader) (
 	*age.HybridIdentity, error,
@@ -189,7 +210,7 @@ func UnlockUserIdentity(ctx context.Context, client *api.Client, reader Passphra
 		return MachineIdentity(ctx, userKey)
 	}
 	if userKey == nil {
-		return nil, fmt.Errorf("no active encryption key - set up your key in the web interface first")
+		return nil, errNoActiveKey()
 	}
 	passphrase, err := reader()
 	if err != nil {

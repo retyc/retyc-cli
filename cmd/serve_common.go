@@ -13,6 +13,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/internal/keyring"
 	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/telemetry"
@@ -22,25 +23,29 @@ import (
 // serve`, `fs mount`): the checks made before they serve anything, and the
 // watch over the login that stops them when it cannot be renewed.
 
-// servePassphraseReader returns the key passphrase from the environment.
-// No interactive prompt — identical to mcpPassphraseReader.
-func servePassphraseReader() (string, error) {
-	return config.RequireKeyPassphrase()
-}
-
 // serveStartupCheck runs the validation calls performed before the command
 // serves anything (the WebDAV port bound, the filesystem mounted): a dataroom
-// listing (auth + API reachability) and the key unlock, which bypasses the
-// keyring so a wrong RETYC_KEY_PASSPHRASE fails at startup rather than at the
-// first dataroom access. The unlocked identity is returned so the command
-// never runs scrypt again.
+// listing (auth + API reachability) and the key unlock. The unlocked identity
+// is returned so the command never runs scrypt again.
+//
+// A passphrase set in the environment (the unattended case: container,
+// supervisor) is checked without the keyring, so a wrong RETYC_KEY_PASSPHRASE
+// fails at startup rather than being masked by a cached identity. Without
+// it, the key is unlocked as by the one-shot commands: from the keyring, else
+// with the passphrase read by reader (a prompt on the terminal), then cached.
 func serveStartupCheck(
-	ctx context.Context, client *api.Client, reader service.PassphraseReader,
+	ctx context.Context, cfg *config.Config, client *api.Client, reader service.PassphraseReader,
 ) (*age.HybridIdentity, error) {
 	if _, err := service.ListDatarooms(ctx, client); err != nil {
 		return nil, fmt.Errorf("API connectivity check failed: %w", err)
 	}
-	identity, err := service.UnlockUserIdentity(ctx, client, reader)
+	var identity *age.HybridIdentity
+	var err error
+	if config.MachineMode() || config.KeyPassphrase() != "" {
+		identity, err = service.UnlockUserIdentity(ctx, client, reader)
+	} else {
+		identity, err = service.ResolveActiveUserIdentity(ctx, cfg, client, reader)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("key passphrase check failed: %w", err)
 	}
@@ -267,17 +272,29 @@ func authLostAdvice(restart string) string {
 }
 
 // requireIdentitySource fails fast, before any network call, when the key that
-// unlocks the account is not available: the machine configuration in machine
-// mode (no passphrase exists there), the key passphrase otherwise.
-func requireIdentitySource() error {
+// unlocks the account cannot be had: the machine configuration in machine
+// mode (no passphrase exists there); otherwise RETYC_KEY_PASSPHRASE, an
+// identity cached in the keyring, or a terminal to prompt on. Without any of
+// them the command stops with ErrNoKeyPassphrase (exit code 78), as before
+// the prompt existed: an unattended run is not changed. The check is
+// best-effort: a cached identity can expire before it is read (keyring.ttl),
+// and the command then stops with the same error, still before serving.
+func requireIdentitySource(cfg *config.Config) error {
 	if config.MachineMode() {
 		_, err := config.LoadMachine()
 
 		return err
 	}
-	if config.KeyPassphrase() == "" {
-		return config.ErrNoKeyPassphrase
+	if config.KeyPassphrase() != "" || stdinIsTerminal() {
+		return nil
+	}
+	if cfg.Keyring.Enabled && keyringHas() {
+		return nil
 	}
 
-	return nil
+	return fmt.Errorf("no TTY detected and no identity cached in the keyring: %w", config.ErrNoKeyPassphrase)
 }
+
+// keyringHas reports whether the keyring caches the identity. A variable so
+// that tests do not depend on the keyring of the session running them.
+var keyringHas = keyring.Has

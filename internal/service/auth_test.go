@@ -325,6 +325,27 @@ func newKeyTestClient(srv *httptest.Server) *api.Client {
 	return api.New(srv.URL, "retyc-test/1.0", ts, false, false)
 }
 
+func TestResolveActiveUserIdentity(t *testing.T) {
+	srv, userKey := keyPassphraseTestServer(t, "good-pw")
+	cfg := &config.Config{} // keyring disabled: the session keyring is not touched
+
+	identity, err := ResolveActiveUserIdentity(context.Background(), cfg, newKeyTestClient(srv), func() (string, error) {
+		return "good-pw", nil
+	})
+	if err != nil {
+		t.Fatalf("ResolveActiveUserIdentity() error = %v, want nil", err)
+	}
+	if identity.Recipient().String() != userKey.Recipient().String() {
+		t.Fatal("ResolveActiveUserIdentity() returned another identity")
+	}
+	_, err = ResolveActiveUserIdentity(context.Background(), cfg, newKeyTestClient(srv), func() (string, error) {
+		return "bad-pw", nil
+	})
+	if !errors.Is(err, ErrWrongKeyPassphrase) {
+		t.Fatalf("ResolveActiveUserIdentity() error = %v, want ErrWrongKeyPassphrase", err)
+	}
+}
+
 func TestUnlockUserIdentity_Correct(t *testing.T) {
 	srv, userKey := keyPassphraseTestServer(t, "good-pw")
 

@@ -11,21 +11,20 @@ read (viewer role, or a plan that refuses writes) is read-only whatever the opti
 ## Quick start
 
 ```sh
-# The key passphrase is required (never prompted)
-read -rs RETYC_KEY_PASSPHRASE
-export RETYC_KEY_PASSPHRASE
-
 mkdir -p ~/dr
 retyc fs mount retyc://<dataroom-id> ~/dr      # one dataroom, at the root of ~/dr
 retyc fs mount --all ~/retyc                   # every dataroom, one folder each
 ```
 
-The command stays in the foreground until it is unmounted.
+The command stays in the foreground until it is unmounted. It asks for the key
+passphrase on the terminal, unless the key is still in the
+[keyring cache](configuration.md#tune-the-key-cache-linux) or `RETYC_KEY_PASSPHRASE` is set. A service (systemd, container, CSI) sets the variable:
+with a terminal but nobody to type, the command would wait at the prompt.
 
 ## Requirements
 
-- A login (`retyc auth login`, or `RETYC_TOKEN`) and `RETYC_KEY_PASSPHRASE`, in the
-  environment or in
+- A login (`retyc auth login`, or `RETYC_TOKEN`) and the key passphrase: typed at the
+  prompt, or, without a terminal, `RETYC_KEY_PASSPHRASE` in the environment or in
   an [environment file](configuration.md#keep-the-secrets-in-an-environment-file-boot-mounts-systemd-csi)
   (`--env-file`, for boot mounts and systemd units).
 - `/dev/fuse`, and unless run as root the `fusermount3` helper (package `fuse3`).

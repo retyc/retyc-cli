@@ -1359,7 +1359,8 @@ var webdavServeCmd = &cobra.Command{
 Datarooms are exposed under the /dataroom folder; other element types may be
 added at the root in the future.
 
-Key passphrase: set RETYC_KEY_PASSPHRASE (env var).
+Key passphrase: prompted on the terminal unless the key is in the keyring cache;
+without a terminal, set RETYC_KEY_PASSPHRASE (env var).
 
 Authentication: pass --auth to require HTTP Basic credentials (user "retyc").
 The password is read from RETYC_WEBDAV_PASSWORD, or generated randomly and
@@ -1379,17 +1380,16 @@ Example:
 			return err
 		}
 
-		// Fail-fast: the passphrase (or the machine configuration) must be set
-		// before any crypto operation.
-		if err := requireIdentitySource(); err != nil {
-			return err
-		}
-
 		bindUnsafeWrite(cmd.Flags())
 		resolveCacheFlags(cmd.Flags())
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
+		}
+		// Fail-fast: the key (passphrase, keyring or a terminal to prompt on,
+		// or the machine configuration) must be at hand before any network call.
+		if err := requireIdentitySource(cfg); err != nil {
+			return err
 		}
 		tokSrc, err := mustGetToken(initCtx, cfg)
 		if err != nil {
@@ -1403,9 +1403,9 @@ Example:
 			webdavTransportWatching(watch), apiRetry(cfg), api.WithUnsafeWrite(cfg.API.UnsafeWrite))
 
 		// Fail-fast before binding the port: auth + API reachability, then the
-		// key passphrase itself (a wrong one would otherwise only surface on the
+		// key itself (a wrong passphrase would otherwise only surface on the
 		// first dataroom access). The unlocked identity is kept for the whole run.
-		identity, err := serveStartupCheck(initCtx, client, servePassphraseReader)
+		identity, err := serveStartupCheck(initCtx, cfg, client, readKeyPassphrase)
 		if err != nil {
 			return err
 		}
