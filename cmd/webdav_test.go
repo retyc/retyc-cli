@@ -23,6 +23,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/crypto/cryptotest"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/vfs"
 	"github.com/retyc/retyc-cli/internal/vfs/metastore/memstore"
@@ -746,7 +747,7 @@ func newStartupTestServer(t *testing.T, keyPassphrase string) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	userPrivEnc, err := crypto.EncryptWithPassphrase([]byte(userKey.String()), keyPassphrase)
+	userPrivEnc, err := cryptotest.EncryptWithPassphrase([]byte(userKey.String()), keyPassphrase)
 	if err != nil {
 		t.Fatal(err)
 	}

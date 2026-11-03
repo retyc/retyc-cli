@@ -14,6 +14,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/crypto/cryptotest"
 	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -300,7 +301,7 @@ func keyPassphraseTestServer(t *testing.T, passphrase string) (*httptest.Server,
 	if err != nil {
 		t.Fatal(err)
 	}
-	userPrivEnc, err := crypto.EncryptWithPassphrase([]byte(userKey.String()), passphrase)
+	userPrivEnc, err := cryptotest.EncryptWithPassphrase([]byte(userKey.String()), passphrase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +471,7 @@ func TestResolveUserIdentity_UnlockKeySpanFromPassphrase(t *testing.T) {
 // the transfer passphrase path is covered by it.
 func TestDecryptKeyWithPassphrase_TransferKind(t *testing.T) {
 	exp := telemetrytest.Install(t)
-	enc, err := crypto.EncryptWithPassphrase([]byte("secret-key"), "SENTINEL-pw")
+	enc, err := cryptotest.EncryptWithPassphrase([]byte("secret-key"), "SENTINEL-pw")
 	if err != nil {
 		t.Fatal(err)
 	}

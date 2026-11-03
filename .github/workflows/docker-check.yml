@@ -1,0 +1,31 @@
+name: Docker check
+
+# Builds the images, without pushing them, on a branch or pull request that
+# changes how they are built. Not triggered by a change to this file alone. The Go code itself is covered by the CI; the
+# default branch and tags build and push the images through main.yml and
+# release.yml.
+on:
+  push:
+    branches-ignore: [main, master]
+    paths: &docker_paths
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/_docker.yml'
+  pull_request:
+    paths: *docker_paths
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    name: Docker
+    # Same rule as main.yml: a branch of this repository is checked by its
+    # push, the pull_request run is only for forks.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_docker.yml
+    with:
+      push: false
