@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -77,6 +78,13 @@ type FS struct {
 	nameLookups map[ListingKey]nameLookupRun
 	// slots bounds the background refreshes running at once.
 	slots chan struct{}
+	// revalidateAfter is the age from which a fresh listing served is
+	// revalidated in the background; revalidated holds when that was last
+	// tried per folder, pruned once it reaches revalidatedSweepAt (see
+	// revalidateLocked).
+	revalidateAfter    time.Duration
+	revalidated        map[ListingKey]time.Time
+	revalidatedSweepAt int
 	// uploadSlots bounds the uploads sending at once (see
 	// Options.UploadConcurrency).
 	uploadSlots chan struct{}
@@ -141,6 +149,16 @@ func New(client *api.Client, opts Options) *FS {
 		nameLookups: make(map[ListingKey]nameLookupRun),
 		hidden:      make(map[string]hiddenUntil),
 		slots:       make(chan struct{}, opts.listConcurrency()),
+		// Drawn once per FS in [0.3, 0.5) of the TTL: among the instances
+		// sharing a store, the one with the lowest renews a listing in use
+		// before the others reach theirs, and they read it young again.
+		// Below half, so that a name the kernel asks again every half TTL
+		// (the mount's default) is renewed each time. No secret: math/rand
+		// will do.
+		revalidateAfter: time.Duration((0.3 + 0.2*rand.Float64()) * //nolint:gosec // G404
+			float64(opts.ttl())),
+		revalidated:        make(map[ListingKey]time.Time),
+		revalidatedSweepAt: minGenSweep,
 		uploadSlots: make(chan struct{}, opts.uploadConcurrency()),
 		quota:       make(map[string]quotaEntry),
 	}

@@ -263,14 +263,16 @@ func ParseMountMode(value string) (os.FileMode, error) {
 }
 
 // KernelTTLs returns the entry and attribute timeouts of the mount: the ones
-// configured, each following cache.ttl when it is zero.
+// configured, each half of cache.ttl when it is zero. Half, so that a name or
+// a file in use is asked of the mount again before its listing expires, and
+// the mount renews that listing in the background (see vfs revalidateLocked).
 func (c *Config) KernelTTLs() (entry, attr time.Duration) {
 	entry, attr = c.Mount.EntryTTL, c.Mount.AttrTTL
 	if entry == 0 {
-		entry = c.Cache.TTL
+		entry = c.Cache.TTL / 2
 	}
 	if attr == 0 {
-		attr = c.Cache.TTL
+		attr = c.Cache.TTL / 2
 	}
 
 	return entry, attr

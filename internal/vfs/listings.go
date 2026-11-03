@@ -3,6 +3,7 @@ package vfs
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -163,7 +164,9 @@ func (fs *FS) readDirStale(ctx context.Context, dataroomID, path string) (nodes 
 		age := time.Since(l.FetchedAt)
 		fresh := age < fs.opts.ttl()
 		if fresh || age < fs.opts.ttl()+fs.opts.MaxStale {
-			if !fresh {
+			if fresh {
+				fs.revalidateLocked(ctx, key, l.FetchedAt)
+			} else {
 				fs.fetchLocked(ctx, key, true)
 			}
 			fs.unlock()
@@ -199,6 +202,7 @@ func (fs *FS) readDirRefreshed(ctx context.Context, dataroomID, path string) ([]
 	key := listingKey(dataroomID, path)
 	fs.mu.Lock()
 	if l, ok := fs.heldLocked(fs.leaveSealed(ctx), key); ok && time.Since(l.FetchedAt) < fs.opts.ttl() {
+		fs.revalidateLocked(ctx, key, l.FetchedAt)
 		fs.unlock()
 		if l, ok = fs.openListing(ctx, dataroomID, l); ok { // out of mu (see leaveSealed)
 			return l.Nodes, nil
@@ -209,6 +213,43 @@ func (fs *FS) readDirRefreshed(ctx context.Context, dataroomID, path string) ([]
 	fs.unlock()
 
 	return f.wait(ctx)
+}
+
+// revalidateLocked revalidates in the background a fresh listing, fetched
+// at fetchedAt, that a request was just served, once it is older than
+// fs.revalidateAfter: a folder in use is renewed before it expires, and its
+// requests never wait for the API. The fetch is the refresh of an expired
+// listing (a refresh slot, If-None-Match, a write conditional on the
+// generation): a 304 gives the listing a full TTL again, a change replaces
+// it. A listing another instance sharing the store renewed meanwhile reads
+// young, and starts nothing.
+//
+// One attempt per listing fetched: a revalidation that fails, or whose
+// answer is discarded (the folder edited meanwhile), is not started again by
+// every request that follows; the listing expires as it would have. Nothing
+// starts either while a fetch of the folder is in flight: that one renews it
+// already, a capped one (see startFetchLocked) must stay capped, and one
+// older than an edit only delays the renewal. A listing edited in place has
+// no ETag: its revalidation is a full listing. The caller holds mu.
+func (fs *FS) revalidateLocked(ctx context.Context, key ListingKey, fetchedAt time.Time) {
+	now := time.Now()
+	if now.Sub(fetchedAt) < fs.revalidateAfter {
+		return
+	}
+	if _, busy := fs.inflight[key]; busy {
+		return
+	}
+	if tried, ok := fs.revalidated[key]; ok && fetchedAt.Before(tried) {
+		return
+	}
+	if len(fs.revalidated) >= fs.revalidatedSweepAt {
+		// An attempt older than the TTL concerns a listing expired since.
+		ttl := fs.opts.ttl()
+		maps.DeleteFunc(fs.revalidated, func(_ ListingKey, at time.Time) bool { return now.Sub(at) >= ttl })
+		fs.revalidatedSweepAt = max(2*len(fs.revalidated), minGenSweep)
+	}
+	fs.revalidated[key] = now
+	fs.fetchLocked(ctx, key, true)
 }
 
 // readDirFetched returns the listing of the folder as the API has it now,

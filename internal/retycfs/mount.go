@@ -122,8 +122,9 @@ type Options struct {
 	Access func(ctx context.Context, dataroomID string) (vfs.Access, error)
 
 	// EntryTimeout and AttrTimeout are how long the kernel keeps a name and
-	// the attributes of an inode without asking again; zero means
-	// vfs.DefaultCacheTTL, the TTL of the listings behind them.
+	// the attributes of an inode without asking again; zero means half of
+	// vfs.DefaultCacheTTL, the TTL of the listings behind them: a name in use
+	// is asked again before its listing expires, which renews it.
 	// NegativeTimeout is how long it keeps a name that does not exist; zero
 	// means vfs.DefaultNegativeTTL. A negative value disables the cache.
 	EntryTimeout    time.Duration
@@ -341,8 +342,8 @@ func Mount(ctx context.Context, tree *vfs.FS, mountpoint string, opts Options) (
 	}
 
 	srv, err := fs.Mount(mountpoint, root, &fs.Options{
-		EntryTimeout:    timeout(opts.EntryTimeout, vfs.DefaultCacheTTL),
-		AttrTimeout:     timeout(opts.AttrTimeout, vfs.DefaultCacheTTL),
+		EntryTimeout:    timeout(opts.EntryTimeout, vfs.DefaultCacheTTL/2),
+		AttrTimeout:     timeout(opts.AttrTimeout, vfs.DefaultCacheTTL/2),
 		NegativeTimeout: timeout(opts.NegativeTimeout, vfs.DefaultNegativeTTL),
 		RootStableAttr:  &fs.StableAttr{Ino: rootIno},
 		// Every inode is given its permissions (attrSource.fill): a mode of
