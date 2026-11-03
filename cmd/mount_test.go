@@ -133,14 +133,14 @@ func TestResolveMountFlags(t *testing.T) {
 	}{
 		"defaults": {
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
 			},
 		},
-		"the kernel timeouts follow cache.ttl": {
+		"the kernel timeouts are half of cache.ttl": {
 			flags: map[string]string{"cache-ttl": "10s", "attr-ttl": "2s"},
 			want: mountSettings{
-				entryTTL: 10 * time.Second, attrTTL: 2 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 5 * time.Second, attrTTL: 2 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
 			},
 		},
@@ -152,7 +152,7 @@ func TestResolveMountFlags(t *testing.T) {
 				"RETYC_MOUNT_DRAIN_TIMEOUT": "0", "RETYC_MOUNT_READDIR_PLUS": "true",
 			},
 			want: mountSettings{
-				entryTTL: 5 * time.Second, attrTTL: time.Minute, readDirPlus: true, spoolDir: spool, allowOther: true,
+				entryTTL: 5 * time.Second, attrTTL: 30 * time.Second, readDirPlus: true, spoolDir: spool, allowOther: true,
 				uid: uid(0), gid: uid(100), fileMode: 0o600, dirMode: 0o700, readOnly: true,
 			},
 		},
@@ -180,7 +180,7 @@ func TestResolveMountFlags(t *testing.T) {
 				"RETYC_MOUNT_MIRROR_LOCKS": "true",
 			},
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute, mirrorLocks: true,
 				metrics: metricsSettings{addr: "127.0.0.1:9192", labels: []string{"pod=a", "volume=b"}},
 			},
@@ -188,7 +188,7 @@ func TestResolveMountFlags(t *testing.T) {
 		"background delete from the environment": {
 			env: map[string]string{"RETYC_MOUNT_BACKGROUND_DELETE": "true"},
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute, backgroundDelete: true,
 			},
 		},
@@ -196,21 +196,21 @@ func TestResolveMountFlags(t *testing.T) {
 			env:   map[string]string{"RETYC_MOUNT_BACKGROUND_DELETE": "true"},
 			flags: map[string]string{"background-delete": "false"},
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
 			},
 		},
 		"background delete from the flag": {
 			flags: map[string]string{"background-delete": "true"},
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute, backgroundDelete: true,
 			},
 		},
 		"local files from the environment": {
 			env: map[string]string{"RETYC_MOUNT_LOCAL_FILES": "*.tmp .*.swp"},
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
 				localFiles: []string{"*.tmp", ".*.swp"},
 			},
@@ -218,7 +218,7 @@ func TestResolveMountFlags(t *testing.T) {
 		"no local file, from the environment": {
 			env: map[string]string{"RETYC_MOUNT_LOCAL_FILES": "none"},
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
 				localFiles: []string{},
 			},
@@ -227,7 +227,7 @@ func TestResolveMountFlags(t *testing.T) {
 			env:   map[string]string{"RETYC_MOUNT_LOCAL_FILES": "*.tmp"},
 			flags: map[string]string{"local-file": "none"},
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
 				localFiles: []string{},
 			},
@@ -235,7 +235,7 @@ func TestResolveMountFlags(t *testing.T) {
 		"no local file, from an empty flag": {
 			flags: map[string]string{"local-file": ""},
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
 				localFiles: []string{},
 			},
@@ -243,14 +243,14 @@ func TestResolveMountFlags(t *testing.T) {
 		"warmup, from the flag": {
 			flags: map[string]string{"warmup": "true"}, warmup: true,
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
 			},
 		},
 		"warmup, from the environment": {
 			env: map[string]string{"RETYC_MOUNT_WARMUP": "true"}, warmup: true,
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
 			},
 		},
@@ -258,7 +258,7 @@ func TestResolveMountFlags(t *testing.T) {
 			env:   map[string]string{"RETYC_MOUNT_WARMUP": "true", "RETYC_MOUNT_WARMUP_DEPTH": "2"},
 			flags: map[string]string{"warmup": "false", "warmup-depth": "3"},
 			want: mountSettings{
-				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				entryTTL: 30 * time.Second, attrTTL: 30 * time.Second, kernelCache: true, spoolDir: os.TempDir(),
 				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute, warmupDepth: 3,
 			},
 		},

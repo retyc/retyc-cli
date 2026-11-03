@@ -785,9 +785,9 @@ func TestMount_Defaults(t *testing.T) {
 	if !reflect.DeepEqual(cfg.Mount, want) {
 		t.Errorf("Mount = %+v, want %+v", cfg.Mount, want)
 	}
-	// Left at zero, the kernel timeouts follow cache.ttl.
-	if entry, attr := cfg.KernelTTLs(); entry != DefaultCacheTTL || attr != DefaultCacheTTL {
-		t.Errorf("KernelTTLs() = %s, %s, want cache.ttl", entry, attr)
+	// Left at zero, the kernel timeouts are half of cache.ttl.
+	if entry, attr := cfg.KernelTTLs(); entry != DefaultCacheTTL/2 || attr != DefaultCacheTTL/2 {
+		t.Errorf("KernelTTLs() = %s, %s, want cache.ttl/2", entry, attr)
 	}
 }
 
@@ -824,9 +824,9 @@ func TestMount_FromEnv(t *testing.T) {
 	if !reflect.DeepEqual(cfg.Mount, want) {
 		t.Errorf("Mount = %+v, want %+v", cfg.Mount, want)
 	}
-	// entry_ttl is set, attr_ttl follows cache.ttl.
-	if entry, attr := cfg.KernelTTLs(); entry != 5*time.Second || attr != 20*time.Second {
-		t.Errorf("KernelTTLs() = %s, %s, want 5s and 20s", entry, attr)
+	// entry_ttl is set, attr_ttl is half of cache.ttl.
+	if entry, attr := cfg.KernelTTLs(); entry != 5*time.Second || attr != 10*time.Second {
+		t.Errorf("KernelTTLs() = %s, %s, want 5s and 10s", entry, attr)
 	}
 }
 

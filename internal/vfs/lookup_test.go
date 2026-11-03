@@ -64,6 +64,10 @@ type treeAPI struct {
 	listWaiting chan struct{}
 	// failListings answers 500 to every listing.
 	failListings bool
+	// etag, when set, is the ETag of every listing: a listing asked with it
+	// in If-None-Match is answered 304, counted in notModified.
+	etag        string
+	notModified int
 	// claimTotal is the total a listing of that parent ID reports instead of
 	// the number of its items (the size of a folder, without its nodes).
 	claimTotal map[string]int
@@ -209,12 +213,26 @@ func (a *treeAPI) nodes(w http.ResponseWriter, r *http.Request) {
 	}
 	fail := hash == "" && a.failListings
 	total := 0
+	etag := ""
 	if hash == "" {
 		total = a.claimTotal[parent]
+		etag = a.etag
+	}
+	notModified := etag != "" && r.Header.Get("If-None-Match") == etag
+	if notModified {
+		a.notModified++
 	}
 	a.mu.Unlock()
 	if fail {
 		http.Error(w, "listing failed", http.StatusInternalServerError)
+
+		return
+	}
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+	}
+	if notModified {
+		w.WriteHeader(http.StatusNotModified)
 
 		return
 	}

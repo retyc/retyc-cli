@@ -78,7 +78,9 @@ func (fs *FS) Lookup(ctx context.Context, dataroomID, parentPath, name string) (
 		served := fs.opts.ttl() + fs.opts.MaxStale
 		refresh = age < served+listingRefreshWindow(fs.opts.ttl())
 		if fresh || age < served {
-			if !fresh {
+			if fresh {
+				fs.revalidateLocked(ctx, key, meta.FetchedAt)
+			} else {
 				fs.fetchLocked(ctx, key, true)
 			}
 			fs.unlock()

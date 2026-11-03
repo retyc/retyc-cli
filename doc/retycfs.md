@@ -74,9 +74,14 @@ that late. Opening a file always checks its current version against that cache; 
 already open keeps reading the version it opened. File content is never cached on disk;
 the kernel keeps what it read in memory until the file changes.
 
+A listing in use is renewed in the background before it expires, once it is past 30 to
+50% of `cache.ttl` (usually one request answered "not modified"): a folder used at least
+every half `cache.ttl` never makes a request wait for the API. With a shared Redis, one
+instance renews it for all.
+
 | Flag                   | Key, variable                                    | Default |                                                                          |
 |------------------------|--------------------------------------------------|---------|--------------------------------------------------------------------------|
-| `--cache-ttl`          | `cache.ttl`, `RETYC_CACHE_TTL`                   | `1m`    | How long a listing or a name is trusted, by the mount and by the kernel. |
+| `--cache-ttl`          | `cache.ttl`, `RETYC_CACHE_TTL`                   | `1m`    | How long a listing or a name is trusted (the kernel: half of it).       |
 | `--cache-negative-ttl` | `cache.negative_ttl`, `RETYC_CACHE_NEGATIVE_TTL` | `1s`    | How long a missing name is answered missing. `0` disables it.            |
 
 ## Warmup
@@ -270,7 +275,7 @@ variable, then the [configuration file](configuration.md#settings).
 | Flag                        | Key, variable                                                                        | Default                    |                                                                                                                                      |
 |-----------------------------|--------------------------------------------------------------------------------------|----------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
 | `--read-only`               | `mount.read_only`, `RETYC_MOUNT_READ_ONLY`                                           | `false`                    | Refuse every change.                                                                                                                 |
-| `--entry-ttl`, `--attr-ttl` | `mount.entry_ttl`, `mount.attr_ttl`, `RETYC_MOUNT_ENTRY_TTL`, `RETYC_MOUNT_ATTR_TTL` | `0` (= `cache.ttl`)        | How long the kernel keeps a name, and a file's attributes, without asking again.                                                     |
+| `--entry-ttl`, `--attr-ttl` | `mount.entry_ttl`, `mount.attr_ttl`, `RETYC_MOUNT_ENTRY_TTL`, `RETYC_MOUNT_ATTR_TTL` | `0` (`cache.ttl` / 2)      | How long the kernel keeps a name, and a file's attributes, without asking again.                                                     |
 | `--kernel-cache`            | `mount.kernel_cache`, `RETYC_MOUNT_KERNEL_CACHE`                                     | `true`                     | The kernel keeps what it read of a file between two opens. `false`: every open downloads again.                                      |
 | `--readdir-plus`            | `mount.readdir_plus`, `RETYC_MOUNT_READDIR_PLUS`                                     | `false`                    | Send attributes with listings: faster `ls -l`, more memory (see [Memory](#memory)).                                                  |
 | `--spool-dir`               | `mount.spool_dir`, `RETYC_MOUNT_SPOOL_DIR`                                           | system temporary directory | Where files being written are kept until sent (cleartext, 0600). Checked at start.                                                   |

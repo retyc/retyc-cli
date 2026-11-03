@@ -274,9 +274,9 @@ func addMountFlags(cmd *cobra.Command) {
 	flags.Bool("all", false, "mount every dataroom, one folder each")
 	flags.Bool("read-only", false, "mount read-only: every change is refused")
 	addCacheFlags(cmd, false)
-	flags.Duration("entry-ttl", 0, "how long the kernel keeps a name without asking again (0: --cache-ttl)")
+	flags.Duration("entry-ttl", 0, "how long the kernel keeps a name without asking again (0: half of --cache-ttl)")
 	flags.Duration("attr-ttl", 0,
-		"how long the kernel keeps the attributes of a file without asking again (0: --cache-ttl)")
+		"how long the kernel keeps the attributes of a file without asking again (0: half of --cache-ttl)")
 	flags.Bool("kernel-cache", true, "let the kernel keep what it read of a file between two opens")
 	flags.Bool("readdir-plus", false,
 		"send the attributes of the entries with a listing: fewer requests to the mount, an inode per entry listed")

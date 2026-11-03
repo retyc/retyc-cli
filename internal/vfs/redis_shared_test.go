@@ -374,3 +374,45 @@ func TestSharedRedis_SealedNodeThatDoesNotOpenIsAbsent(t *testing.T) {
 		t.Error("reader: Lookup made no lookup by name: the stored listing does not open")
 	}
 }
+
+// Two instances keep a folder in use warm through Redis: the one whose
+// threshold comes first revalidates the listing (a 304 renews it in Redis),
+// the other reads it young again and asks nothing.
+func TestSharedRedis_ListingInUseIsRenewedOnce(t *testing.T) {
+	a := deepTree(newTreeAPI(t))
+	a.etag = `W/"r1"`
+	shared := newSharedRedis(t, a)
+	one, two := shared.instance(false), shared.instance(false)
+	// The instance's TTL is 30s: one reaches its threshold at 9s, two at 14s.
+	one.revalidateAfter, two.revalidateAfter = 9*time.Second, 14*time.Second
+	ctx := context.Background()
+
+	if _, err := one.ReadDir(ctx, "dr1", "/a"); err != nil {
+		t.Fatal(err)
+	}
+	_, lookups0 := shared.asked() // the name a, looked up to reach /a
+	ageListing(t, one, "/a", 20*time.Second)
+
+	if _, err := one.ReadDir(ctx, "dr1", "/a"); err != nil {
+		t.Fatal(err)
+	}
+	eventuallyTrue(t, "the listing renewed in Redis", func() bool { return listingAge(t, two, "/a") < 5*time.Second })
+	a.mu.Lock()
+	notModified := a.notModified
+	a.mu.Unlock()
+	if listings, _ := shared.asked(); listings != 2 || notModified != 1 {
+		t.Fatalf("%d listings (%d not modified), want 2 (1)", listings, notModified)
+	}
+
+	if _, err := two.ReadDir(ctx, "dr1", "/a"); err != nil {
+		t.Fatal(err)
+	}
+	mustLookup(t, two, "/a", "x.txt", "f-x")
+	two.mu.Lock()
+	inflight := len(two.inflight)
+	two.mu.Unlock()
+	if listings, lookups := shared.asked(); listings != 2 || lookups != lookups0 || inflight != 0 {
+		t.Errorf("instance 2: %d listings, %d lookups, %d in flight; want 2, 0, 0",
+			listings, lookups-lookups0, inflight)
+	}
+}
