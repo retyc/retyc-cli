@@ -35,7 +35,7 @@ func TestMirrorLocks_OneLockPerInode(t *testing.T) {
 	path := filepath.Join(m.dir, "hello.txt")
 	held := testutil.ToFloat64(metrics.LocksHeld)
 
-	first, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // G304: a file of the test's mount
+	first, err := openFile(path, os.O_WRONLY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,12 +48,12 @@ func TestMirrorLocks_OneLockPerInode(t *testing.T) {
 	}
 
 	// A second handle for writing shares the lock; one for reading takes none.
-	second, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // G304: a file of the test's mount
+	second, err := openFile(path, os.O_RDWR)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = second.Close() }()
-	reader, err := os.Open(path) //nolint:gosec // G304: a file of the test's mount
+	reader, err := openFile(path, os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestMirrorLocks_LockedElsewhere(t *testing.T) {
 	m.api.lockedElsewhere[m.api.datarooms["dr1"].children[""]["hello.txt"].id] = true
 	m.api.mu.Unlock()
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0) //nolint:gosec // G304: a file of the test's mount
+	f, err := openFile(path, os.O_WRONLY|os.O_TRUNC)
 	if err == nil {
 		_ = f.Close()
 	}
@@ -207,7 +207,7 @@ func TestMetrics_FuseOperations(t *testing.T) {
 		t.Errorf("lookup/ENOENT moved by %v, want at least 1", got)
 	}
 
-	r, err := os.Open(path) //nolint:gosec // G304: a file of the test's mount
+	r, err := openFile(path, os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestMetrics_FuseOperations(t *testing.T) {
 	}
 	_ = r.Close()
 
-	w, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0) //nolint:gosec // G304: a file of the test's mount
+	w, err := openFile(path, os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
 		t.Fatal(err)
 	}

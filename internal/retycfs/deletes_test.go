@@ -411,7 +411,7 @@ func TestBackgroundDelete_OpenFile(t *testing.T) {
 	m, dr := laterMount(t, nil)
 	held := m.holdDeletes(t)
 
-	reader, err := os.Open(filepath.Join(m.dir, "docs", "a.txt"))
+	reader, err := openFile(filepath.Join(m.dir, "docs", "a.txt"), os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)
 	}

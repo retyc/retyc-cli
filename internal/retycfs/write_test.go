@@ -86,10 +86,21 @@ func writeMode(path string, data []byte, mode os.FileMode) error {
 	return os.WriteFile(path, data, mode)
 }
 
+// openFile opens a file of the test's mount without O_CLOEXEC, unlike
+// os.OpenFile. The test binary serves the mount it opens files on, and it
+// execs (fusermount3 at every unmount or detach) through vfork: the forking
+// thread blocks, holding its P, until the child execs. A close-on-exec file of
+// the mount would be closed by that exec, which sends a FLUSH the parent has
+// to answer: a stop-the-world at that moment freezes the whole process, for
+// good. Inherited instead, the file is closed when the child exits, once the
+// parent runs again.
 func openFile(path string, flag int) (*os.File, error) {
-	mode := os.FileMode(0o644)
+	fd, err := syscall.Open(path, flag, 0o644)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
 
-	return os.OpenFile(path, flag, mode) //nolint:gosec // G304: a file of the test's mount
+	return os.NewFile(uintptr(fd), path), nil //nolint:gosec // G115: a file descriptor is never negative
 }
 
 func create(path string) (*os.File, error) {
@@ -234,7 +245,7 @@ func TestWrite_ExistingFiles(t *testing.T) {
 
 	// O_APPEND: the version comes in first.
 	m.api.resetCounts()
-	f, err := os.OpenFile(filepath.Join(m.dir, "docs", "a.txt"), os.O_WRONLY|os.O_APPEND, 0)
+	f, err := openFile(filepath.Join(m.dir, "docs", "a.txt"), os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -598,17 +609,17 @@ func TestWrite_SharedSpool(t *testing.T) {
 	path := filepath.Join(m.dir, "hello.txt")
 
 	// A reader opened before the file is written keeps its version.
-	before, err := os.Open(path) //nolint:gosec // G304: a file of the test's mount
+	before, err := openFile(path, os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = before.Close() }()
 
-	w1, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // G304: a file of the test's mount
+	w1, err := openFile(path, os.O_WRONLY)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w2, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // G304: a file of the test's mount
+	w2, err := openFile(path, os.O_RDWR)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +646,7 @@ func TestWrite_SharedSpool(t *testing.T) {
 		t.Errorf("the API holds %q before any close", data)
 	}
 	m.api.resetCounts()
-	since, err := os.Open(path) //nolint:gosec // G304: a file of the test's mount
+	since, err := openFile(path, os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -867,7 +878,7 @@ func TestWrite_UnlinkOfAnOpenFile(t *testing.T) {
 	}
 
 	// A file read while it is removed keeps being read.
-	r, err := os.Open(filepath.Join(m.dir, "big.bin"))
+	r, err := openFile(filepath.Join(m.dir, "big.bin"), os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -917,7 +928,7 @@ func TestWrite_QuotaIsReportedAtClose(t *testing.T) {
 
 	// An existing file keeps its content, and the next close succeeds.
 	path := filepath.Join(m.dir, "hello.txt")
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0) //nolint:gosec // G304: a file of the test's mount
+	f, err := openFile(path, os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1159,7 +1170,7 @@ func TestWrite_CopyIsServerSide(t *testing.T) {
 	m.api.resetCounts()
 
 	// The copy is a file like another: written, it gets a new version.
-	f, err := os.OpenFile(dst, os.O_WRONLY, 0) //nolint:gosec // G304: a file of the test's mount
+	f, err := openFile(dst, os.O_WRONLY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1189,7 +1200,7 @@ func TestWrite_CopyIsServerSide(t *testing.T) {
 	}
 	m.wantFile(t, dr, "", "hello.txt", big)
 
-	in, err := os.Open(src) //nolint:gosec // G304: a file of the test's mount
+	in, err := openFile(src, os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)
 	}

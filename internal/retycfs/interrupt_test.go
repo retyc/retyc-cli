@@ -5,6 +5,7 @@ package retycfs
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -40,7 +41,15 @@ func TestMain(m *testing.M) {
 		fmt.Printf("read %d bytes\n", len(data))
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	flag.Parse()
+	guardTestMounts()
+	code := m.Run()
+	// A mount still attached here is a test that did not unmount it.
+	if swept := sweepTestMounts(); len(swept) > 0 {
+		fmt.Fprintf(os.Stderr, "retycfs tests: mounts left behind, aborted: %v\n", swept)
+		code = 1
+	}
+	os.Exit(code)
 }
 
 func status(sigPnd, shdPnd string) []byte {

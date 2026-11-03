@@ -637,6 +637,7 @@ func mountFS(t *testing.T, a *fakeAPI, opts mountOptions) *mounted {
 		t.Fatalf("Mount: %v", err)
 	}
 	m.srv = mnt
+	registerTestMount(mnt.mountpoint)
 	t.Cleanup(func() {
 		if err := mnt.Unmount(); err != nil {
 			t.Errorf("Unmount: %v", err)
