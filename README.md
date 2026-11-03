@@ -131,16 +131,12 @@ and save the files in it: `ls`, `cp`, a file manager, an editor, a script. Files
 encrypted and decrypted locally; the Retyc servers never see plaintext.
 
 ```sh
-# The key passphrase is required (never prompted)
-read -rs RETYC_KEY_PASSPHRASE
-export RETYC_KEY_PASSPHRASE
-
 mkdir -p ~/retyc
 retyc fs mount retyc://<dataroom-id> ~/retyc   # one dataroom, the root of ~/retyc
 retyc fs mount --all ~/retyc                   # or every dataroom, one folder each
 ```
 
-The command stays in the foreground; unmount with `Ctrl-C`.
+The command asks for the key passphrase and stays in the foreground; unmount with `Ctrl-C`.
 
 Full guide: [doc/retycfs.md](doc/retycfs.md)
 

@@ -11,11 +11,7 @@ plaintext; only your machine holds the decrypted data while the server is runnin
 ## Quick start
 
 ```sh
-# The key passphrase is required (never prompted in server mode)
-read -rs RETYC_KEY_PASSPHRASE
-export RETYC_KEY_PASSPHRASE
-
-# Start the server on localhost:8888
+# Start the server on localhost:8888 (asks for the key passphrase)
 retyc fs webdav serve
 ```
 
@@ -25,8 +21,10 @@ the `/dataroom` folder.
 ## Requirements
 
 - You must be authenticated first: `retyc auth login`.
-- `RETYC_KEY_PASSPHRASE` **must** be set — the server never prompts interactively.
-  It is used to unlock your AGE identity for decrypting/encrypting file contents.
+- The key passphrase unlocks your AGE identity for decrypting/encrypting file contents.
+  It is asked for on the terminal at startup, unless the key is still in the
+  [keyring cache](configuration.md#tune-the-key-cache-linux) or `RETYC_KEY_PASSPHRASE`
+  is set. Without a terminal, `RETYC_KEY_PASSPHRASE` is required.
   A service reads it, with `RETYC_TOKEN` and `RETYC_WEBDAV_PASSWORD`, from an environment
   file of mode `0600`: `retyc --env-file /etc/retyc/env fs webdav serve`, or
   `RETYC_ENV_FILE`. See
@@ -58,7 +56,7 @@ retyc fs webdav serve [flags]
 
 | Variable                | Required        | Description                                                        |
 |-------------------------|-----------------|--------------------------------------------------------------------|
-| `RETYC_KEY_PASSPHRASE`  | yes             | Passphrase that unlocks your AGE identity (no interactive prompt)  |
+| `RETYC_KEY_PASSPHRASE`  | without a TTY   | Passphrase that unlocks your AGE identity (prompted otherwise)     |
 | `RETYC_WEBDAV_PASSWORD` | with `--auth`   | Basic-auth password. If unset while `--auth` is on, one is generated and printed at startup |
 | `RETYC_ENV_FILE`        | no              | File of `RETYC_*` variables (same as `--env-file`), where a service keeps the two above |
 

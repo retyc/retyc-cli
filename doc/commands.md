@@ -316,7 +316,8 @@ Mount your datarooms as an ordinary directory (Linux), read-write. See
 | `retyc fs mount retyc://<dataroom-id> <mountpoint>` | Mount one dataroom; it is the root of the mount point |
 | `retyc fs mount --all <mountpoint>`                 | Mount every dataroom, one folder each                 |
 
-Requires `RETYC_KEY_PASSPHRASE`, `/dev/fuse` and, unless run as root, `fusermount3`.
+Requires the key passphrase (prompted, from the keyring cache, or `RETYC_KEY_PASSPHRASE`
+without a terminal), `/dev/fuse` and, unless run as root, `fusermount3`.
 Stays in the foreground; unmount with Ctrl-C or `fusermount3 -u <mountpoint>`. Flags
 (`--read-only`, cache, spool, locks, warmup, metrics…): [Options](retycfs.md#options).
 
@@ -332,4 +333,5 @@ WebDAV client). See [WebDAV](webdav.md); it was `retyc webdav serve` before, see
 | `retyc fs webdav serve --addr <host:port>` | Bind to another address                                |
 | `retyc fs webdav serve --auth`             | Require HTTP Basic auth (user `retyc`)                 |
 
-Requires `RETYC_KEY_PASSPHRASE`. Datarooms appear under `/dataroom`.
+Requires the key passphrase (prompted, from the keyring cache, or `RETYC_KEY_PASSPHRASE`
+without a terminal). Datarooms appear under `/dataroom`.

@@ -161,7 +161,8 @@ admin:
 
 After you type your key passphrase, the unlocked key is cached in the Linux
 kernel keyring for 60 seconds, shared by the commands of the same terminal
-session. Change or disable it:
+session (`fs mount` and `fs webdav serve` included, when `RETYC_KEY_PASSPHRASE`
+is not set). Change or disable it:
 
 ```yaml
 # config.yaml

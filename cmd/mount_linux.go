@@ -194,14 +194,14 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	if err := checkFUSE(fuseDevice); err != nil {
 		return err
 	}
-	if err := requireIdentitySource(); err != nil {
-		return err
-	}
 
 	resolveMountFlags(cmd.Flags())
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+	if err := requireIdentitySource(cfg); err != nil {
+		return err
 	}
 	settings, err := newMountSettings(cfg)
 	if err != nil {
@@ -219,9 +219,9 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	client := api.New(cfg.API.BaseURL, cliUserAgent(), tokSrc, insecure, debug,
 		apiTransportWatching(watch), apiRetry(cfg), api.WithUnsafeWrite(cfg.API.UnsafeWrite))
 
-	// Auth, API reachability, then the key passphrase: the identity is
-	// unlocked once and kept for the whole run.
-	identity, err := serveStartupCheck(initCtx, client, servePassphraseReader)
+	// Auth, API reachability, then the key (environment, keyring or prompt):
+	// the identity is unlocked once and kept for the whole run.
+	identity, err := serveStartupCheck(initCtx, cfg, client, readKeyPassphrase)
 	if err != nil {
 		return err
 	}

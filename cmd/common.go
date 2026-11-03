@@ -28,7 +28,7 @@ func readKeyPassphrase() (string, error) {
 	if v := config.KeyPassphrase(); v != "" {
 		return v, nil
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) { //nolint:gosec // G115: Fd() fits in int on all supported platforms
+	if !stdinIsTerminal() {
 		return "", fmt.Errorf("no TTY detected: %w", config.ErrNoKeyPassphrase)
 	}
 	fmt.Fprint(os.Stderr, "Key passphrase: ")
@@ -39,6 +39,12 @@ func readKeyPassphrase() (string, error) {
 	}
 
 	return string(pb), nil
+}
+
+// stdinIsTerminal reports whether a passphrase can be prompted for. A variable
+// so that tests do not depend on how they are run.
+var stdinIsTerminal = func() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: Fd() fits in int on all supported platforms
 }
 
 // spinnerReader wraps readKeyPassphrase to stop s before prompting.

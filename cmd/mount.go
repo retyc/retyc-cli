@@ -102,7 +102,8 @@ in the log and the file is listed again.
 Every flag has a configuration key (mount.*) and an environment variable
 (RETYC_MOUNT_*): see the configuration reference.
 
-Key passphrase: set RETYC_KEY_PASSPHRASE (env var).
+Key passphrase: prompted on the terminal unless the key is in the keyring cache;
+without a terminal, set RETYC_KEY_PASSPHRASE (env var).
 
 While it is mounted, "cat <mountpoint>/.retycfs/accesslog" shows the
 operations as they happen (by inode number, never by name).
