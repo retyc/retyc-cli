@@ -9,6 +9,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/crypto/cryptotest"
 	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 )
@@ -42,7 +43,7 @@ func passphraseKey(t *testing.T, id, passphrase string) (*api.UserKey, *age.Hybr
 	if err != nil {
 		t.Fatal(err)
 	}
-	enc, err := crypto.EncryptWithPassphrase([]byte(identity.String()), passphrase)
+	enc, err := cryptotest.EncryptWithPassphrase([]byte(identity.String()), passphrase)
 	if err != nil {
 		t.Fatal(err)
 	}

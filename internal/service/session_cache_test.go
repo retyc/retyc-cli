@@ -16,6 +16,7 @@ import (
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/crypto/cryptotest"
 	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -156,7 +157,7 @@ func TestResolveDataroomSession_UsesProcessCacheWhenEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	userPrivEnc, err := crypto.EncryptWithPassphrase([]byte(userKey.String()), "pw")
+	userPrivEnc, err := cryptotest.EncryptWithPassphrase([]byte(userKey.String()), "pw")
 	if err != nil {
 		t.Fatal(err)
 	}
