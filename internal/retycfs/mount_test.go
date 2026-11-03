@@ -211,7 +211,7 @@ func TestMount_PositionedReads(t *testing.T) {
 	_, big := sampleTree(a)
 	m := mountFS(t, a, single("dr1"))
 
-	f, err := os.Open(filepath.Join(m.dir, "big.bin"))
+	f, err := openFile(filepath.Join(m.dir, "big.bin"), os.O_RDONLY)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -670,7 +670,7 @@ func TestMount_OpenHandleKeepsItsVersion(t *testing.T) {
 	m := mountFS(t, a, mountOptions{ttl: ttl, driver: Options{DataroomID: "dr1", EntryTimeout: ttl, AttrTimeout: ttl}})
 	path := filepath.Join(m.dir, "big.bin")
 
-	old, err := os.Open(path) //nolint:gosec // G304: a file of the test's mount
+	old, err := openFile(path, os.O_RDONLY)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestMount_NewHandleReadsAroundAnOldOne(t *testing.T) {
 	m := mountFS(t, a, mountOptions{ttl: ttl, driver: Options{DataroomID: "dr1", EntryTimeout: ttl, AttrTimeout: ttl}})
 	path := filepath.Join(m.dir, "big.bin")
 
-	old, err := os.Open(path) //nolint:gosec // G304: a file of the test's mount
+	old, err := openFile(path, os.O_RDONLY)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -729,7 +729,7 @@ func TestMount_NewHandleReadsAroundAnOldOne(t *testing.T) {
 	replaced := testData(len(big), 0x5a)
 	a.rewrite(dr, "", "big.bin", replaced, time.Time{})
 	time.Sleep(2 * ttl)
-	fresh, err := os.Open(path) //nolint:gosec // G304: a file of the test's mount
+	fresh, err := openFile(path, os.O_RDONLY)
 	if err != nil {
 		t.Fatalf("Open after the new version: %v", err)
 	}
@@ -806,7 +806,7 @@ func TestMount_MovedNodeLookedUpAtItsOldPlace(t *testing.T) {
 		}
 	}
 	// A folder held open is not looked up again by the kernel.
-	held, err := os.Open(filepath.Join(m.dir, "b", "F"))
+	held, err := openFile(filepath.Join(m.dir, "b", "F"), os.O_RDONLY)
 	if err != nil {
 		t.Fatalf("Open b/F: %v", err)
 	}
@@ -974,7 +974,7 @@ func TestMount_ReadOnlyRefusesWrites(t *testing.T) {
 
 // appendTo opens path for appending and returns the error.
 func appendTo(path string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // G304: a file of the test's mount
+	f, err := openFile(path, os.O_WRONLY|os.O_APPEND)
 	if err == nil {
 		_ = f.Close()
 	}
@@ -1058,7 +1058,7 @@ func TestMount_AccessLog(t *testing.T) {
 		t.Errorf("control folder = %v, %v", entries, err)
 	}
 
-	logFile, err := os.Open(filepath.Join(m.dir, controlDirName, accessLogName))
+	logFile, err := openFile(filepath.Join(m.dir, controlDirName, accessLogName), os.O_RDONLY)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1171,7 +1171,7 @@ func TestMount_BusyMountIsDetached(t *testing.T) {
 	sampleTree(a)
 	m := mountFS(t, a, mountOptions{driver: Options{DataroomID: "dr1", UnmountGrace: 200 * time.Millisecond}})
 
-	f, err := os.Open(filepath.Join(m.dir, "hello.txt"))
+	f, err := openFile(filepath.Join(m.dir, "hello.txt"), os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)
 	}
