@@ -37,7 +37,7 @@ Variables can also come from an [environment file](#keep-the-secrets-in-an-envir
 
 ## Common tasks
 
-### Use another API endpoint
+### Use another API endpoint (Retyc On-Premise instance)
 
 ```yaml
 # config.yaml

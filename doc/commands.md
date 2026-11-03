@@ -154,6 +154,40 @@ Glob patterns (`*`, `?`, `[...]`) are supported in remote paths.
 | `retyc dataroom user rm <id> <user-id>`                                                    | Remove a member                                               |
 | `retyc dataroom user chown <id> <user-id\|email> [--yes]`                                  | Transfer the ownership to an admin member (you become admin)  |
 
+### Examples
+
+```sh
+# Create a dataroom (title is required)
+retyc dataroom create --title "Project Alpha"
+
+# Create one with a 50 GiB reservation and a single version per file
+retyc dataroom create --title "Scans" --storage-capacity 50G --versioning=false
+
+# Rename it, enlarge its reservation (sizes are binary: 100G = 100GiB)
+retyc dataroom set 019d3de3-... --title "Scans 2026" --storage-capacity 100G
+
+# Upload a release directory
+retyc dataroom cp ./dist/ retyc://019d3de3-.../releases/
+
+# List contents (TYPE is DIR, FILE or LINK; a symlink shows as "name -> target")
+retyc dataroom ls retyc://019d3de3-.../releases/
+
+# Download a specific file
+retyc dataroom cp retyc://019d3de3-.../releases/binary ./
+
+# Download all PDFs from a folder
+retyc dataroom cp retyc://019d3de3-.../docs/*.pdf ./local/
+
+# Delete all log files
+retyc dataroom rm retyc://019d3de3-.../*.log
+
+# Delete the entire dataroom
+retyc dataroom rm retyc://019d3de3-...
+
+# Add a collaborator
+retyc dataroom user add 019d3de3-... alice@example.com --role editor
+```
+
 ## Admin
 
 Organization administration through the public API. Requires an organization
@@ -274,8 +308,8 @@ In an organization with no organization key, it asks again before approving
 
 ## RetycFS
 
-Mount your datarooms as an ordinary directory (Linux), read-write; `--read-only`
-refuses every change. See [RetycFS](retycfs.md).
+Mount your datarooms as an ordinary directory (Linux), read-write. See
+[RetycFS](retycfs.md).
 
 | Command                                             | Description                                           |
 |-----------------------------------------------------|-------------------------------------------------------|
@@ -283,83 +317,19 @@ refuses every change. See [RetycFS](retycfs.md).
 | `retyc fs mount --all <mountpoint>`                 | Mount every dataroom, one folder each                 |
 
 Requires `RETYC_KEY_PASSPHRASE`, `/dev/fuse` and, unless run as root, `fusermount3`.
-Stays in the foreground; unmount with Ctrl-C or `fusermount3 -u <mountpoint>`.
-
-| Flag                                                                       | Description                                                                                                                                                                    |
-|----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `--read-only`                                                              | Refuse every change                                                                                                                                                            |
-| `--cache-ttl`, `--cache-negative-ttl`                                      | Listing and missing-name cache durations (`cache.*`)                                                                                                                           |
-| `--cache-store`, `--cache-redis-url`, `--cache-redis-high-confidentiality` | Keep the listings in a Redis shared with other instances, see [Shared metadata cache](retycfs.md#shared-metadata-cache-redis)                                                  |
-| `--entry-ttl`, `--attr-ttl`                                                | Kernel cache of names and attributes (default: half of `--cache-ttl`)                                                                                                               |
-| `--kernel-cache`                                                           | Keep what was read of a file between two opens (default `true`)                                                                                                                |
-| `--readdir-plus`                                                           | Send the attributes of the entries with a listing: fewer requests to the mount, one inode held per entry listed (default `false`)                                              |
-| `--spool-dir`                                                              | Directory of the files being written (default: the temporary directory)                                                                                                        |
-| `--allow-other`                                                            | Let other users into the mount                                                                                                                                                 |
-| `--uid`, `--gid`                                                           | Owner presented (default: the user running the command)                                                                                                                        |
-| `--file-mode`, `--dir-mode`                                                | Permissions of a node that has none stored (`0644`, `0755`)                                                                                                                    |
-| `--drain-timeout`                                                          | Time left to the files being sent when the mount is stopped (default `5m`)                                                                                                     |
-| `--mirror-locks`                                                           | Lock a file at the API while it is open for writing; a file locked elsewhere fails to open with `EBUSY` (default `false`)                                                      |
-| `--background-delete`                                                      | Answer the removal of a file at once and delete it at the API in the background: faster `rm`, but a delete that fails is only logged and the file comes back (default `false`) |
-| `--warmup`                                                                 | List the whole tree in the background once mounted, to fill the listing cache (default `false`), see [RetycFS](retycfs.md#warmup)                        |
-| `--warmup-depth`                                                           | Levels of folders the warmup lists in each dataroom (default `0`: all)                                                                                                         |
-| `--local-file pattern`                                                     | Name pattern of the files kept on this machine and never sent (repeatable; default `.*.swp`, `.*.swx`, `*~`, `4913`; `none`: no such file)                                     |
-| `--unsafe-write`                                                           | Let the API acknowledge uploads before they are stored (faster; a failed background store is not reported)                                                                     |
-| `--metrics-addr`                                                           | Address for Prometheus metrics and health probes (`/metrics`, `/healthz`, `/readyz`); off by default                                                                           |
-| `--metrics-label key=value`                                                | Constant label added to every metric (repeatable)                                                                                                                              |
-
-Each has a `mount.*` key and a `RETYC_MOUNT_*` variable: see [RetycFS](retycfs.md#options).
-Exit codes: `77` login expired, `78` key passphrase, `75` writes lost at the unmount, `1` otherwise.
+Stays in the foreground; unmount with Ctrl-C or `fusermount3 -u <mountpoint>`. Flags
+(`--read-only`, cache, spool, locks, warmup, metrics…): [Options](retycfs.md#options).
 
 ## WebDAV
 
-A secondary option: a local WebDAV server for the clients that cannot use the
-mount (macOS, Windows, any WebDAV client), with the same end-to-end encryption.
-On Linux, [RetycFS](retycfs.md) is the main way.
+A local WebDAV server for the clients that cannot use the mount (macOS, Windows, any
+WebDAV client). See [WebDAV](webdav.md); it was `retyc webdav serve` before, see its
+[breaking changes](webdav.md#breaking-changes).
 
-The command belongs to the `fs` group (filesystem access to datarooms). It was
-`retyc webdav serve` before; that path has been removed, without an alias. Its
-cache settings were renamed too (`webdav.cache.ttl` → `cache.ttl`, `webdav.cache.max_stale` →
-`cache.max_stale`).
-
-| Command                                     | Description                                                                                                                                                                               |
-|---------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `retyc fs webdav serve`                     | Start a local WebDAV server (default `127.0.0.1:8888`)                                                                                                                                    |
-| `retyc fs webdav serve --addr <host:port>`  | Bind to a specific address and port (default `127.0.0.1:8888`)                                                                                                                            |
-| `retyc fs webdav serve --auth`              | Require HTTP Basic auth (user `retyc`)                                                                                                                                                    |
-| `retyc fs webdav serve --cache-store redis` | Keep the listings in a Redis shared with other instances (`--cache-redis-url`, `--cache-redis-high-confidentiality`), see [Shared metadata cache](retycfs.md#shared-metadata-cache-redis) |
+| Command                                    | Description                                            |
+|--------------------------------------------|--------------------------------------------------------|
+| `retyc fs webdav serve`                    | Start a local WebDAV server (default `127.0.0.1:8888`) |
+| `retyc fs webdav serve --addr <host:port>` | Bind to another address                                |
+| `retyc fs webdav serve --auth`             | Require HTTP Basic auth (user `retyc`)                 |
 
 Requires `RETYC_KEY_PASSPHRASE`. Datarooms appear under `/dataroom`.
-
-### Examples
-
-```sh
-# Create a dataroom (title is required)
-retyc dataroom create --title "Project Alpha"
-
-# Create one with a 50 GiB reservation and a single version per file
-retyc dataroom create --title "Scans" --storage-capacity 50G --versioning=false
-
-# Rename it, enlarge its reservation (sizes are binary: 100G = 100GiB)
-retyc dataroom set 019d3de3-... --title "Scans 2026" --storage-capacity 100G
-
-# Upload a release directory
-retyc dataroom cp ./dist/ retyc://019d3de3-.../releases/
-
-# List contents (TYPE is DIR, FILE or LINK; a symlink shows as "name -> target")
-retyc dataroom ls retyc://019d3de3-.../releases/
-
-# Download a specific file
-retyc dataroom cp retyc://019d3de3-.../releases/binary ./
-
-# Download all PDFs from a folder
-retyc dataroom cp retyc://019d3de3-.../docs/*.pdf ./local/
-
-# Delete all log files
-retyc dataroom rm retyc://019d3de3-.../*.log
-
-# Delete the entire dataroom
-retyc dataroom rm retyc://019d3de3-...
-
-# Add a collaborator
-retyc dataroom user add 019d3de3-... alice@example.com --role editor
-```
