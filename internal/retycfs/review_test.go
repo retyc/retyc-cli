@@ -164,8 +164,26 @@ func TestSetattr_KeepsTheSpoolItDates(t *testing.T) {
 	}
 
 	// The writer closes: its release ends while the date is being set.
-	if err := f.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	closed := make(chan error, 1)
+	go func() { closed <- f.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		// Some kernels (Linux 6.1) flush under the inode lock that utimensat
+		// holds: close(2) waits for the date, so the release cannot land while
+		// it is set. The date is let through, or the close never returns and
+		// the mount is left behind.
+		close(held.through)
+		if err := <-closed; err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		if err := <-dated; err != nil {
+			t.Errorf("utimensat = %v", err)
+		}
+		t.Skip("this kernel serializes the flush of close(2) behind utimensat: the race cannot be staged")
 	}
 	eventually(t, "the release of the writer", func() bool {
 		sp.st.mu.Lock()

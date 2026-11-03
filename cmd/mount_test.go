@@ -128,6 +128,8 @@ func TestResolveMountFlags(t *testing.T) {
 		env, flags map[string]string
 		want       mountSettings
 		wantErr    string
+		// warmup is a case that turns the warmup on: the others want it off.
+		warmup bool
 	}{
 		"defaults": {
 			want: mountSettings{
@@ -238,6 +240,29 @@ func TestResolveMountFlags(t *testing.T) {
 				localFiles: []string{},
 			},
 		},
+		"warmup, from the flag": {
+			flags: map[string]string{"warmup": "true"}, warmup: true,
+			want: mountSettings{
+				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
+			},
+		},
+		"warmup, from the environment": {
+			env: map[string]string{"RETYC_MOUNT_WARMUP": "true"}, warmup: true,
+			want: mountSettings{
+				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute,
+			},
+		},
+		"warmup: the flag overrides the environment": {
+			env:   map[string]string{"RETYC_MOUNT_WARMUP": "true", "RETYC_MOUNT_WARMUP_DEPTH": "2"},
+			flags: map[string]string{"warmup": "false", "warmup-depth": "3"},
+			want: mountSettings{
+				entryTTL: time.Minute, attrTTL: time.Minute, kernelCache: true, spoolDir: os.TempDir(),
+				fileMode: 0o644, dirMode: 0o755, drainTimeout: 5 * time.Minute, warmupDepth: 3,
+			},
+		},
+		"a negative warmup depth": {flags: map[string]string{"warmup-depth": "-1"}, wantErr: "mount.warmup_depth"},
 		"a local file pattern that is malformed": {
 			flags: map[string]string{"local-file": "[a-"}, wantErr: "mount.local_files",
 		},
@@ -289,6 +314,7 @@ func TestResolveMountFlags(t *testing.T) {
 				// The cases that say nothing of the listener: off.
 				tc.want.metrics = metricsSettings{labels: []string{}}
 			}
+			tc.want.warmup = tc.warmup
 			if tc.want.localFiles == nil {
 				// The cases that say nothing of the local files: the default.
 				tc.want.localFiles = config.DefaultMountLocalFiles()
