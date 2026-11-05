@@ -3,7 +3,7 @@ BINARY   := retyc
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS  := -X $(MODULE)/cmd.Version=$(VERSION)
 
-.PHONY: all build build-prod test test-coverage vet lint lint-fix clean install goreleaser mcpb
+.PHONY: all build build-prod test test-coverage vet lint lint-fix clean install goreleaser goreleaser-full goreleaser-quick mcpb
 
 ## Default target: dev build (config in .retyc/ relative to CWD)
 all: build
@@ -48,11 +48,19 @@ clean:
 install:
 	go install -tags prod -ldflags "$(LDFLAGS)" .
 
-## Simple local release
-goreleaser:
+## Simple local release (every target, signed as in CI)
+goreleaser: goreleaser-full
+
+goreleaser-full:
 	goreleaser release --snapshot --clean
+
+## Quick local release: linux/amd64 only, no signature (as the CI package job)
+goreleaser-quick:
+	@tmp=$$(mktemp) && trap 'rm -f "$$tmp"' EXIT && \
+	yq '.builds[0].goos = ["linux"] | .builds[0].goarch = ["amd64"]' .goreleaser.yaml >"$$tmp" && \
+	goreleaser release --snapshot --clean --skip=sign --config "$$tmp"
 
 ## Build the MCPB bundle (Claude Desktop extension) into dist/
 ## Requires goreleaser, jq, zip — no Node.js
-mcpb: goreleaser
+mcpb: goreleaser-full
 	scripts/build-mcpb.sh
