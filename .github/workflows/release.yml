@@ -19,9 +19,15 @@ jobs:
     uses: ./.github/workflows/_docker.yml
     secrets: inherit
 
+  package:
+    name: Package
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_package.yml
+
   goreleaser:
     name: GoReleaser
-    needs: ci
+    needs: [ci, package]
     runs-on: ubuntu-latest
     permissions:
       contents: write

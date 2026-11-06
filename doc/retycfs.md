@@ -20,6 +20,10 @@ The command stays in the foreground until it is unmounted. It asks for the key
 passphrase on the terminal, unless the key is still in the
 [keyring cache](configuration.md#tune-the-key-cache-linux) or `RETYC_KEY_PASSPHRASE` is set. A service (systemd, container, CSI) sets the variable:
 with a terminal but nobody to type, the command would wait at the prompt.
+The `.deb` and `.rpm` packages ship two example systemd units in
+`/usr/share/doc/retyc/examples/systemd/`: [`system/`](../packaging/systemd/system/retyc-mount.service)
+for a server with a machine account, [`user/`](../packaging/systemd/user/retyc-mount.service)
+for your own account on a workstation.
 
 ## Requirements
 

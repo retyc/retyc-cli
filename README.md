@@ -46,6 +46,30 @@ sha256sum --check --ignore-missing retyc_sha256_checksums.txt
 
 The MCPB bundle has its own `.sigstore.json`, verified the same way.
 
+### Debian / Ubuntu
+
+Each release ships a `.deb` package (amd64, arm64) with shell completions for bash, zsh and fish:
+
+```sh
+curl -fsSLO https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc_X.Y.Z_amd64.deb
+sudo apt install ./retyc_X.Y.Z_amd64.deb
+```
+
+### Fedora / RHEL / Rocky / openSUSE
+
+Each release also ships an `.rpm` package (x86_64, aarch64):
+
+```sh
+# Fedora / RHEL / Rocky
+sudo dnf install https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc-X.Y.Z-1.x86_64.rpm
+# openSUSE
+sudo zypper install https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc-X.Y.Z-1.x86_64.rpm
+```
+
+With both packages, `fuse3`, needed by `retyc fs mount`, is installed as a recommended package.
+Example systemd units for `retyc fs mount` are in `/usr/share/doc/retyc/examples/systemd/`:
+`system/` for a server with a machine account, `user/` for your own account on a workstation.
+
 ### With `go install`
 
 ```sh

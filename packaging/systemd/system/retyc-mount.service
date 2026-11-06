@@ -1,0 +1,57 @@
+# Example systemd unit: a server mounts datarooms at boot with a machine
+# account. No login nor passphrase: the machine authenticates with the keys of
+# its enrollment. On a workstation, with your own account, see
+# ../user/retyc-mount.service.
+#
+# Setup, as root:
+#   1. A system user that runs the mount; its home keeps the enrollment:
+#        useradd --system --home-dir /var/lib/retyc --create-home \
+#          --shell /usr/sbin/nologin retyc
+#   2. Enroll the machine, then have an organization admin approve it after
+#      comparing the fingerprint it prints:
+#        runuser -u retyc -- retyc machine enroll --org <organization-id> \
+#          --output-dir /var/lib/retyc/machine
+#   3. An empty mount point it owns:
+#        install -d -o retyc -g retyc /srv/retyc
+#   4. Copy this file to /etc/systemd/system/, then:
+#        systemctl daemon-reload
+#        systemctl enable --now retyc-mount.service
+#
+# The mount is visible to the retyc user only: add --allow-other (and
+# user_allow_other in /etc/fuse.conf) and --uid / --gid for other users.
+# Other settings: RETYC_* variables, or an environment file (--env-file,
+# see /usr/share/doc/retyc/examples/retyc.env.example).
+#
+# Reference: https://github.com/retyc/retyc-cli/blob/master/doc/retycfs.md
+
+[Unit]
+Description=RETYC dataroom mount (machine account)
+Documentation=https://github.com/retyc/retyc-cli/blob/master/doc/retycfs.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=retyc
+Group=retyc
+Environment=RETYC_MACHINE_DIR=/var/lib/retyc/machine
+# Clears what a killed mount left behind ("transport endpoint is not
+# connected"), which the start would refuse; "-": nothing to clear is fine.
+ExecStartPre=-/usr/bin/fusermount3 -u -z /srv/retyc
+# Every dataroom of the machine, one folder each; or a single one at the
+# root of the mount point: retyc://<dataroom-id> /srv/retyc
+ExecStart=/usr/bin/retyc fs mount --all /srv/retyc
+# SIGTERM unmounts once pending uploads are sent (--drain-timeout, 5 min):
+# give it longer before the SIGKILL.
+TimeoutStopSec=6min
+Restart=on-failure
+RestartSec=10s
+# 77: machine disabled or removed, 78: configuration (enrollment files).
+# Restarting cannot fix them.
+RestartPreventExitStatus=77 78
+# No PrivateTmp=, ProtectSystem=, ProtectHome= nor PrivateMounts=: they give
+# the service its own mount namespace, where the mount would be invisible to
+# the rest of the system. No NoNewPrivileges=: fusermount3 is setuid.
+
+[Install]
+WantedBy=multi-user.target

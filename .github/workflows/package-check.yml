@@ -1,0 +1,33 @@
+name: Package check
+
+# Builds and tests the packages on a branch or pull request that changes how
+# they are built. A change to the Go code alone does not run it: release.yml
+# runs the same checks before every release.
+on:
+  push:
+    branches: ['**']
+    paths: &package_paths
+      - '.goreleaser.yaml'
+      - 'scripts/completions.sh'
+      - 'LICENSE'
+      - 'packaging/**'
+      - 'retyc.env.example'
+      - 'config.example.yaml'
+      - '.github/workflows/package-check.yml'
+      - '.github/workflows/_package.yml'
+  pull_request:
+    paths: *package_paths
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package
+    # Same rule as main.yml: a branch of this repository is checked by its
+    # push, the pull_request run is only for forks.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    permissions:
+      contents: read
+    uses: ./.github/workflows/_package.yml

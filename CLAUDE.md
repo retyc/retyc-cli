@@ -33,7 +33,9 @@ internal/
   retycfs/               # FUSE driver (linux build tag), go-fuse v2 `fs` API
   metrics/               # Prometheus collectors of `fs mount`, all retycfs_*
   telemetry/             # OpenTelemetry tracing of `fs mount`; env.go is the only reader of OTEL_*
-scripts/                 # build-mcpb.sh, benches, start-jaeger.sh, start-redis.sh,
+packaging/               # files shipped as is in the .deb / .rpm (example systemd units)
+scripts/                 # build-mcpb.sh, completions.sh (packages), benches,
+                         #   start-jaeger.sh, start-redis.sh,
                          #   redis-cache-dump (diagnostic, not released)
 ```
 
@@ -53,6 +55,11 @@ scripts/                 # build-mcpb.sh, benches, start-jaeger.sh, start-redis.
   a prod build has no `insecure` key at all).
 - Docker: scratch image, static `-tags prod` binary, user 1000; see `doc/docker.md`.
 - MCPB bundle: `make mcpb`; see `doc/mcpb.md`.
+- Linux packages: `nfpms` in `.goreleaser.yaml`, `.deb` + `.rpm` (amd64/arm64,
+  completions from `scripts/completions.sh`, `Recommends: fuse3`; paths that differ
+  per family use `packager:`; examples in `/usr/share/doc/retyc/examples/`:
+  `packaging/systemd/{system,user}/retyc-mount.service`, `retyc.env.example`,
+  `config.example.yaml`). The `.deb` must stay lintian-clean.
 
 ## Conventions
 
@@ -282,6 +289,8 @@ spans: unregistered collectors and the no-op tracer cost nothing elsewhere.
 ## CI
 
 `main.yml` → `_ci.yml` (vet, race tests with `fuse3` installed and a `redis:8.10.2`
-service, dev + prod builds) → `_docker.yml`. `release.yml` on `v*` tags: goreleaser,
-MCPB bundle, GitHub release. Keyless cosign (`sigstore/cosign-installer`): pushed
-images except the dev one, checksum file (goreleaser `signs:`), MCPB bundle. See `doc/ci-cd.md`.
+service, dev + prod builds) → `_docker.yml`. `_package.yml` (goreleaser snapshot
+linux/amd64, lintian, `.deb` / `.rpm` install) runs from `package-check.yml` when the
+packaging files change, and before goreleaser in `release.yml`. `release.yml` on `v*`
+tags: goreleaser (binaries, `.deb`, `.rpm`), MCPB bundle, GitHub release. Keyless cosign (`sigstore/cosign-installer`): pushed images except
+the dev one, checksum file (goreleaser `signs:`), MCPB bundle. See `doc/ci-cd.md`.

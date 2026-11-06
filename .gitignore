@@ -34,3 +34,6 @@ Thumbs.db
 # Local design docs (superpowers specs/plans) — never committed
 /docs/superpowers/
 /.claude/worktrees/
+
+# Shell completions generated for the packages (scripts/completions.sh)
+/completions/
