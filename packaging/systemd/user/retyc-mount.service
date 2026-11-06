@@ -1,0 +1,46 @@
+# Example systemd user unit: mounts your datarooms in ~/Retyc while you are
+# logged in, with your own account. On a server, with a machine account, see
+# ../system/retyc-mount.service.
+#
+# Setup, as yourself:
+#   1. Log in once: retyc auth login
+#   2. The key passphrase, in a file only you can read (the unit has no
+#      terminal to ask for it). It is stored in clear: keep it on an
+#      encrypted disk.
+#        install -m 0600 /dev/null ~/.config/retyc/env
+#        echo 'RETYC_KEY_PASSPHRASE="..."' >> ~/.config/retyc/env
+#   3. An empty mount point: mkdir -p ~/Retyc
+#   4. Copy this file to ~/.config/systemd/user/, then:
+#        systemctl --user daemon-reload
+#        systemctl --user enable --now retyc-mount.service
+#
+# The login lasts as long as your session on the identity provider: when it
+# ends, the unit stops (exit code 77). Run `retyc auth login` again, then
+# `systemctl --user restart retyc-mount.service`.
+#
+# Reference: https://github.com/retyc/retyc-cli/blob/master/doc/retycfs.md
+
+[Unit]
+Description=RETYC dataroom mount
+Documentation=https://github.com/retyc/retyc-cli/blob/master/doc/retycfs.md
+
+[Service]
+Type=exec
+Environment=RETYC_ENV_FILE=%h/.config/retyc/env
+# Clears what a killed mount left behind ("transport endpoint is not
+# connected"), which the start would refuse; "-": nothing to clear is fine.
+ExecStartPre=-/usr/bin/fusermount3 -u -z %h/Retyc
+# Every dataroom, one folder each; or a single one at the root of the mount
+# point: retyc://<dataroom-id> %h/Retyc
+ExecStart=/usr/bin/retyc fs mount --all %h/Retyc
+# SIGTERM unmounts once pending uploads are sent (--drain-timeout, 5 min):
+# give it longer before the SIGKILL.
+TimeoutStopSec=6min
+Restart=on-failure
+RestartSec=10s
+# 77: login missing or expired, 78: configuration (passphrase, env file).
+# Restarting cannot fix them.
+RestartPreventExitStatus=77 78
+
+[Install]
+WantedBy=default.target

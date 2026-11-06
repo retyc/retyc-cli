@@ -1,0 +1,61 @@
+name: _Package
+
+# Builds the Linux packages as a goreleaser snapshot, lints the .deb and
+# installs both packages. Called by package-check.yml when the packaging
+# changes, and by release.yml before goreleaser, so that a broken package
+# stops the release rather than being published.
+on:
+  workflow_call:
+
+jobs:
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Only linux/amd64, the target the install tests below can run: the
+      # other targets differ by GOOS/GOARCH alone and cost most of the build.
+      # (`--single-target` exists for `goreleaser build` only, without nfpm.)
+      - name: Restrict the build to linux/amd64
+        run: >-
+          yq '.builds[0].goos = ["linux"] | .builds[0].goarch = ["amd64"]'
+          .goreleaser.yaml > "$RUNNER_TEMP/goreleaser-ci.yaml"
+
+      # No signature: there is nothing to publish, and no cosign here.
+      - name: GoReleaser (snapshot)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=sign --config ${{ runner.temp }}/goreleaser-ci.yaml
+
+      - name: Lintian
+        run: |
+          sudo apt-get update && sudo apt-get install -y lintian
+          lintian --fail-on error,warning dist/*.deb
+
+      - name: Install test (deb)
+        run: |
+          sudo apt-get install -y ./dist/retyc_*_amd64.deb
+          retyc version
+          test -f /usr/share/bash-completion/completions/retyc
+          # The user unit too, in system mode: --user needs a user session.
+          systemd-analyze verify /usr/share/doc/retyc/examples/systemd/{system,user}/retyc-mount.service
+
+      # Rocky (EL family, oldest rpm supported) rather than Fedora, whose
+      # releases reach end of life within a year.
+      - name: Install test (rpm)
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" rockylinux/rockylinux:9 sh -c '
+            dnf install -y /dist/retyc-*.x86_64.rpm &&
+            retyc version &&
+            test -f /usr/share/zsh/site-functions/_retyc'
