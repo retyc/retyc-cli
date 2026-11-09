@@ -98,6 +98,14 @@ Neither opens a network connection. With `--json`, `config path` adds
 | `retyc auth status`          | Check authentication status (silently refreshes token); with a machine account, checks the token endpoint and that `age.key` matches the active key |
 | `retyc auth logout`          | Sign out                                               |
 
+## MCP
+
+| Command              | Description                                                                 |
+|----------------------|-----------------------------------------------------------------------------|
+| `retyc mcp serve`    | Run the MCP server on stdio ([mcp.md](mcp.md))                              |
+| `retyc mcp setup`    | Interactive setup of Claude Desktop, Hermes, OpenClaw ([mcp.md](mcp.md#install)) |
+| `retyc mcp manifest` | Print the MCPB manifest ([mcpb.md](mcpb.md))                                |
+
 ## Transfer
 
 | Command                        | Description                                                                                   |

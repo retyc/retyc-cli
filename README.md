@@ -119,7 +119,13 @@ control Retyc in plain language:
 > *"Send all PDFs in ./reports/ to bob@example.com, expire in 7 days."*
 > *"List my latest transfers and download the most recent one into ~/Downloads/."*
 
-Full integration guide (Claude Desktop, Cursor, Windsurf, example prompts): [doc/mcp.md](doc/mcp.md)
+**Setup in one command** (Claude Desktop, Hermes, OpenClaw; needs Node.js 18+):
+
+```sh
+npx -y @retyc/mcp setup
+```
+
+Other clients and example prompts: [doc/mcp.md](doc/mcp.md)
 
 ---
 
