@@ -74,3 +74,33 @@ jobs:
         run: gh release upload "${GITHUB_REF_NAME}" dist/retyc-*.mcpb dist/retyc-*.mcpb.sigstore.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # npm: same process as retyc-ts-sdk (trusted publishing through the
+      # job's OIDC token, no NPM_TOKEN; provenance is attached by npm).
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false  # never use caching in release builds
+
+      - name: Build npm packages
+        run: scripts/build-npm.sh --expect-version "${GITHUB_REF_NAME#v}"
+
+      # Platform packages first: @retyc/mcp depends on them. A version already
+      # on the registry (re-run of this job) is skipped, never republished.
+      - name: Publish npm packages
+        run: |
+          VERSION=$(cat dist/npm/version)
+          # Any pre-release (as goreleaser's `prerelease: auto`) goes to the
+          # beta dist-tag, never to latest.
+          TAG_ARGS=()
+          case "$VERSION" in *-*) TAG_ARGS=(--tag beta) ;; esac
+          for dir in dist/npm/mcp-*/ dist/npm/mcp/; do
+            name=$(jq -r .name "$dir/package.json")
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "skip $name@$VERSION (already published)"
+              continue
+            fi
+            (cd "$dir" && npm publish --access public "${TAG_ARGS[@]}")
+          done

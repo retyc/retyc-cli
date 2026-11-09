@@ -1,0 +1,32 @@
+{
+  "name": "@retyc/mcp",
+  "version": "0.0.0",
+  "description": "Retyc MCP server: end-to-end encrypted file transfers and datarooms for AI agents",
+  "mcpName": "com.retyc/mcp",
+  "license": "MIT",
+  "homepage": "https://retyc.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/retyc/retyc-cli.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "retyc",
+    "e2e",
+    "encryption",
+    "file-transfer",
+    "dataroom"
+  ],
+  "bin": {
+    "retyc-mcp": "bin/retyc-mcp.js"
+  },
+  "files": [
+    "bin/retyc-mcp.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {}
+}

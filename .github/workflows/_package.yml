@@ -52,6 +52,18 @@ jobs:
           # The user unit too, in system mode: --user needs a user session.
           systemd-analyze verify /usr/share/doc/retyc/examples/systemd/{system,user}/retyc-mount.service
 
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # The launcher and the linux-x64 package only: the other platform
+      # packages differ by their binary alone.
+      - name: npm packages (smoke test)
+        run: |
+          scripts/build-npm.sh --host-only
+          scripts/test-npm.sh
+
       # Rocky (EL family, oldest rpm supported) rather than Fedora, whose
       # releases reach end of life within a year.
       - name: Install test (rpm)
