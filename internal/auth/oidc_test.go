@@ -84,6 +84,39 @@ func TestRequestDeviceCode_Success(t *testing.T) {
 	}
 }
 
+func TestDeviceFlowNotify_ReceivesVerificationURI(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/device", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(DeviceAuthResponse{
+			DeviceCode:              "dev-code",
+			UserCode:                "ABCD-1234",
+			VerificationURIComplete: "https://example.com/activate?code=ABCD-1234",
+			ExpiresIn:               300,
+			Interval:                1,
+		})
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(TokenResponse{ //nolint:gosec // G117: test fixture
+			AccessToken: "access", TokenType: "Bearer", RefreshToken: "offline", ExpiresIn: 60,
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := config.OIDCConfig{ClientID: "c", DeviceAuthURL: srv.URL + "/device", TokenURL: srv.URL + "/token"}
+	var notified string
+	tok, err := DeviceFlowNotify(context.Background(), cfg, http.DefaultClient, func(uri string) { notified = uri })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notified != "https://example.com/activate?code=ABCD-1234" {
+		t.Errorf("notified %q", notified)
+	}
+	if tok.RefreshToken != "offline" {
+		t.Errorf("refresh token %q", tok.RefreshToken)
+	}
+}
+
 func TestRequestDeviceCode_NonOK(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
