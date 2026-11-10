@@ -165,6 +165,12 @@ func Execute() {
 	}
 }
 
+// Root returns the root command, for the manual page generator
+// (scripts/genman).
+func Root() *cobra.Command {
+	return rootCmd
+}
+
 // run executes args against rootCmd. Execute and the tests share it.
 func run(ctx context.Context, args []string) error {
 	rootCmd.SetArgs(args)
