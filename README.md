@@ -19,7 +19,7 @@
 
 ## What is Retyc?
 
-[Retyc](https://retyc.com) is a European sovereign file-sharing platform with end-to-end post-quantum encryption. Data
+[Retyc](https://retyc.com) is a European sovereign file storage platform with end-to-end post-quantum encryption. Data
 stays in Europe, GDPR-compliant by design.
 
 `retyc-cli` lets you integrate Retyc transfers and datarooms into your scripts, pipelines, and workflows - no browser
@@ -29,7 +29,7 @@ required.
 
 ## Installation
 
-### Pre-compiled binaries (recommended)
+### Pre-compiled binaries
 
 Download the binary for your platform from the [latest release](https://github.com/retyc/retyc-cli/releases/latest).
 
@@ -44,31 +44,19 @@ cosign verify-blob \
 sha256sum --check --ignore-missing retyc_sha256_checksums.txt
 ```
 
-The MCPB bundle has its own `.sigstore.json`, verified the same way.
-
-### Debian / Ubuntu
-
-Each release ships a `.deb` package (amd64, arm64) with shell completions for bash, zsh and fish:
+### Linux packages (deb/rpm)
 
 ```sh
+# Debian / Ubuntu
 curl -fsSLO https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc_X.Y.Z_amd64.deb
 sudo apt install ./retyc_X.Y.Z_amd64.deb
-```
 
-### Fedora / RHEL / Rocky / openSUSE
-
-Each release also ships an `.rpm` package (x86_64, aarch64):
-
-```sh
 # Fedora / RHEL / Rocky
 sudo dnf install https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc-X.Y.Z-1.x86_64.rpm
+
 # openSUSE
 sudo zypper install https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc-X.Y.Z-1.x86_64.rpm
 ```
-
-With both packages, `fuse3`, needed by `retyc fs mount`, is installed as a recommended package.
-Example systemd units for `retyc fs mount` are in `/usr/share/doc/retyc/examples/systemd/`:
-`system/` for a server with a machine account, `user/` for your own account on a workstation.
 
 ### With `go install`
 
@@ -87,10 +75,10 @@ go build -tags prod -ldflags "-X github.com/retyc/retyc-cli/cmd.Version=$(git de
 ### With Docker
 
 ```sh
-# Docker Hub
-docker pull retyc/retyc-cli:latest
 # GitHub Container Registry
 docker pull ghcr.io/retyc/retyc-cli:latest
+# Docker Hub
+docker pull retyc/retyc-cli:latest
 ```
 
 ---
@@ -118,8 +106,7 @@ retyc transfer download <transfer-id>
 - **Authentication**: OIDC device flow (no password ever stored locally)
 - **File data + metadata**: end-to-end encrypted with [AGE](https://github.com/FiloSottile/age) post-quantum hybrid keys
 - **Private key caching** (Linux only): the decrypted AGE identity is stored in the kernel session keyring and is never
-  written to disk. It is scoped to the current terminal session, isolated from other users and sessions, and uses a
-  sliding TTL (default: 60 seconds). Each access refreshes the expiration timer.
+  written to disk.
 - **Transport**: TLS enforced by default
 
 ---
@@ -133,34 +120,20 @@ control Retyc in plain language:
 > *"Send all PDFs in ./reports/ to bob@example.com, expire in 7 days."*
 > *"List my latest transfers and download the most recent one into ~/Downloads/."*
 
-**Quick setup with Claude Code:**
-
-```sh
-# Use read -s to avoid storing the passphrase in shell history
-read -rs RETYC_KEY_PASSPHRASE
-claude mcp add --transport stdio retyc --env RETYC_KEY_PASSPHRASE="$RETYC_KEY_PASSPHRASE" -- /path/to/retyc mcp serve
-```
-
 Full integration guide (Claude Desktop, Cursor, Windsurf, example prompts): [doc/mcp.md](doc/mcp.md)
-
-**Claude Desktop extension (MCPB):** each release ships a `retyc-<version>.mcpb` bundle —
-double-click to install in Claude Desktop, no terminal needed. See [doc/mcpb.md](doc/mcpb.md).
 
 ---
 
-## RetycFS
+## RetycFS, the Retyc file system
 
 RetycFS mounts your datarooms as a local folder on Linux. Any program can open, edit
-and save the files in it: `ls`, `cp`, a file manager, an editor, a script. Files are
-encrypted and decrypted locally; the Retyc servers never see plaintext.
+and save the files in it: `ls`, `cp`, a file manager, an editor, a script.
 
 ```sh
 mkdir -p ~/retyc
 retyc fs mount retyc://<dataroom-id> ~/retyc   # one dataroom, the root of ~/retyc
 retyc fs mount --all ~/retyc                   # or every dataroom, one folder each
 ```
-
-The command asks for the key passphrase and stays in the foreground; unmount with `Ctrl-C`.
 
 Full guide: [doc/retycfs.md](doc/retycfs.md)
 

@@ -1,7 +1,6 @@
 # Docker
 
-Config and tokens are persisted in a named volume. The `-it` flags are required for interactive prompts (device flow,
-passphrase).
+Config and token live in a named volume; `-it` is needed for the prompts (login, passphrase).
 
 ```sh
 # Authenticate
@@ -14,23 +13,17 @@ docker run -it --rm \
   retyc/retyc-cli:latest transfer create /data/report.pdf
 ```
 
-> **Tip:**
-`alias retyc='docker run -it --rm -v retyc-config:/home/retyc/.config/retyc -v "$(pwd)":/data retyc/retyc-cli:latest'`
-
-> **Note:** kernel keyring caching is not available in Docker (blocked by the default seccomp profile). The passphrase
-> will be prompted on each invocation.
+Tip: `alias retyc='docker run -it --rm -v retyc-config:/home/retyc/.config/retyc -v "$(pwd)":/data retyc/retyc-cli:latest'`.
+There is no key cache in Docker: the passphrase is asked at each run.
 
 ## Mounting a dataroom from the container
 
-`retyc fs mount` needs `/dev/fuse`, `CAP_SYS_ADMIN` and root (`--user 0`): the image has
-no `fusermount3` helper, root mounts without it. See
-[RetycFS: containers](retycfs.md#containers).
+See [RetycFS: containers](retycfs.md#containers) (root, `/dev/fuse`, `CAP_SYS_ADMIN`).
 
 ## Behind a proxy
 
-Proxy and CA settings are read from the environment (see
-[Configuration](configuration.md#behind-a-corporate-proxy)). The image is built
-`FROM scratch`, so a custom CA bundle has to be mounted into the container:
+The image is `FROM scratch`: mount a custom CA bundle into it (see
+[Configuration](configuration.md#behind-a-corporate-proxy)).
 
 ```sh
 docker run -it --rm \
@@ -57,9 +50,8 @@ docker pull ghcr.io/retyc/retyc-cli:latest
 | `master`       | Head of the `master` branch, not released — for testing only                               |
 | `commit-<sha>` | One-off build of a single commit, GitHub Container Registry only — for testing only        |
 
-Pushed images are signed with [cosign](https://docs.sigstore.dev/) (keyless); the signature
-also covers their SBOM and provenance. They are signed by the reusable workflow, hence
-`_docker.yml` in the identity (`refs/heads/master` for `master`):
+Images (except the dev one) are signed with [cosign](https://docs.sigstore.dev/), SBOM and
+provenance included:
 
 ```sh
 cosign verify \
@@ -67,8 +59,6 @@ cosign verify \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   retyc/retyc-cli:vX.Y.Z
 ```
-
-The dev image below is not signed.
 
 ## Dev image
 

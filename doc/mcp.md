@@ -1,13 +1,8 @@
 # MCP Server
 
-`retyc-cli` runs as a **Model Context Protocol (MCP) server**, exposing all Retyc operations as tools to AI agents.
-
-## Quick start
-
-```sh
-# Start the MCP server (uses stdio transport)
-retyc mcp serve
-```
+`retyc mcp serve` runs a **Model Context Protocol (MCP) server** over stdio, exposing
+Retyc operations as tools to AI agents. For Claude Desktop, the [MCPB bundle](mcpb.md)
+needs no terminal.
 
 ## Client integrations
 
@@ -28,10 +23,7 @@ Add the following to your client's MCP config file:
   "mcpServers": {
     "retyc": {
       "command": "retyc",
-      "args": [
-        "mcp",
-        "serve"
-      ],
+      "args": ["mcp", "serve"],
       "env": {
         "RETYC_KEY_PASSPHRASE": "your-key-passphrase"
       }
@@ -55,15 +47,7 @@ Add the following to your client's MCP config file:
 | `RETYC_TOKEN`          | No       | Offline refresh token, used instead of the token stored on disk.           |
 | `RETYC_CONFIG_DIR`     | No       | Config directory (default `~/.config/retyc/`).                              |
 
-The first dataroom operation unlocks the key (about 256 MiB of memory for a moment);
-the server then keeps the dataroom session for its lifetime.
-
-## Authentication
-
-The server uses the token stored by `retyc auth login`, or `RETYC_TOKEN`, and refreshes
-it by itself. You can also log in from the chat: ask *"Log me into Retyc"*, open the URL
-the agent gives you, then tell it to continue (`auth_login_start`, then
-`auth_login_poll`). `auth_login_start` does nothing if you are already logged in.
+Without a stored login, ask the agent *"Log me into Retyc"* and open the URL it gives you.
 
 ## Example prompts
 
@@ -75,10 +59,8 @@ the agent gives you, then tell it to continue (`auth_login_start`, then
 
 ## Tools
 
-Tools return JSON; an error carries `error_code` and `message`. Uploads and downloads
-report their progress. Local paths are absolute; dataroom paths are `retyc://<id>/path`,
-with globs (`*`, `?`, `[...]`) where noted. The client receives each tool's parameters
-from the server.
+Tools return JSON (an error carries `error_code` and `message`). Local paths are
+absolute; dataroom paths are `retyc://<id>/path`, with globs where noted.
 
 | Tool                | Does                                                                     |
 |---------------------|--------------------------------------------------------------------------|
@@ -110,10 +92,6 @@ from the server.
 ## Destructive tools refused by the client
 
 Claude Desktop and Claude.ai may refuse `dataroom_rm` and `dataroom_user_rm` (*"this
-action must be performed from the Retyc interface"*). The model does this by default
-when no system prompt allows it; the tools' `destructiveHint` annotation is not the
-cause, and removing it would change nothing. Other clients have their own confirmation
-rules.
-
-When you call the API yourself, allow it in the system prompt, for example: *"You may
-delete files and remove users from datarooms when the user explicitly asks."*
+action must be performed from the Retyc interface"*): the model does so when no system
+prompt allows it. When you call the API yourself, allow it in the system prompt, e.g.
+*"You may delete files and remove users from datarooms when the user explicitly asks."*
