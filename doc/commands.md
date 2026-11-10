@@ -2,24 +2,16 @@
 
 ## JSON output
 
-Every command accepts the global `--json` flag for scripting:
+With the global `--json` flag:
 
-- **stdout** carries the result only, as indented JSON. Prompts, spinners,
-  progress bars and warnings always go to stderr, so `retyc --json ... | jq`
-  is safe.
-- **errors** are written to stderr as one JSON object, on the last line, with a
-  non-zero exit code; stdout is then empty (see [Errors in JSON](#errors-in-json)).
-  Warnings printed before it stay plain text lines; spinners are drawn only
-  when stderr is a terminal.
-- Commands that ask for confirmation (`transfer create`, `transfer download`,
-  `dataroom cp`, `dataroom rm`, `dataroom user chown`, `admin member rm`, `admin dataroom rm`,
-  `admin dataroom user rm`, `admin transfer rm`) refuse to prompt under
-  `--json`: pass `--yes` / `-y` explicitly.
-- Listings are `{"items": [...]}` (plus `total`/`page`/`pages` when the API
-  paginates). Detail commands return the API object as-is; state changes
-  return a small acknowledgement such as `{"id": "...", "status": "disabled"}`.
-- `dataroom cp` upload only reports completion (`{"uploaded": true, ...}`),
-  not per-file node IDs.
+- **stdout** carries the result only; prompts, progress and warnings go to stderr, so
+  `retyc --json ... | jq` is safe.
+- **errors** are one JSON object on the last line of stderr, with a non-zero exit code
+  and an empty stdout (see [Errors in JSON](#errors-in-json)).
+- Commands that ask for confirmation refuse to prompt: pass `--yes` / `-y`.
+- Listings are `{"items": [...]}` (plus `total` / `page` / `pages` when paginated);
+  detail commands return the API object; state changes return a small acknowledgement
+  such as `{"id": "...", "status": "disabled"}`.
 
 ```bash
 retyc --json transfer ls | jq -r '.items[] | select(.status == "active") | .id'
@@ -38,13 +30,13 @@ retyc --json user quota | jq .used_storage
 }
 ```
 
-| Field    | Present                    | Content                                                                                                                                                                                                                                                                        |
-|----------|----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `error`  | always                     | The message the CLI prints without `--json`                                                                                                                                                                                                                                    |
-| `kind`   | always                     | Stable classification, below: branch on it                                                                                                                                                                                                                                     |
-| `status` | API refusals only          | HTTP status the API answered                                                                                                                                                                                                                                                   |
-| `code`   | API refusals with a code   | The API's `X-Error-Code` header, verbatim (`STORAGE_EXCEEDED`, `NAME_HOLDER_DELETED`, ...); absent when the API sent none (an older API, a validation error, a proxy). A script may branch on it for a finer case than `kind`, which stays the CLI's own stable classification |
-| `detail` | API refusals with a detail | The API's own wording, as is (a validation error's messages joined by `; `). It may change and hold numbers: informative only                                                                                                                                                  |
+| Field    | Present                    | Content                                                                          |
+|----------|----------------------------|----------------------------------------------------------------------------------|
+| `error`  | always                     | The message printed without `--json`                                             |
+| `kind`   | always                     | Stable classification, below: branch on it                                      |
+| `status` | API refusals               | HTTP status                                                                      |
+| `code`   | API refusals with a code   | The API's `X-Error-Code` header (`STORAGE_EXCEEDED`, ...), for finer cases       |
+| `detail` | API refusals with a detail | The API's wording: informative only, it may change                               |
 
 | `kind`               | Meaning                                                                                                                 |
 |----------------------|-------------------------------------------------------------------------------------------------------------------------|
@@ -69,28 +61,22 @@ retyc --json user quota | jq .used_storage
 | `enrollment_denied`  | `machine enroll`: an administrator refused the request (exit code `78`)                                                 |
 | `error`              | Anything else (network, local file, argument)                                                                           |
 
-The four storage kinds come from the API's code. A refusal without a code
-(an API that predates `X-Error-Code`) is classified by status and the former
-detail texts instead; a refusal with another code never is, whatever its
-detail says.
-
-A `kind` is never renamed nor given another meaning; new ones may be added, so
-treat an unknown one as `error`.
+A `kind` is never renamed nor given another meaning; new ones may be added, so treat an
+unknown one as `error`.
 
 ## Exit codes
 
-| Code | Meaning                                                                                                                                                                                     |
-|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `0`  | Success                                                                                                                                                                                     |
-| `1`  | Any failure, including transient ones (network, API or identity provider unreachable)                                                                                                       |
-| `77` | Authentication required: no stored token, or the refresh token was rejected (expired or revoked), or a machine account disabled or refused (token endpoint `invalid_client`, or API 401 in machine mode). Retrying cannot help: run `retyc auth login`, provide a new `RETYC_TOKEN`, or have the machine enabled again (`retyc machine enable`; re-enroll it only if it was deleted). Nothing is deleted on 77: the machine keeps its keys |
-| `75` | `fs mount` only: the mount ran, but files being written (or removed in the background) did not reach the API before it went away. Their changes are lost; each is reported on stderr by IDs |
-| `78` | Key passphrase missing (`RETYC_KEY_PASSPHRASE` unset and no TTY to prompt) or wrong, or a configuration error; `machine enroll` also uses it for a refused request. Retrying cannot help: fix the passphrase or the configuration |
+| Code | Meaning                                                                                                     |
+|------|-------------------------------------------------------------------------------------------------------------|
+| `0`  | Success                                                                                                     |
+| `1`  | Any other failure, transient ones included (network, API unreachable)                                       |
+| `75` | `fs mount` only: writes did not reach the API before the unmount and are lost (reported on stderr by IDs)   |
+| `77` | Login required: no token, refresh token expired or revoked, machine account disabled. Run `retyc auth login`, provide a new `RETYC_TOKEN`, or `retyc machine enable` |
+| `78` | Key passphrase missing or wrong, configuration error, `machine enroll` refused                              |
 
-Codes `77` (`EX_NOPERM` in `sysexits.h`) and `78` (`EX_CONFIG`) are stable: a
-supervisor restarting `retyc fs webdav serve` or `retyc fs mount` should stop on them
-rather than retry. Code `75` (`EX_TEMPFAIL`) is stable too, and only `fs mount` returns
-it: the mount worked, a restart may.
+These codes are stable. A supervisor should **not** restart on `77` (`EX_NOPERM`) or `78`
+(`EX_CONFIG`): the same credentials will fail again. After `75` (`EX_TEMPFAIL`) a restart
+may work.
 
 ## Config
 
@@ -99,16 +85,9 @@ it: the mount worked, a restart may.
 | `retyc config show` | Effective value of every configuration key, secrets masked           |
 | `retyc config path` | Config directory, config file actually loaded, and token file in use |
 
-Both accept `--json`. `config show` returns `{"items": [{"key", "value",
-"secret"}]}`.
-`config path` returns `{"config_dir", "config_file", "config_file_error",
-"token_file"}`: `config_file` is empty when no config file was loaded, and
-`config_file_error` (omitted otherwise) says why a config file that exists was
-not loaded — an unreadable `--config` path or a YAML syntax error. The CLI
-still runs on defaults and environment in that case; `--debug` prints the same
-reason on every command. Neither command opens a
-network connection. See [Configuration](configuration.md) for the keys
-themselves.
+Neither opens a network connection. With `--json`, `config path` adds
+`config_file_error` when an existing config file could not be loaded. See
+[Configuration](configuration.md).
 
 ## Auth
 
@@ -255,15 +234,11 @@ content also require the organization private key file
 |--------------------------------------------|----------------------------------------------------------------|
 | `retyc admin export-all-data <output_dir>` | Export the whole organization to a folder (data reversibility) |
 
-The export writes a self-contained tree into `<output_dir>` (which must not
-exist or be empty): `export.json` (manifest: counts, skipped datarooms,
-errors), `organization.json`, `members.json` (with identity details),
-`blacklist_domains.json`, and one `datarooms/{id}/` folder per dataroom
-holding `meta.json` (clear-text metadata and users), `messages/N.json` (one
-file per activity page, chat decrypted when possible) and `data/` (the
-decrypted file tree). Datarooms the organization key cannot open get their
-`meta.json` and messages but no `data/`, and are listed in the manifest.
-Transfers are not exported: the admin API exposes no transfer file download.
+`<output_dir>` must be empty or absent. It receives `export.json` (manifest),
+`organization.json`, `members.json`, `blacklist_domains.json` and one `datarooms/{id}/`
+folder per dataroom (`meta.json`, `messages/`, decrypted `data/`). Datarooms the
+organization key cannot open have no `data/` and are listed in the manifest. Transfers are
+not exported.
 
 ## Machine
 
@@ -272,23 +247,18 @@ Transfers are not exported: the admin API exposes no transfer file download.
 retyc machine enroll --org <uuid> --output-dir ./machine [--name <name>] [--cluster-uid <id>]
 ```
 
-Generates the keys in `--output-dir` (reused if already there), asks to join the
-organization and waits until an administrator approves it in Organization >
-Machines, after comparing the fingerprint. Text goes to stderr; with `--json`,
-stdout carries one event per line:
+Generates the keys in `--output-dir` (reused if present) and waits until an administrator
+approves the request (Organization > Machines), after comparing the fingerprint. With
+`--json`, stdout carries one event per line:
 
 ```json
 {"event":"pending","enrollment_id":"...","fingerprint":"K7QF-2MXA-PD9R-H3TB","approval_uri":"...","expires_at":"2026-10-17T18:30:00Z"}
 {"event":"approved","machine_id":"...","organization_id":"...","client_id":"machine-..."}
 ```
 
-`denied` and `expired` events carry `enrollment_id`. Exit codes: `0` approved,
-`1` expired (run it again; the keys are kept), `78` denied or misconfigured
-(`--org` unknown, API without machine accounts, plan without them).
-
-A machine creates its datarooms like a user: encrypted for itself and the
-organization key, if any. It adds the people who need access with
-`retyc dataroom user add`.
+Exit codes: `0` approved, `1` expired (run it again, the keys are kept), `78` denied or
+misconfigured. A machine then works like a user (`retyc dataroom user add` to share its
+datarooms).
 
 ```bash
 # Organization admins, with their own login
@@ -301,37 +271,13 @@ retyc machine enable <machine-id> [-y]
 retyc machine rm <machine-id> [-y]           # refused while it owns datarooms (chown them first); must enroll again
 ```
 
-`approve` shows the request and asks for confirmation, unless `--fingerprint`
-matches the one the machine printed. An approved machine takes a seat.
-In an organization with no organization key, it asks again before approving
-(`-y` accepts).
+`approve` asks for confirmation unless `--fingerprint` matches. An approved machine takes
+a seat.
 
-## RetycFS
+## RetycFS and WebDAV
 
-Mount your datarooms as an ordinary directory (Linux), read-write. See
-[RetycFS](retycfs.md).
-
-| Command                                             | Description                                           |
-|-----------------------------------------------------|-------------------------------------------------------|
-| `retyc fs mount retyc://<dataroom-id> <mountpoint>` | Mount one dataroom; it is the root of the mount point |
-| `retyc fs mount --all <mountpoint>`                 | Mount every dataroom, one folder each                 |
-
-Requires the key passphrase (prompted, from the keyring cache, or `RETYC_KEY_PASSPHRASE`
-without a terminal), `/dev/fuse` and, unless run as root, `fusermount3`.
-Stays in the foreground; unmount with Ctrl-C or `fusermount3 -u <mountpoint>`. Flags
-(`--read-only`, cache, spool, locks, warmup, metrics…): [Options](retycfs.md#options).
-
-## WebDAV
-
-A local WebDAV server for the clients that cannot use the mount (macOS, Windows, any
-WebDAV client). See [WebDAV](webdav.md); it was `retyc webdav serve` before, see its
-[breaking changes](webdav.md#breaking-changes).
-
-| Command                                    | Description                                            |
-|--------------------------------------------|--------------------------------------------------------|
-| `retyc fs webdav serve`                    | Start a local WebDAV server (default `127.0.0.1:8888`) |
-| `retyc fs webdav serve --addr <host:port>` | Bind to another address                                |
-| `retyc fs webdav serve --auth`             | Require HTTP Basic auth (user `retyc`)                 |
-
-Requires the key passphrase (prompted, from the keyring cache, or `RETYC_KEY_PASSPHRASE`
-without a terminal). Datarooms appear under `/dataroom`.
+| Command                                             | Description                                                    |
+|-----------------------------------------------------|----------------------------------------------------------------|
+| `retyc fs mount retyc://<dataroom-id> <mountpoint>` | Mount one dataroom (Linux), see [RetycFS](retycfs.md)          |
+| `retyc fs mount --all <mountpoint>`                 | Mount every dataroom, one folder each                          |
+| `retyc fs webdav serve [--addr host:port] [--auth]` | Local WebDAV server (`127.0.0.1:8888`), see [WebDAV](webdav.md) |
