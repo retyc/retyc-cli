@@ -37,3 +37,6 @@ Thumbs.db
 
 # Shell completions generated for the packages (scripts/completions.sh)
 /completions/
+
+# Manual pages generated for the packages (scripts/manpages.sh)
+/manpages/

@@ -48,6 +48,7 @@ jobs:
           sudo apt-get install -y ./dist/retyc_*_amd64.deb
           retyc version
           test -f /usr/share/bash-completion/completions/retyc
+          test -f /usr/share/man/man1/retyc.1.gz
           # The user unit too, in system mode: --user needs a user session.
           systemd-analyze verify /usr/share/doc/retyc/examples/systemd/{system,user}/retyc-mount.service
 
@@ -58,4 +59,5 @@ jobs:
           docker run --rm -v "$PWD/dist:/dist:ro" rockylinux/rockylinux:9 sh -c '
             dnf install -y /dist/retyc-*.x86_64.rpm &&
             retyc version &&
-            test -f /usr/share/zsh/site-functions/_retyc'
+            test -f /usr/share/zsh/site-functions/_retyc &&
+            test -f /usr/share/man/man1/retyc.1.gz'

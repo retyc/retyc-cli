@@ -9,6 +9,9 @@ on:
     paths: &package_paths
       - '.goreleaser.yaml'
       - 'scripts/completions.sh'
+      - 'scripts/manpages.sh'
+      - 'scripts/genman/**'
+      - 'go.mod'
       - 'LICENSE'
       - 'packaging/**'
       - 'retyc.env.example'

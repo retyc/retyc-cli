@@ -34,7 +34,7 @@ internal/
   metrics/               # Prometheus collectors of `fs mount`, all retycfs_*
   telemetry/             # OpenTelemetry tracing of `fs mount`; env.go is the only reader of OTEL_*
 packaging/               # files shipped as is in the .deb / .rpm (example systemd units)
-scripts/                 # build-mcpb.sh, completions.sh (packages), benches,
+scripts/                 # build-mcpb.sh, completions.sh + manpages.sh/genman (packages), benches,
                          #   start-jaeger.sh, start-redis.sh,
                          #   redis-cache-dump (diagnostic, not released)
 ```
@@ -56,8 +56,9 @@ scripts/                 # build-mcpb.sh, completions.sh (packages), benches,
 - Docker: scratch image, static `-tags prod` binary, user 1000; see `doc/docker.md`.
 - MCPB bundle: `make mcpb`; see `doc/mcpb.md`.
 - Linux packages: `nfpms` in `.goreleaser.yaml`, `.deb` + `.rpm` (amd64/arm64,
-  completions from `scripts/completions.sh`, `Recommends: fuse3`; paths that differ
-  per family use `packager:`; examples in `/usr/share/doc/retyc/examples/`:
+  completions from `scripts/completions.sh`, one man page per command generated from
+  the cobra tree by `scripts/manpages.sh` (`scripts/genman`), `Recommends: fuse3`;
+  paths that differ per family use `packager:`; examples in `/usr/share/doc/retyc/examples/`:
   `packaging/systemd/{system,user}/retyc-mount.service`, `retyc.env.example`,
   `config.example.yaml`). The `.deb` must stay lintian-clean.
 
