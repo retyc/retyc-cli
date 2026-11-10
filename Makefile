@@ -52,7 +52,7 @@ install:
 goreleaser: goreleaser-full
 
 goreleaser-full:
-	goreleaser release --snapshot --clean
+	goreleaser release --snapshot --clean --skip=sign
 
 ## Quick local release: linux/amd64 only, no signature (as the CI package job)
 goreleaser-quick:
