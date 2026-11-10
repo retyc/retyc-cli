@@ -8,8 +8,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/retyc/retyc-cli/internal/api"
 	"golang.org/x/net/webdav"
+
+	"github.com/retyc/retyc-cli/internal/api"
 )
 
 // — API rate limit (429) ————————————————————————————————————————————————————————

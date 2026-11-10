@@ -115,8 +115,7 @@ func isDigits(s string) bool {
 // RateLimitError, so the message reads "API rate limit, ..." without the
 // method and URL in front. Any other error is returned as is.
 func unwrapRateLimit(err error) error {
-	var rl *RateLimitError
-	if errors.As(err, &rl) {
+	if rl, ok := errors.AsType[*RateLimitError](err); ok {
 		return rl
 	}
 

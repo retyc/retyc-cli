@@ -21,8 +21,6 @@ func encName(t *testing.T, name, pubKey string) string {
 	return enc
 }
 
-func ptr[T any](v T) *T { return &v }
-
 func TestBuildAdminNodeTree(t *testing.T) {
 	sess, err := crypto.GenerateKeyPair()
 	if err != nil {
@@ -35,10 +33,14 @@ func TestBuildAdminNodeTree(t *testing.T) {
 	version := 3
 	nodes := []api.AdminDataroomNode{
 		{ID: "root-folder", IsFolder: true, NameEnc: encName(t, "docs", pub)},
-		{ID: "child-file", ParentID: ptr("root-folder"), NameEnc: encName(t, "report.pdf", pub),
-			OriginalSize: &size, ChunkCount: &chunks, VersionNumber: &version, VersionID: ptr("v1")},
-		{ID: "top-file", NameEnc: encName(t, "readme.md", pub), OriginalSize: &size, ChunkCount: &chunks,
-			VersionNumber: ptr(1), VersionID: ptr("v2")},
+		{
+			ID: "child-file", ParentID: new("root-folder"), NameEnc: encName(t, "report.pdf", pub),
+			OriginalSize: &size, ChunkCount: &chunks, VersionNumber: &version, VersionID: new("v1"),
+		},
+		{
+			ID: "top-file", NameEnc: encName(t, "readme.md", pub), OriginalSize: &size, ChunkCount: &chunks,
+			VersionNumber: new(1), VersionID: new("v2"),
+		},
 	}
 
 	infos, err := buildAdminNodeTree(nodes, sess)
@@ -77,7 +79,7 @@ func TestBuildAdminNodeTree_OrphanParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	nodes := []api.AdminDataroomNode{
-		{ID: "n1", ParentID: ptr("missing"), NameEnc: encName(t, "lost.txt", sess.Recipient().String())},
+		{ID: "n1", ParentID: new("missing"), NameEnc: encName(t, "lost.txt", sess.Recipient().String())},
 	}
 	infos, err := buildAdminNodeTree(nodes, sess)
 	if err != nil {
@@ -101,8 +103,8 @@ func TestBuildAdminNodeTree_ParentCycle(t *testing.T) {
 	pub := sess.Recipient().String()
 
 	nodes := []api.AdminDataroomNode{
-		{ID: "a", ParentID: ptr("b"), NameEnc: encName(t, "a.txt", pub)},
-		{ID: "b", ParentID: ptr("a"), NameEnc: encName(t, "b.txt", pub)},
+		{ID: "a", ParentID: new("b"), NameEnc: encName(t, "a.txt", pub)},
+		{ID: "b", ParentID: new("a"), NameEnc: encName(t, "b.txt", pub)},
 	}
 
 	type result struct {
@@ -172,7 +174,7 @@ func TestBuildAdminNodeTree_MaliciousFolderName(t *testing.T) {
 
 	nodes := []api.AdminDataroomNode{
 		{ID: "folder", IsFolder: true, NameEnc: encName(t, "..", pub)},
-		{ID: "child", ParentID: ptr("folder"), NameEnc: encName(t, "evil.sh", pub)},
+		{ID: "child", ParentID: new("folder"), NameEnc: encName(t, "evil.sh", pub)},
 	}
 	infos, err := buildAdminNodeTree(nodes, sess)
 	if err != nil {
@@ -274,10 +276,10 @@ func TestBuildAdminNodeTree_SiblingCollisionsSuffixed(t *testing.T) {
 		{ID: "c", NameEnc: encName(t, "q1\\report.pdf", pub)},
 		{ID: "dir", IsFolder: true, NameEnc: encName(t, "docs", pub)},
 		// Same sanitized name under another parent: no collision, no suffix.
-		{ID: "d", ParentID: ptr("dir"), NameEnc: encName(t, "q1_report.pdf", pub)},
+		{ID: "d", ParentID: new("dir"), NameEnc: encName(t, "q1_report.pdf", pub)},
 		// Orphan (parent missing from the listing): rooted at "/" by nodePath,
 		// so it collides with the root-level siblings and must be suffixed too.
-		{ID: "e", ParentID: ptr("gone"), NameEnc: encName(t, "q1_report.pdf", pub)},
+		{ID: "e", ParentID: new("gone"), NameEnc: encName(t, "q1_report.pdf", pub)},
 	}
 
 	infos, err := buildAdminNodeTree(nodes, sess)

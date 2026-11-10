@@ -60,8 +60,8 @@ func TestTransferDataroomOwnership(t *testing.T) {
 
 func TestTransferDataroomOwnershipRefused(t *testing.T) {
 	for user, want := range map[string]string{
-		"u-editor":     "only an admin",
-		"owner@x.co":   "already owns",
+		"u-editor":    "only an admin",
+		"owner@x.co":  "already owns",
 		"nobody@x.co": "not a member",
 	} {
 		srv, calls := newOwnerFixture(t)

@@ -27,6 +27,7 @@ func configDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return filepath.Join(base, "retyc"), nil
 }
 

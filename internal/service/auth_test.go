@@ -11,16 +11,17 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/crypto"
-	"github.com/retyc/retyc-cli/internal/crypto/cryptotest"
-	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"golang.org/x/oauth2"
+
+	"github.com/retyc/retyc-cli/internal/api"
+	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/crypto/cryptotest"
+	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 )
 
 // oidcTestServer creates a test server that handles the two OIDC discovery
@@ -147,7 +148,7 @@ func TestLoginPoll_Done(t *testing.T) {
 	t.Setenv("RETYC_CONFIG_DIR", t.TempDir())
 	t.Setenv("RETYC_TOKEN", "")
 	srv := oidcTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G117: test fixture, not real credentials
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  "new-access",
 			"token_type":    "Bearer",
 			"refresh_token": "new-refresh",

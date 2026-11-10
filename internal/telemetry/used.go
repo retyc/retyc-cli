@@ -26,6 +26,8 @@ type UsedSpan struct {
 // StartUsedRoot opens a root span named name (WithNewRoot: the caller serves
 // requests that belong to no trace of its own) and returns the context that
 // carries it. End must be called.
+//
+//nolint:spancheck // the caller ends it (UsedSpan.End)
 func StartUsedRoot(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, UsedSpan) {
 	ctx, span := Tracer().Start(ctx, name, append([]trace.SpanStartOption{trace.WithNewRoot()}, opts...)...)
 

@@ -6,12 +6,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/retyc/retyc-cli/internal/metrics"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/retyc/retyc-cli/internal/metrics"
 )
 
 type roundTripper struct {
@@ -101,7 +102,7 @@ func routeAttributes(path string) []attribute.KeyValue {
 	var attrs []attribute.KeyValue
 	var unknown []string
 	resource := ""
-	for _, seg := range strings.Split(path, "/") {
+	for seg := range strings.SplitSeq(path, "/") {
 		switch {
 		case seg == "":
 		case metrics.IsUUIDSegment(seg):

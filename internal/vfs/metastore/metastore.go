@@ -259,6 +259,8 @@ type DataroomList struct {
 // Deliberately absent: TTLs as a decision (what is fresh is the caller's),
 // in-flight fetches (coordination, in vfs.FS), dataroom sessions (key
 // material never leaves the process).
+//
+//nolint:interfacebloat // the whole contract of a store, one method per operation
 type MetaStore interface {
 	// GetListing returns the listing stored under key; ok is false when there
 	// is none.

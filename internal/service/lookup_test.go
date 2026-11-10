@@ -129,7 +129,7 @@ func TestLookupNodeByName(t *testing.T) {
 			node.Size != want.Size || node.VersionID != want.VersionID || node.ChunkCount != want.ChunkCount {
 			t.Errorf("salt %q: node = %+v, want %+v", salt, node, want)
 		}
-		if node.ParentID() != "d-1" || node.Mode() != 0640 ||
+		if node.ParentID() != "d-1" || node.Mode() != 0o640 ||
 			!node.CreatedAt().Equal(time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)) ||
 			!node.ModTime().Equal(time.Date(2026, 9, 30, 9, 0, 0, 0, time.UTC)) {
 			t.Errorf("salt %q: parent %q, mode %v, created %v, modified %v", salt,
@@ -265,9 +265,9 @@ func TestReplaceDataroomNodeByID_ProbeFailure(t *testing.T) {
 func TestDataroomNodeInfo_JSONShape(t *testing.T) {
 	info := DataroomNodeInfo{
 		ID: "n1", Name: "f.txt", Type: "file", MIMEType: "text/plain", Size: 12, VersionID: "v1", ChunkCount: 2,
-	}.WithMode(0640).WithModTime(time.Unix(1, 0)).WithOrigin("d-1", time.Unix(2, 0))
+	}.WithMode(0o640).WithModTime(time.Unix(1, 0)).WithOrigin("d-1", time.Unix(2, 0))
 	info.target = "t"
-	raw, err := json.Marshal(info)
+	raw, err := json.Marshal(info) //nolint:musttag // the MCP server marshals it untagged: that shape is under test
 	if err != nil {
 		t.Fatal(err)
 	}

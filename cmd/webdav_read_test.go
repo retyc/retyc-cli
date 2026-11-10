@@ -212,7 +212,7 @@ func readData(size int) []byte {
 
 // serveRead sends a GET (or method) for the file through the WebDAV handler.
 func serveRead(fs *webdavFS, method, rangeHeader string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, readPath, nil)
+	r := httptest.NewRequestWithContext(context.Background(), method, readPath, nil)
 	if rangeHeader != "" {
 		r.Header.Set("Range", rangeHeader)
 	}
@@ -413,7 +413,7 @@ func TestWebdavGet_IfRange(t *testing.T) {
 	get := func(t *testing.T, ifRange string) (*httptest.ResponseRecorder, map[int]int) {
 		t.Helper()
 		fs, fake := newReadFS(t, data, 4)
-		r := httptest.NewRequest(http.MethodGet, readPath, nil)
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, readPath, nil)
 		r.Header.Set("Range", "bytes=5-6")
 		r.Header.Set("If-Range", ifRange)
 		w := serveReadRequest(fs, r)
@@ -659,7 +659,7 @@ func TestWebdavGet_ClientGoneStopsTheDownload(t *testing.T) {
 			defer release()
 
 			ctx, cancel := context.WithCancel(context.Background())
-			r := httptest.NewRequest(http.MethodGet, readPath, nil).WithContext(ctx)
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, readPath, nil).WithContext(ctx)
 			r.Header.Set("Range", header)
 			served := make(chan struct{})
 			go func() {
@@ -854,7 +854,7 @@ func TestReadFileHandle_SeekLeavesTheStream(t *testing.T) {
 	read(4, data[2:6])
 	seek(-2, io.SeekEnd, int64(len(data)-2))
 	read(2, data[len(data)-2:])
-	if n, err := f.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+	if n, err := f.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
 		t.Fatalf("Read at the end = %d, %v; want 0, io.EOF", n, err)
 	}
 	seek(0, io.SeekStart, 0)
@@ -989,7 +989,7 @@ func TestWebdavGet_FallbackServesNoByteOfTheWrongOffset(t *testing.T) {
 // the stream and its parallel downloads, not chunk by chunk.
 func TestWebdavGet_RangeOfTheWholeFileKeepsTheStream(t *testing.T) {
 	for header, partial := range map[string]bool{
-		"": false, "bytes=0-": false, " Bytes = 0- ": false,
+		"": false, "bytes=0-": false, " Bytes = 0- ": false, //nolint:gocritic // the spaces are under test
 		"bytes=0-0": true, "bytes=1-": true, "bytes=0-,5-6": true, "bytes=-5": true, "bytes=00-": true, "lines=0-": true,
 	} {
 		if got := isPartialRange(header); got != partial {

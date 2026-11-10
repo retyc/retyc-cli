@@ -197,7 +197,7 @@ func TestListNodes_CacheHit(t *testing.T) {
 	fs := New(nil, Options{List: listFn})
 	ctx := context.Background()
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := fs.ReadDir(ctx, "dr1", "/"); err != nil {
 			t.Fatalf("listNodes: %v", err)
 		}
@@ -218,16 +218,14 @@ func TestListNodes_SingleFlight(t *testing.T) {
 	const n = 5
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range n {
+		wg.Go(func() {
 			nodes, err := fs.ReadDir(ctx, "dr1", "/")
 			if err == nil && len(nodes) != 1 {
 				err = fmt.Errorf("got %d nodes, want 1", len(nodes))
 			}
 			errs <- err
-		}()
+		})
 	}
 	<-started // the leader is inside the fetch; everyone else either joins it or hits the cache after
 	close(gate)
@@ -622,7 +620,7 @@ func TestParentNodeID_ReusesCachedListing(t *testing.T) {
 	fs := New(nil, Options{List: listFn})
 	ctx := context.Background()
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		id, err := fs.resolveFolderID(ctx, "dr1", "/sub")
 		if err != nil {
 			t.Fatalf("parentNodeID: %v", err)
@@ -1182,8 +1180,10 @@ func TestListNodes_QueuedRefreshKeepsMutationBeforeStart(t *testing.T) {
 	fs.slots = make(chan struct{}, 1)
 	fs.slots <- struct{}{} // every slot taken: the refresh queues
 	seedNodeCache(fs, map[string]*nodeCacheEntry{
-		"/": {nodes: []service.DataroomNodeInfo{{ID: "old", Name: "a", Type: "file"}},
-			fetchedAt: time.Now().Add(-2 * time.Minute)},
+		"/": {
+			nodes:     []service.DataroomNodeInfo{{ID: "old", Name: "a", Type: "file"}},
+			fetchedAt: time.Now().Add(-2 * time.Minute),
+		},
 	})
 	ctx := context.Background()
 

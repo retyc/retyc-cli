@@ -100,7 +100,7 @@ func openFile(path string, flag int) (*os.File, error) {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
 
-	return os.NewFile(uintptr(fd), path), nil //nolint:gosec // G115: a file descriptor is never negative
+	return os.NewFile(uintptr(fd), path), nil
 }
 
 func create(path string) (*os.File, error) {
@@ -1142,7 +1142,7 @@ func TestWrite_Symlink(t *testing.T) {
 // cp runs cp(1), which copies with copy_file_range (coreutils 9 and later).
 func cp(t *testing.T, src, dst string) {
 	t.Helper()
-	cmd := exec.Command("cp", src, dst) //nolint:gosec // G204: files of the test's mount
+	cmd := exec.CommandContext(t.Context(), "cp", src, dst) //nolint:gosec // G204: files of the test's mount
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("cp to %s: %v: %s", filepath.Base(dst), err, out)
 	}
@@ -1211,7 +1211,7 @@ func TestWrite_CopyIsServerSide(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.api.resetCounts()
-	fdSrc, fdWhole := int(in.Fd()), int(whole.Fd()) //nolint:gosec // G115: file descriptors
+	fdSrc, fdWhole := int(in.Fd()), int(whole.Fd())
 	if n, err := unix.CopyFileRange(fdSrc, nil, fdWhole, nil, 1<<30, 0); err != nil || n != len(big) {
 		t.Fatalf("copy_file_range of the whole file = %d, %v, want %d", n, err, len(big))
 	}
@@ -1227,7 +1227,7 @@ func TestWrite_CopyIsServerSide(t *testing.T) {
 		t.Fatal(err)
 	}
 	from := int64(testChunkSize - 10)
-	fdIn, fdOut := int(in.Fd()), int(part.Fd()) //nolint:gosec // G115: file descriptors
+	fdIn, fdOut := int(in.Fd()), int(part.Fd())
 	if n, err := unix.CopyFileRange(fdIn, &from, fdOut, nil, 100, 0); err != nil || n != 100 {
 		t.Fatalf("copy_file_range of a part = %d, %v", n, err)
 	}

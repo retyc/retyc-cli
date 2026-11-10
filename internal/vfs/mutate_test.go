@@ -714,8 +714,7 @@ func TestMutations_RateLimitCrossesUnwrapped(t *testing.T) {
 			if !carriesNoSentinel(err) {
 				t.Errorf("the rate limit was given a sentinel of vfs: %v", err)
 			}
-			var failed *CopyError
-			if errors.As(err, &failed) {
+			if failed, ok := errors.AsType[*CopyError](err); ok {
 				t.Errorf("the rate limit was wrapped in a CopyError (step %d)", failed.Step)
 			}
 			if got := api.RetryAfter(err); got != 7*time.Second {
@@ -751,7 +750,7 @@ func TestSentinelsKeepTheOriginalError(t *testing.T) {
 	}
 
 	plain := errors.New("connection reset")
-	if got := classify(plain); got != plain {
+	if got := classify(plain); !errors.Is(got, plain) {
 		t.Errorf("classify of an unrelated error = %v, want it untouched", got)
 	}
 	if classify(nil) != nil {

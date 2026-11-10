@@ -200,8 +200,10 @@ func TestFS_AddFolder(t *testing.T) {
 // Move carries the node, renamed, from one cached listing to the other.
 func TestFS_Move(t *testing.T) {
 	fs := seeded(map[string]*nodeCacheEntry{
-		"/a": {nodes: []service.DataroomNodeInfo{{ID: "f-1", Name: "doc.txt", Type: "file", Size: 9, VersionID: "v1"}},
-			fetchedAt: time.Now()},
+		"/a": {
+			nodes:     []service.DataroomNodeInfo{{ID: "f-1", Name: "doc.txt", Type: "file", Size: 9, VersionID: "v1"}},
+			fetchedAt: time.Now(),
+		},
 		"/b": {nodes: []service.DataroomNodeInfo{}, fetchedAt: time.Now()},
 	})
 

@@ -26,6 +26,7 @@ const (
 	EnvFileName = "RETYC_ENV_FILE"
 
 	// Machine account (see machine.go). Paths and identifiers, not secrets.
+
 	EnvMachineDirName    = "RETYC_MACHINE_DIR"
 	EnvClientIDName      = "RETYC_CLIENT_ID"
 	EnvClientKeyFileName = "RETYC_CLIENT_KEY_FILE"

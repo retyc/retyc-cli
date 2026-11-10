@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -83,7 +83,7 @@ func (c *Client) AdminListTransfers(
 	ctx context.Context, status, userID string, page int,
 ) (*AdminPage[AdminTransfer], error) {
 	q := url.Values{}
-	q.Set("page", fmt.Sprint(page))
+	q.Set("page", strconv.Itoa(page))
 	q.Set("size", "100")
 	if status != "" {
 		q.Set("status", status)

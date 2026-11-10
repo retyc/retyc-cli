@@ -10,11 +10,12 @@ import (
 	"sync"
 
 	"filippo.io/age"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/retyc/retyc-cli/internal/ui"
-	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -127,9 +128,7 @@ readLoop:
 			}
 
 			id, enc, sz := chunkID, encrypted, n
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				defer func() { <-sem }()
 				if err := uploadFn(innerCtx, id, enc); err != nil {
 					setErr(fmt.Errorf("uploading chunk %d: %w", id, err))
@@ -139,7 +138,7 @@ readLoop:
 				if progress != nil {
 					progress(displayName, sz, fileSize)
 				}
-			}()
+			})
 		}
 
 		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
@@ -384,10 +383,8 @@ func StreamDownloadChunks(
 	slots := make(chan struct{}, window)
 
 	var wg sync.WaitGroup
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range concurrency {
+		wg.Go(func() {
 			for id := range jobs {
 				encrypted, err := downloadFn(ctx, id)
 				if err != nil {
@@ -405,12 +402,12 @@ func StreamDownloadChunks(
 				}
 				results <- chunkResult{id: id, data: plaintext}
 			}
-		}()
+		})
 	}
 
 	go func() {
 		defer close(jobs)
-		for i := 0; i < chunkCount; i++ {
+		for i := range chunkCount {
 			// Acquire a window slot before dispatching so production cannot run
 			// arbitrarily far ahead of the in-order writer. The slot at index
 			// nextWrite is always already dispatched, so this never deadlocks.
@@ -526,7 +523,7 @@ func DownloadChunks(
 	}
 
 	//nolint:gosec // G304: dest is validated outputDir + sanitised base filename
-	out, err := os.OpenFile(partDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	out, err := os.OpenFile(partDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}

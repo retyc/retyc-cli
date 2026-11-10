@@ -1,4 +1,5 @@
-// Package api — transfer-related types and API methods.
+// Transfer-related types and API methods.
+
 package api
 
 import (

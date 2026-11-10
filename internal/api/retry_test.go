@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
@@ -280,11 +281,9 @@ func TestRetry_GateSharesOneWindow(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, n)
 	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			errs[i] = client.Get(context.Background(), "/x", nil)
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -548,10 +547,11 @@ func TestHTTPError_RateLimited(t *testing.T) {
 func TestBackoff_DoublesUpToTheCap(t *testing.T) {
 	rt := newRetryTransport(nil, time.Minute, 20, false)
 	rt.jitter = func(d time.Duration) time.Duration { return d }
-	want := []time.Duration{200, 400, 800, 1600, 3200, 5000, 5000}
+	ms := time.Millisecond
+	want := []time.Duration{200 * ms, 400 * ms, 800 * ms, 1600 * ms, 3200 * ms, 5000 * ms, 5000 * ms}
 	for i, w := range want {
-		if got := rt.backoff(i + 1); got != w*time.Millisecond {
-			t.Errorf("backoff(%d) = %s, want %s", i+1, got, w*time.Millisecond)
+		if got := rt.backoff(i + 1); got != w {
+			t.Errorf("backoff(%d) = %s, want %s", i+1, got, w)
 		}
 	}
 	if got := rt.backoff(80); got != retryBackoffMax {
@@ -871,8 +871,7 @@ func TestRetry_BodyThatCannotBeReplayed(t *testing.T) {
 	if hits.Load() != 1 || len(clock.sleeps) != 0 {
 		t.Errorf("hits = %d, sleeps = %d; want 1 and 0", hits.Load(), len(clock.sleeps))
 	}
-	var rl *RateLimitError
-	if errors.As(err, &rl) {
+	if _, ok := errors.AsType[*RateLimitError](err); ok {
 		t.Errorf("a request that is not replayed must not report retries: %v", err)
 	}
 	var httpErr *HTTPError

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -116,9 +117,9 @@ func (c *Client) AdminListMembers(
 	ctx context.Context, search string, includeServiceAccounts bool, page int,
 ) (*AdminPage[AdminMember], error) {
 	q := url.Values{}
-	q.Set("page", fmt.Sprint(page))
+	q.Set("page", strconv.Itoa(page))
 	q.Set("size", "100")
-	q.Set("exclude_service_accounts", fmt.Sprint(!includeServiceAccounts))
+	q.Set("exclude_service_accounts", strconv.FormatBool(!includeServiceAccounts))
 	if search != "" {
 		q.Set("search", search)
 	}

@@ -1,6 +1,7 @@
-// Package cmd — management of the organization's machine accounts by an
+// Management of the organization's machine accounts by an
 // organization admin, with the admin's login (not an organization API key:
 // these routes are not on /v1).
+
 package cmd
 
 import (

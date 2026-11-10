@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/spf13/viper"
+
+	"github.com/retyc/retyc-cli/internal/config"
 )
 
 // isolateConfig resets the configuration state that initConfig and
@@ -104,20 +105,6 @@ func TestConfigEntries_Sorted(t *testing.T) {
 	}
 }
 
-// entryFor returns the configEntries entry for key, failing the test when the
-// key is absent.
-func entryFor(t *testing.T, key string) configEntryJSON {
-	t.Helper()
-	for _, e := range configEntries() {
-		if e.Key == key {
-			return e
-		}
-	}
-	t.Fatalf("configEntries() has no %q entry", key)
-
-	return configEntryJSON{}
-}
-
 // TestConfigFileLoaded_UnreadableFile is the regression test for `config path`
 // reporting a file it never read: viper.ConfigFileUsed() returns the path
 // requested with --config even when reading it failed.
@@ -141,7 +128,7 @@ func TestConfigFileLoaded_MalformedFile(t *testing.T) {
 	isolateConfig(t)
 	dir := t.TempDir()
 	t.Setenv(config.EnvConfigDirName, dir)
-	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("api:\n  base_url: [\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("api:\n  base_url: [\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -171,7 +158,7 @@ func TestConfigFileLoaded_NoFileInSearchPath(t *testing.T) {
 func TestConfigFileLoaded_ReadableFile(t *testing.T) {
 	isolateConfig(t)
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("api:\n  base_url: https://api.file.example\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("api:\n  base_url: https://api.file.example\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	cfgFile = path
@@ -190,7 +177,7 @@ func TestEffectiveValue_JoinsYAMLLists(t *testing.T) {
 	isolateConfig(t)
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	yaml := "mount:\n  metrics:\n    labels:\n      - identity=abc\n      - pod=x\n"
-	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	cfgFile = path

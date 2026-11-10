@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
 	"mime"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
@@ -132,7 +134,7 @@ func SendTransfer(
 		return nil, fmt.Errorf("fetching encryption key: %w", err)
 	}
 	if userKey == nil {
-		return nil, fmt.Errorf("no active encryption key - set up your key in the web interface first")
+		return nil, errors.New("no active encryption key - set up your key in the web interface first")
 	}
 
 	passphrase := p.Passphrase
@@ -175,7 +177,7 @@ func SendTransfer(
 	}
 
 	// Best-effort cleanup if anything fails after share creation.
-	var shareID = share.ID
+	shareID := share.ID
 	defer func() {
 		if err != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -191,7 +193,7 @@ func SendTransfer(
 	needPassphrase := !allHaveKeys || p.Passphrase != "" || p.GeneratePassphrase
 
 	if needPassphrase && passphrase == "" {
-		err = fmt.Errorf("transfer passphrase required but not provided; it must be provided or generated")
+		err = errors.New("transfer passphrase required but not provided; it must be provided or generated")
 
 		return nil, err
 	}
@@ -327,7 +329,7 @@ func DownloadTransfer(
 	details := dr.v
 
 	if details.SessionPrivateKeyEnc == nil && details.SessionPrivateKeyEncForPassphrase == nil {
-		return nil, fmt.Errorf("transfer not yet completed - no encrypted content available")
+		return nil, errors.New("transfer not yet completed - no encrypted content available")
 	}
 
 	var sessionIdentity *age.HybridIdentity
@@ -348,14 +350,14 @@ func DownloadTransfer(
 		sessionIdentity = si
 	} else {
 		if details.EphemeralPrivateKeyEnc == nil || details.SessionPrivateKeyEncForPassphrase == nil {
-			return nil, fmt.Errorf("no decryption path available - neither user key nor passphrase data found")
+			return nil, errors.New("no decryption path available - neither user key nor passphrase data found")
 		}
 		if p.Passphrase == "" {
-			return nil, fmt.Errorf("transfer passphrase required but not provided")
+			return nil, errors.New("transfer passphrase required but not provided")
 		}
 		ephPrivKey, err := decryptKeyWithPassphrase(ctx, "transfer", *details.EphemeralPrivateKeyEnc, p.Passphrase)
 		if err != nil {
-			return nil, fmt.Errorf("wrong transfer passphrase")
+			return nil, errors.New("wrong transfer passphrase")
 		}
 		ephIdentity, err := crypto.ParseIdentity(ephPrivKey)
 		if err != nil {
@@ -384,7 +386,7 @@ func DownloadTransfer(
 		}
 	}
 	if len(allFiles) == 0 {
-		return nil, fmt.Errorf("no files in this transfer")
+		return nil, errors.New("no files in this transfer")
 	}
 
 	type decryptedFile struct {
@@ -419,7 +421,7 @@ func DownloadTransfer(
 			}
 		}
 	}
-	if err := os.MkdirAll(outputDir, 0700); err != nil {
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating output directory: %w", err)
 	}
 
@@ -521,11 +523,11 @@ func GenerateTransferPassphrase() (string, error) {
 // Uses crypto/rand.Int to avoid modular bias.
 func RandomLetters(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz"
-	max := big.NewInt(int64(len(letters)))
+	bound := big.NewInt(int64(len(letters)))
 	b := make([]byte, n)
 
 	for i := range b {
-		idx, err := cryptorand.Int(cryptorand.Reader, max)
+		idx, err := cryptorand.Int(cryptorand.Reader, bound)
 		if err != nil {
 			b[i] = 'a' // unreachable in practice
 

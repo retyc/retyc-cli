@@ -71,8 +71,8 @@ func wireNodes() map[string]metastore.Node {
 // the node of an entry.
 func TestWire_RoundTrip(t *testing.T) {
 	for name, n := range wireNodes() {
-		clear := n
-		clear.Sealed = nil
+		inClear := n
+		inClear.Sealed = nil
 		sealed := metastore.Node{
 			ID: n.ID, ParentID: n.ParentID, Type: n.Type, VersionID: n.VersionID, ChunkCount: n.ChunkCount,
 			Size: n.Size, Mode: n.Mode, ModeSet: n.ModeSet, ModTime: n.ModTime, CreatedAt: n.CreatedAt, Sealed: n.Sealed,
@@ -80,7 +80,7 @@ func TestWire_RoundTrip(t *testing.T) {
 		for mode, c := range map[string]struct {
 			store *Store
 			want  metastore.Node
-		}{"clear": {clearWire, clear}, "sealed": {sealedWire, sealed}} {
+		}{"clear": {clearWire, inClear}, "sealed": {sealedWire, sealed}} {
 			value, ok := c.store.encodeNode(&n)
 			if !ok {
 				t.Fatalf("%s, %s: not encoded", name, mode)
@@ -122,7 +122,7 @@ func TestWire_TimesAndSize(t *testing.T) {
 	if !ok || !got.ModTime.Equal(n.ModTime) || got.ModTime.Location() != time.UTC {
 		t.Errorf("ModTime %v read as %v", n.ModTime, got.ModTime)
 	}
-	raw, err := json.Marshal(n)
+	raw, err := json.Marshal(n) //nolint:musttag // only a size baseline
 	must(t, err)
 	// Three UUIDs (51 bytes), two dates, a name and a MIME type of 25 bytes.
 	if len(value) > 110 || len(value)*3 > len(raw) {
@@ -255,11 +255,11 @@ func TestReader_Uvarint(t *testing.T) {
 // Describe tells a value without opening it, and why one is not read.
 func TestDescribe(t *testing.T) {
 	n := wireNodes()["file"]
-	clear, _ := clearWire.encodeNode(&n)
+	inClear, _ := clearWire.encodeNode(&n)
 	sealed, _ := sealedWire.encodeNode(&n)
 	field := nodePrefix + "h"
 
-	got, err := Describe(KindListing, field, []byte(clear))
+	got, err := Describe(KindListing, field, []byte(inClear))
 	must(t, err)
 	raw, err := json.Marshal(got)
 	must(t, err)
@@ -267,7 +267,7 @@ func TestDescribe(t *testing.T) {
 		`"parent_id":"ffffffff-ffff-4fff-bfff-ffffffffffff","type":"file","name":"report.pdf",` +
 		`"mime":"application/pdf","version_id":"00000000-0000-0000-0000-000000000000",` +
 		`"chunks":3,"size":20971520,"mode":"0644","mtime":"2026-10-13T08:30:12.123456789Z",` +
-		`"ctime":"2026-10-01T00:00:00.123456Z","bytes":` + itoa(len(clear)-2) + `}`
+		`"ctime":"2026-10-01T00:00:00.123456Z","bytes":` + itoa(len(inClear)-2) + `}`
 	if string(raw) != want {
 		t.Errorf("clear node described as\n%s\nwant\n%s", raw, want)
 	}
@@ -295,7 +295,7 @@ func TestDescribe(t *testing.T) {
 		!e.Node.Sealed || e.Node.ID != n.ID || e.Node.Unread != 0 {
 		t.Errorf("positive entry described as %+v, %v", got, err)
 	}
-	later := frame(append([]byte(fieldsOf(t, clear)), "later"...))
+	later := frame(append([]byte(fieldsOf(t, inClear)), "later"...))
 	if got, err := Describe(KindListing, field, []byte(later)); err != nil || got.(*NodeDescription).Unread != 5 {
 		t.Errorf("node with a later field described as %+v, %v", got, err)
 	}
@@ -315,10 +315,10 @@ func TestDescribe(t *testing.T) {
 		kind, field, value, says string
 	}{
 		"former JSON":        {KindListing, field, `{"v":1,"name":"secret-name"}`, "first byte is 0x7b"},
-		"another version":    {KindListing, field, "\x02" + clear[1:], "first byte is 0x02"},
-		"cut node":           {KindListing, field, clear[:len(clear)-1], "does not parse"},
+		"another version":    {KindListing, field, "\x02" + inClear[1:], "first byte is 0x02"},
+		"cut node":           {KindListing, field, inClear[:len(inClear)-1], "does not parse"},
 		"empty node":         {KindListing, field, "", "an empty node"},
-		"node as an entry":   {KindEntries, "h", clear, "entry of"},
+		"node as an entry":   {KindEntries, "h", inClear, "entry of"},
 		"cut entry":          {KindEntries, "h", positive[:40], "does not parse"},
 		"meta of a later":    {KindListing, metaField, "2:60000", "listing meta"},
 		"generation of text": {KindGeneration, "", "secret-name", "generation of 11 bytes"},
@@ -429,7 +429,9 @@ func FuzzDecodeNode(f *testing.F) {
 
 		return false
 	}
-	again := func(t *testing.T, n metastore.Node, sealed bool) (metastore.Node, bool) {
+	again := func(t *testing.T, n metastore.Node, sealed bool) metastore.Node {
+		t.Helper()
+
 		s := clearWire
 		if sealed {
 			s = sealedWire
@@ -443,7 +445,7 @@ func FuzzDecodeNode(f *testing.F) {
 			t.Fatalf("a node written is not read back: ok=%v sealed=%v", ok, gotSealed)
 		}
 
-		return got, true
+		return got
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		for _, kind := range []string{KindListing, KindEntries, KindGeneration, KindListingToken, KindEntryToken} {
@@ -460,7 +462,7 @@ func FuzzDecodeNode(f *testing.F) {
 				t.Fatal("a node without a name was read")
 			}
 			if !sealed || !armoredLike(&n) {
-				if got, _ := again(t, n, sealed); !reflect.DeepEqual(got, n) {
+				if got := again(t, n, sealed); !reflect.DeepEqual(got, n) {
 					t.Fatalf("read\n%+v\nthen written and read as\n%+v", n, got)
 				}
 			}
@@ -470,7 +472,7 @@ func FuzzDecodeNode(f *testing.F) {
 				t.Fatalf("an entry with the lifetime %d was read", life)
 			}
 			if n != nil && (!sealed || !armoredLike(n)) {
-				if got, _ := again(t, *n, sealed); !reflect.DeepEqual(got, *n) {
+				if got := again(t, *n, sealed); !reflect.DeepEqual(got, *n) {
 					t.Fatalf("entry: read\n%+v\nthen written and read as\n%+v", *n, got)
 				}
 			}

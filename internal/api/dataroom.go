@@ -1,4 +1,5 @@
-// Package api — dataroom-related types and API methods.
+// Dataroom-related types and API methods.
+
 package api
 
 import (

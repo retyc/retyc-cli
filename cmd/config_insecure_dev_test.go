@@ -22,3 +22,17 @@ func TestConfigEntries_InsecureReflectsFlag(t *testing.T) {
 		t.Errorf("insecure entry = %+v, want value \"true\"", e)
 	}
 }
+
+// entryFor returns the configEntries entry for key, failing the test when the
+// key is absent.
+func entryFor(t *testing.T, key string) configEntryJSON {
+	t.Helper()
+	for _, e := range configEntries() {
+		if e.Key == key {
+			return e
+		}
+	}
+	t.Fatalf("configEntries() has no %q entry", key)
+
+	return configEntryJSON{}
+}

@@ -3,8 +3,9 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/spf13/cobra"
+
+	"github.com/retyc/retyc-cli/internal/config"
 )
 
 // Version is set at build time via -ldflags.

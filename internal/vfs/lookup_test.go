@@ -74,6 +74,8 @@ type treeAPI struct {
 }
 
 func newTreeAPI(t *testing.T) *treeAPI {
+	t.Helper()
+
 	return &treeAPI{t: t, children: make(map[string]map[string]fakeNode), gone: make(map[string]bool)}
 }
 
@@ -396,7 +398,7 @@ func TestLookup_ColdDeepPathIsOneLookupPerComponent(t *testing.T) {
 	// A file found by name carries what a listing would say of it.
 	f := mustLookup(t, fs, "/a", "x.txt", "f-x")
 	if f.Type != TypeFile || f.VersionID != "v-f-x" || f.Size != 5 || f.ChunkCount != 1 ||
-		f.Mode != 0640 || f.ParentID != "d-a" || f.ModTime.IsZero() || f.CreatedAt.Equal(f.ModTime) {
+		f.Mode != 0o640 || f.ParentID != "d-a" || f.ModTime.IsZero() || f.CreatedAt.Equal(f.ModTime) {
 		t.Errorf("file = %+v, want its version, mode, parent and both times", f)
 	}
 }
@@ -745,6 +747,7 @@ func TestEntries_DroppedWhenTheListingIsCached(t *testing.T) {
 // one. NegativeTTL and TTL are a minute: only the drop can make these pass.
 func TestEntries_DroppedByEveryLocalMutation(t *testing.T) {
 	ctx := context.Background()
+	//nolint:thelper // table cases, not helpers
 	cases := map[string]struct {
 		// before warms the entries the mutation must drop.
 		before func(t *testing.T, fs *FS)
@@ -842,10 +845,10 @@ func TestEntries_DroppedByEveryLocalMutation(t *testing.T) {
 		},
 		"Chmod": {
 			before: func(t *testing.T, fs *FS) { mustLookup(t, fs, "/a", "x.txt", "f-x") },
-			mutate: func(fs *FS) error { return fs.Chmod(ctx, "dr1", "/a/x.txt", 0600) },
+			mutate: func(fs *FS) error { return fs.Chmod(ctx, "dr1", "/a/x.txt", 0o600) },
 			apply:  func(a *treeAPI) { a.put("d-a", "x.txt", fakeNode{id: "f-x", kind: api.NodeTypeFile, mode: "0600"}) },
 			after: func(t *testing.T, fs *FS) {
-				if n := mustLookup(t, fs, "/a", "x.txt", "f-x"); n.Mode != 0600 {
+				if n := mustLookup(t, fs, "/a", "x.txt", "f-x"); n.Mode != 0o600 {
 					t.Errorf("mode = %v, want the one just stored", n.Mode)
 				}
 			},
@@ -1107,11 +1110,13 @@ func TestLookup_SpansCarryNoName(t *testing.T) {
 		}
 		for _, ev := range s.Events {
 			label := ev.Name
+			var labelSb1110 strings.Builder
 			for _, kv := range ev.Attributes {
 				if kv.Key == "retyc.cache.name" || kv.Key == "retyc.cache.hit" {
-					label += " " + kv.Value.String()
+					labelSb1110.WriteString(" " + kv.Value.String())
 				}
 			}
+			label += labelSb1110.String()
 			events = append(events, label)
 		}
 	}

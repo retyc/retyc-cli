@@ -422,7 +422,7 @@ func (c *Client) doHeader(req *http.Request, dst any) (http.Header, error) {
 		fmt.Fprintf(os.Stderr, "> %s %s%s\n", req.Method, req.URL, ProxyLabel(req))
 	}
 
-	resp, err := c.httpClient.Do(req) //nolint:gosec // G704: intentional outbound HTTP request from API client
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, unwrapRateLimit(err)
 	}
@@ -529,8 +529,7 @@ func (e *HTTPError) Detail() string {
 // err is not an API refusal or carries no string detail. Branch on ErrorCode
 // first: the detail is only the fallback of an API that predates the codes.
 func ErrorDetail(err error) string {
-	var httpErr *HTTPError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[*HTTPError](err); ok {
 		return httpErr.Detail()
 	}
 

@@ -27,7 +27,7 @@ func TestServeUntilDrained_WaitsForRequestsAndLocks(t *testing.T) {
 	fs := newLot2FS(t, fake)
 	handler, mirror := newLockedHandler(fs)
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", ""))
+	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/locked.txt", ""))
 	if mirror.held() != 1 {
 		t.Fatalf("held = %d, want the lock taken", mirror.held())
 	}
@@ -42,7 +42,7 @@ func TestServeUntilDrained_WaitsForRequestsAndLocks(t *testing.T) {
 			_, _ = io.WriteString(w, "done")
 		}),
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,13 @@ func TestServeUntilDrained_WaitsForRequestsAndLocks(t *testing.T) {
 
 	body := make(chan string, 1)
 	go func() {
-		resp, err := http.Get("http://" + ln.Addr().String() + "/")
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+ln.Addr().String()+"/", nil)
+		if err != nil {
+			body <- "error: " + err.Error()
+
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			body <- "error: " + err.Error()
 
@@ -101,7 +107,7 @@ func TestServeUntilDrained_WaitsForRequestsAndLocks(t *testing.T) {
 // shutdown path: its error is returned once the locks are released.
 func TestServeUntilDrained_ServerFailure(t *testing.T) {
 	srv := &http.Server{Handler: http.NotFoundHandler()} //nolint:gosec // G112: a test server on loopback
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +137,7 @@ func TestLockMirror_ReleasesALockGrantedLapsed(t *testing.T) {
 	fs := newLot2FS(t, fake)
 	handler, mirror := newLockedHandler(fs)
 
-	r := lockRequest("/dataroom/DR/locked.txt", "")
+	r := lockRequest(t, "/dataroom/DR/locked.txt", "")
 	r.Header.Set("Timeout", "Second-0")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
@@ -184,7 +190,7 @@ func TestHandleCopy_DestinationLookupFailure(t *testing.T) {
 			&vfs.Listing{Nodes: root, FetchedAt: time.Now()})
 
 		w := httptest.NewRecorder()
-		fs.handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/sub/copy.txt", ""))
+		fs.handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", "/dataroom/DR/sub/copy.txt", ""))
 		if w.Code != status {
 			t.Errorf("%d: COPY status = %d (%s)", status, w.Code, strings.TrimSpace(w.Body.String()))
 		}

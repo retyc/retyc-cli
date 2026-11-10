@@ -156,7 +156,7 @@ func authTestHandler() http.Handler {
 
 func TestBasicAuthMiddleware_NoCredentials(t *testing.T) {
 	rec := httptest.NewRecorder()
-	authTestHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	authTestHandler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -167,7 +167,7 @@ func TestBasicAuthMiddleware_NoCredentials(t *testing.T) {
 }
 
 func TestBasicAuthMiddleware_WrongPassword(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.SetBasicAuth("retyc", "wrong")
 	rec := httptest.NewRecorder()
 	authTestHandler().ServeHTTP(rec, req)
@@ -178,7 +178,7 @@ func TestBasicAuthMiddleware_WrongPassword(t *testing.T) {
 }
 
 func TestBasicAuthMiddleware_WrongUser(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.SetBasicAuth("admin", "s3cret")
 	rec := httptest.NewRecorder()
 	authTestHandler().ServeHTTP(rec, req)
@@ -189,7 +189,7 @@ func TestBasicAuthMiddleware_WrongUser(t *testing.T) {
 }
 
 func TestBasicAuthMiddleware_ValidCredentials(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	req.SetBasicAuth("retyc", "s3cret")
 	rec := httptest.NewRecorder()
 	authTestHandler().ServeHTTP(rec, req)
@@ -554,7 +554,7 @@ func TestDirHandle_LazyLoad(t *testing.T) {
 	if err != nil || len(rest) != 1 || rest[0].Name() != "b" {
 		t.Fatalf("Readdir(0) = (%v, %v), want [b]", rest, err)
 	}
-	if _, err := h.Readdir(1); err != io.EOF {
+	if _, err := h.Readdir(1); !errors.Is(err, io.EOF) {
 		t.Errorf("Readdir(1) at end = %v, want io.EOF", err)
 	}
 	if calls != 1 {
@@ -922,8 +922,10 @@ func newSubtreeTestFS(t *testing.T) *webdavFS {
 	fs.tree.SeedDatarooms([]vfs.Dataroom{{ID: "dr1", Title: "DR"}})
 	fs.tree.SeedSession("dr1", &service.DataroomSession{Identity: identity, PublicKey: pub})
 	setNodeCache(fs, map[string]*nodeCacheEntry{})
-	for _, uri := range []string{"retyc://dr1/x", "retyc://dr1/x/sub", "retyc://dr1/xy",
-		"retyc://dr1/y", "retyc://dr1/y/old"} {
+	for _, uri := range []string{
+		"retyc://dr1/x", "retyc://dr1/x/sub", "retyc://dr1/xy",
+		"retyc://dr1/y", "retyc://dr1/y/old",
+	} {
 		putNodeCache(fs, uri, &nodeCacheEntry{fetchedAt: time.Now()})
 	}
 	// The root listing names /x, as the PROPFIND preceding a DELETE would have.

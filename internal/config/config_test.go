@@ -111,7 +111,7 @@ func TestSaveToken_FilePermissions(t *testing.T) {
 		t.Fatalf("os.Stat() error = %v", err)
 	}
 
-	if perm := info.Mode().Perm(); perm != 0600 {
+	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("token.json permissions = %04o, want 0600", perm)
 	}
 }
@@ -133,7 +133,7 @@ func TestLoadToken_CorruptJSON(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("RETYC_CONFIG_DIR", dir)
 
-	if err := os.WriteFile(filepath.Join(dir, "token.json"), []byte("not valid json {{{"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "token.json"), []byte("not valid json {{{"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -172,13 +172,13 @@ func TestConfigDir_EnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("RETYC_CONFIG_DIR", dir)
 
-	got, err := ConfigDir()
+	got, err := Dir()
 	if err != nil {
-		t.Fatalf("ConfigDir() error = %v", err)
+		t.Fatalf("Dir() error = %v", err)
 	}
 
 	if got != dir {
-		t.Errorf("ConfigDir() = %q, want %q", got, dir)
+		t.Errorf("Dir() = %q, want %q", got, dir)
 	}
 }
 
@@ -918,6 +918,7 @@ func TestParseMountMode(t *testing.T) {
 // mount.local_files can be emptied from each source: an empty list in the
 // file, and the word "none" where an empty value cannot be written.
 func TestMountLocalFiles_Emptied(t *testing.T) {
+	//nolint:thelper // table cases, not helpers
 	for label, set := range map[string]func(t *testing.T){
 		"an empty list in the file": func(*testing.T) { viper.Set("mount.local_files", []string{}) },
 		"none in the file":          func(*testing.T) { viper.Set("mount.local_files", []string{"none"}) },

@@ -101,8 +101,10 @@ func Enroll(ctx context.Context, client *api.Client, p EnrollParams, emit func(E
 		if err := requireMachineKeys(p.Dir); err != nil {
 			return err
 		}
-		emit(EnrollEvent{Kind: EnrollApproved, MachineID: info.MachineID,
-			OrganizationID: info.OrganizationID, ClientID: info.ClientID})
+		emit(EnrollEvent{
+			Kind: EnrollApproved, MachineID: info.MachineID,
+			OrganizationID: info.OrganizationID, ClientID: info.ClientID,
+		})
 
 		return nil
 	}
@@ -131,8 +133,10 @@ func Enroll(ctx context.Context, client *api.Client, p EnrollParams, emit func(E
 		}
 	}
 
-	req := api.EnrollmentRequest{OrganizationID: p.OrganizationID, SigningJWK: jwk,
-		AgeRecipient: ageRecipient, DisplayName: p.DisplayName, ClusterUID: p.ClusterUID}
+	req := api.EnrollmentRequest{
+		OrganizationID: p.OrganizationID, SigningJWK: jwk,
+		AgeRecipient: ageRecipient, DisplayName: p.DisplayName, ClusterUID: p.ClusterUID,
+	}
 	enr, err := client.CreateEnrollment(ctx, req)
 	if err != nil {
 		return wrapCreateError(err)
@@ -144,8 +148,10 @@ func Enroll(ctx context.Context, client *api.Client, p EnrollParams, emit func(E
 	if err := writeEnrollmentFile(p.Dir, enr.EnrollmentID, p.OrganizationID, expires); err != nil {
 		return err
 	}
-	e.announce(EnrollEvent{Kind: EnrollPending, EnrollmentID: enr.EnrollmentID,
-		ApprovalURI: enr.ApprovalURI, ExpiresAt: expires})
+	e.announce(EnrollEvent{
+		Kind: EnrollPending, EnrollmentID: enr.EnrollmentID,
+		ApprovalURI: enr.ApprovalURI, ExpiresAt: expires,
+	})
 
 	st, err := e.wait(ctx, enr.EnrollmentID, expires, enr.Interval)
 	if err != nil {
@@ -252,8 +258,10 @@ func (e *enroller) approve(st *api.EnrollmentStatus) error {
 		return fmt.Errorf("%w: the approval is for another organization than %s",
 			config.ErrMachineConfig, e.p.OrganizationID)
 	}
-	info := config.MachineInfo{Version: enrollFileVersion, ClientID: *st.ClientID,
-		TokenEndpoint: *st.TokenEndpoint, OrganizationID: e.p.OrganizationID}
+	info := config.MachineInfo{
+		Version: enrollFileVersion, ClientID: *st.ClientID,
+		TokenEndpoint: *st.TokenEndpoint, OrganizationID: e.p.OrganizationID,
+	}
 	if st.MachineID != nil {
 		info.MachineID = *st.MachineID
 	}
@@ -267,8 +275,10 @@ func (e *enroller) approve(st *api.EnrollmentStatus) error {
 	if err := config.WriteMachineFile(e.p.Dir, config.MachineFile, append(data, '\n')); err != nil {
 		return err
 	}
-	e.emit(EnrollEvent{Kind: EnrollApproved, MachineID: info.MachineID,
-		OrganizationID: info.OrganizationID, ClientID: info.ClientID})
+	e.emit(EnrollEvent{
+		Kind: EnrollApproved, MachineID: info.MachineID,
+		OrganizationID: info.OrganizationID, ClientID: info.ClientID,
+	})
 
 	return nil
 }
@@ -279,8 +289,7 @@ func transientPollError(err error) bool {
 	if errors.Is(err, api.ErrRateLimited) {
 		return true
 	}
-	var httpErr *api.HTTPError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[*api.HTTPError](err); ok {
 		return httpErr.Status >= http.StatusInternalServerError
 	}
 
@@ -305,8 +314,10 @@ func wrapCreateError(err error) error {
 
 // writeEnrollmentFile (re)writes enrollment.json atomically.
 func writeEnrollmentFile(dir, id, org string, expires time.Time) error {
-	data, err := json.MarshalIndent(config.EnrollmentInfo{Version: enrollFileVersion,
-		EnrollmentID: id, OrganizationID: org, ExpiresAt: expires}, "", "  ")
+	data, err := json.MarshalIndent(config.EnrollmentInfo{
+		Version:      enrollFileVersion,
+		EnrollmentID: id, OrganizationID: org, ExpiresAt: expires,
+	}, "", "  ")
 	if err != nil {
 		return err
 	}

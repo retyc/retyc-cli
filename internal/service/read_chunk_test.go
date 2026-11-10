@@ -9,12 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/crypto"
-	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"golang.org/x/oauth2"
+
+	"github.com/retyc/retyc-cli/internal/api"
+	"github.com/retyc/retyc-cli/internal/crypto"
+	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 )
 
 // TestReadDataroomChunk reads one chunk by index: the route of that chunk

@@ -48,6 +48,8 @@ func linkRefresh(ctx context.Context, refresh trace.SpanContext) {
 // request had waited for it. A trace of its own keeps the request's duration
 // honest, and the link still leads from one to the other. cache is the
 // retyc.cache.name of the entry (nodes, datarooms), never a path or a title.
+//
+//nolint:spancheck // the caller ends it
 func startRefreshSpan(ctx context.Context, link trace.Link, cache string) (context.Context, trace.Span) {
 	return telemetry.Tracer().Start(ctx, "cache.refresh",
 		trace.WithNewRoot(),

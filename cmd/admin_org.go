@@ -1,14 +1,16 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/ui"
-	"github.com/spf13/cobra"
 )
 
 var adminOrgCmd = &cobra.Command{
@@ -92,7 +94,7 @@ var adminOrgUpdateCmd = &cobra.Command{
 			patch.APIKeyIPRestrictionEnabled = &v
 		}
 		if patch.Name == nil && patch.DataroomEventRetentionDays == nil && patch.APIKeyIPRestrictionEnabled == nil {
-			return fmt.Errorf("nothing to update: set at least one of --name, --event-retention-days, --api-key-ip-restriction")
+			return errors.New("nothing to update: set at least one of --name, --event-retention-days, --api-key-ip-restriction")
 		}
 
 		_, client, err := newAdminClient()

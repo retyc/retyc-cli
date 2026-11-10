@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -73,7 +74,7 @@ type AdminDataroomNode struct {
 // optionally filtered by owner user ID.
 func (c *Client) AdminListDatarooms(ctx context.Context, userID string, page int) (*AdminPage[AdminDataroom], error) {
 	q := url.Values{}
-	q.Set("page", fmt.Sprint(page))
+	q.Set("page", strconv.Itoa(page))
 	q.Set("size", "100")
 	if userID != "" {
 		q.Set("user_id", userID)

@@ -7,11 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/telemetry"
 	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 	"github.com/retyc/retyc-cli/internal/vfs"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 const sentinel = "SENTINEL-do-not-export"

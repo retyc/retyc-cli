@@ -8,9 +8,10 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/retyc/retyc-cli/internal/config"
 )
 
 // secretKeys lists the configuration keys whose value must never be printed.
@@ -33,7 +34,7 @@ var configPathCmd = &cobra.Command{
 	Use:         "path",
 	Short:       "Print the configuration file locations",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dir, err := config.ConfigDir()
+		dir, err := config.Dir()
 		if err != nil {
 			return fmt.Errorf("resolving config directory: %w", err)
 		}

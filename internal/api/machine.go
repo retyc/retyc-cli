@@ -1,5 +1,6 @@
-// Package api — machine account enrollment routes (private surface,
+// Machine account enrollment routes (private surface,
 // anonymous: the caller has no token yet).
+
 package api
 
 import (

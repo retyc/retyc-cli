@@ -78,7 +78,7 @@ func (s *createServer) handler(w http.ResponseWriter, r *http.Request) {
 }
 
 // create runs CreateDataroom against s and returns what it wrote as warnings.
-func (s *createServer) create(t *testing.T) (*CreateDataroomResult, string, error) {
+func (s *createServer) create(t *testing.T) (string, error) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(s.handler))
 	t.Cleanup(srv.Close)
@@ -89,9 +89,9 @@ func (s *createServer) create(t *testing.T) (*CreateDataroomResult, string, erro
 	old := warnWriter
 	warnWriter = &buf
 	t.Cleanup(func() { warnWriter = old })
-	res, err := CreateDataroom(context.Background(), nil, client, "T", api.DataroomOptions{}, nil)
+	_, err := CreateDataroom(context.Background(), nil, client, "T", api.DataroomOptions{}, nil)
 
-	return res, buf.String(), err
+	return buf.String(), err
 }
 
 func machineModeEnv(t *testing.T) {
@@ -120,7 +120,7 @@ func TestCreateDataroomMachineRecipients(t *testing.T) {
 	machine, org, other := mustKeyPair(t), mustKeyPair(t), mustKeyPair(t)
 	s := &createServer{t: t, userKey: machine, orgKey: org}
 
-	_, warn, err := s.create(t)
+	warn, err := s.create(t)
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
 	}
@@ -148,7 +148,7 @@ func TestCreateDataroomMachineUnreadableOrgKeyFails(t *testing.T) {
 	machineModeEnv(t)
 	s := &createServer{t: t, userKey: mustKeyPair(t), orgKey: mustKeyPair(t), saStatus: http.StatusInternalServerError}
 
-	_, _, err := s.create(t)
+	_, err := s.create(t)
 	if err == nil || !strings.Contains(err.Error(), "reading the organization key") {
 		t.Fatalf("CreateDataroom() error = %v, want reading the organization key", err)
 	}
@@ -164,7 +164,7 @@ func TestCreateDataroomMachineNoOrganizationKey(t *testing.T) {
 	machineModeEnv(t)
 	s := &createServer{t: t, userKey: mustKeyPair(t), saStatus: http.StatusNotFound}
 
-	_, warn, err := s.create(t)
+	warn, err := s.create(t)
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
 	}
@@ -184,7 +184,7 @@ func TestCreateDataroomUserUnreadableOrgKeyContinues(t *testing.T) {
 	userModeEnv(t)
 	s := &createServer{t: t, userKey: mustKeyPair(t), orgKey: mustKeyPair(t), saStatus: http.StatusInternalServerError}
 
-	_, warn, err := s.create(t)
+	warn, err := s.create(t)
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
 	}
@@ -198,7 +198,7 @@ func TestCreateDataroomMachineNoActiveKey(t *testing.T) {
 	machineModeEnv(t)
 	s := &createServer{t: t, userKey: mustKeyPair(t), noActiveKey: true}
 
-	_, _, err := s.create(t)
+	_, err := s.create(t)
 	if !errors.Is(err, config.ErrMachineConfig) || !strings.Contains(err.Error(), "no active key") {
 		t.Fatalf("CreateDataroom() error = %v, want ErrMachineConfig", err)
 	}
@@ -212,7 +212,7 @@ func TestCreateDataroomUserNoActiveKey(t *testing.T) {
 	userModeEnv(t)
 	s := &createServer{t: t, userKey: mustKeyPair(t), noActiveKey: true}
 
-	_, _, err := s.create(t)
+	_, err := s.create(t)
 	if err == nil || errors.Is(err, config.ErrMachineConfig) || !strings.Contains(err.Error(), "web interface") {
 		t.Fatalf("CreateDataroom() error = %v, want the web interface hint", err)
 	}
@@ -226,7 +226,7 @@ func TestCreateDataroomMachineRetryBudget(t *testing.T) {
 		createCodes: []string{api.CodeMasterKeyMismatch, api.CodeMasterKeyMismatch, ""},
 	}
 
-	_, _, err := s.create(t)
+	_, err := s.create(t)
 	const want = "the organization key changed during the creation, retry"
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("CreateDataroom() error = %v, want %q", err, want)

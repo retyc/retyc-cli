@@ -24,7 +24,7 @@ var executableProp = xml.Name{Space: "http://apache.org/dav/props/", Local: "exe
 // stored mode makes it executable.
 func (h *readFileHandle) DeadProps() (map[xml.Name]webdav.Property, error) {
 	value := "F"
-	if h.info.Mode()&0111 != 0 {
+	if h.info.Mode()&0o111 != 0 {
 		value = "T"
 	}
 

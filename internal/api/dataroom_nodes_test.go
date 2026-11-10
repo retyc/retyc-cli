@@ -73,7 +73,7 @@ func TestDataroomNodeItem_Decode(t *testing.T) {
 // with fewer stored chunks than announced is incomplete.
 func TestDataroomNodeVersion_ModTimeAndComplete(t *testing.T) {
 	created := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
-	v := DataroomNodeVersion{CreatedAt: created, ChunkCount: 1, ChunkCountExpected: ptr(3)}
+	v := DataroomNodeVersion{CreatedAt: created, ChunkCount: 1, ChunkCountExpected: new(3)}
 	if !v.ModTime().Equal(created) {
 		t.Errorf("ModTime() = %v, want %v", v.ModTime(), created)
 	}

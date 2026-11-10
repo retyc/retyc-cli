@@ -114,7 +114,7 @@ func assertNoArmor(t *testing.T, what, value string, armoredPayloads, plaintexts
 // encrypts nothing, and reads hand the payloads back in binary.
 func TestSealed_StoredBinary(t *testing.T) {
 	e, bind, armored := ageEnv(t)
-	high, clear := bind(e.store(true)), bind(e.store(false))
+	high, inClear := bind(e.store(true)), bind(e.store(false))
 	ctx := context.Background()
 	const dir = "/d"
 
@@ -179,7 +179,7 @@ func TestSealed_StoredBinary(t *testing.T) {
 	}
 
 	// Both configurations read them: binary payloads, which open.
-	for mode, s := range map[string]*Store{"high": high, "clear": clear} {
+	for mode, s := range map[string]*Store{"high": high, "clear": inClear} {
 		nodes, ok := held(t, s, dir)
 		if !ok || len(nodes) != 2 {
 			t.Fatalf("%s: listing read back: %d nodes, ok=%v", mode, len(nodes), ok)
@@ -228,8 +228,8 @@ func TestSealed_StoredBinary(t *testing.T) {
 	}
 
 	// A clear store writes names and no payload; the high one reads them.
-	put(t, clear, "/c", doc)
-	fc, _ := clear.folder(dr, "/c")
+	put(t, inClear, "/c", doc)
+	fc, _ := inClear.folder(dr, "/c")
 	dh, _ := fc.hash(doc.Name)
 	v := e.raw.HGet(ctx, fc.ls, nodePrefix+dh).Val()
 	if n, sealed, ok := decodeNode(v); !ok || sealed || n.Name != doc.Name || n.Sealed != nil ||

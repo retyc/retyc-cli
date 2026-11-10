@@ -17,10 +17,10 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// ConfigDir returns the active configuration directory path.
+// Dir returns the active configuration directory path.
 // The path depends on the build mode (dev/prod) and can be overridden
 // with the RETYC_CONFIG_DIR environment variable.
-func ConfigDir() (string, error) {
+func Dir() (string, error) {
 	return configDir()
 }
 
@@ -183,8 +183,8 @@ type MountConfig struct {
 	MirrorLocks  bool          `yaml:"mirror_locks" mapstructure:"mirror_locks"`
 	// BackgroundDelete makes unlink answer before the API has deleted the
 	// file (see retycfs.Options.BackgroundDelete).
-	BackgroundDelete bool          `yaml:"background_delete" mapstructure:"background_delete"`
-	LocalFiles       []string      `yaml:"local_files" mapstructure:"local_files"`
+	BackgroundDelete bool     `yaml:"background_delete" mapstructure:"background_delete"`
+	LocalFiles       []string `yaml:"local_files" mapstructure:"local_files"`
 	// Warmup lists the whole tree in the background once mounted, to fill
 	// the listing cache; WarmupDepth bounds the levels listed, 0 for all
 	// (see vfs.FS.Warmup).
@@ -567,7 +567,7 @@ func SaveToken(tok *oauth2.Token) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 
@@ -577,7 +577,7 @@ func SaveToken(tok *oauth2.Token) error {
 	}
 
 	//nolint:gosec // G304: path is computed internally from configDir
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}

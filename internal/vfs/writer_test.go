@@ -75,6 +75,8 @@ type storeAPI struct {
 }
 
 func newStoreAPI(t *testing.T) *storeAPI {
+	t.Helper()
+
 	return &storeAPI{t: t, nodes: map[string]*storedNode{}, versions: map[string]*storedVersion{}}
 }
 
@@ -143,7 +145,7 @@ func (a *storeAPI) content(identity *age.HybridIdentity, versionID string) []byt
 		a.t.Errorf("version %s holds %d chunks, announced %d", versionID, len(v.chunks), v.expected)
 	}
 	var out []byte
-	for i := 0; i < v.expected; i++ {
+	for i := range v.expected {
 		plain, err := crypto.DecryptBinary(v.chunks[i], identity)
 		if err != nil {
 			a.t.Errorf("decrypting chunk %d of %s: %v", i, versionID, err)
@@ -754,7 +756,7 @@ func TestCreate_ExistingFile(t *testing.T) {
 			// What a listing would have told of the node.
 			created := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 			listed := first
-			listed.Mode, listed.CreatedAt = 0755, created
+			listed.Mode, listed.CreatedAt = 0o755, created
 			fs.upsert("dr1", "/", listed)
 			fs.api.reset()
 
@@ -778,7 +780,7 @@ func TestCreate_ExistingFile(t *testing.T) {
 			if len(cached) != 1 || cached[0].VersionID != second.VersionID || cached[0].Size != int64(size+3) {
 				t.Fatalf("listing = %+v, want the new version", cached)
 			}
-			if size == chunked && (cached[0].Mode != 0755 || !cached[0].CreatedAt.Equal(created)) {
+			if size == chunked && (cached[0].Mode != 0o755 || !cached[0].CreatedAt.Equal(created)) {
 				t.Errorf("listing = mode %v created %v, want those the listing held", cached[0].Mode, cached[0].CreatedAt)
 			}
 			if got := fs.readBack(t, second); !bytes.Equal(got, data) {
@@ -1226,7 +1228,7 @@ func TestSpool_NewFile(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("SpoolDir holds %d files, want 1", len(entries))
 	}
-	if info, err := entries[0].Info(); err != nil || info.Mode().Perm() != 0600 {
+	if info, err := entries[0].Info(); err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("spool file mode = %v (%v), want 0600", info.Mode().Perm(), err)
 	}
 	if strings.Contains(entries[0].Name(), "doc") {
@@ -2483,7 +2485,7 @@ func TestUpsert_UnlistedFolderKeepsAnEntry(t *testing.T) {
 		t.Fatalf("Lookup before = %v, want the negative entry", err)
 	}
 
-	node := Node{ID: "f-1", ParentID: "d-a", Name: "f.txt", Type: TypeFile, VersionID: "v-1", Mode: 0755}
+	node := Node{ID: "f-1", ParentID: "d-a", Name: "f.txt", Type: TypeFile, VersionID: "v-1", Mode: 0o755}
 	fs.upsert("dr1", "/a/", node)
 	if e, ok := cachedEntry(fs, "/a", "f.txt"); !ok || e.Node == nil || *e.Node != node {
 		t.Fatalf("entry = %+v, want the node", e)
@@ -2500,7 +2502,7 @@ func TestUpsert_UnlistedFolderKeepsAnEntry(t *testing.T) {
 
 	// A new version of the node keeps what the entry knew and it does not.
 	fs.upsert("dr1", "/a", Node{ID: "f-1", ParentID: "d-a", Name: "f.txt", Type: TypeFile, VersionID: "v-2"})
-	if e, _ := cachedEntry(fs, "/a", "f.txt"); e == nil || e.Node.VersionID != "v-2" || e.Node.Mode != 0755 {
+	if e, _ := cachedEntry(fs, "/a", "f.txt"); e == nil || e.Node.VersionID != "v-2" || e.Node.Mode != 0o755 {
 		t.Errorf("entry = %+v, want version v-2 with the mode kept", e)
 	}
 	// A folder is not a file to overwrite; a name unknown is a miss.

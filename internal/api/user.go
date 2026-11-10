@@ -1,4 +1,5 @@
-// Package api — user-related types and API methods.
+// User-related types and API methods.
+
 package api
 
 import (

@@ -495,9 +495,7 @@ func (f *file) probeLocked(ctx context.Context) *sizeProbe {
 	p := &sizeProbe{done: make(chan struct{})}
 	f.probe = p
 
-	f.wg.Add(1)
-	go func() {
-		defer f.wg.Done()
+	f.wg.Go(func() {
 		first, err := f.sizeOf(pctx, f.node.VersionID, 0)
 		stop()
 		cancel()
@@ -540,7 +538,7 @@ func (f *file) probeLocked(ctx context.Context) *sizeProbe {
 		}
 		f.mu.Unlock()
 		close(p.done)
-	}()
+	})
 
 	return p
 }
@@ -735,7 +733,6 @@ func (f *file) acquire(ctx context.Context, pos, runStart int64) (*chunk, error)
 		return nil, err
 	}
 
-	err = nil
 	select {
 	case <-c.done:
 		err = c.err
@@ -946,9 +943,7 @@ func (f *file) startLocked(ctx context.Context, slot, index int) *chunk {
 	c := &chunk{index: index, done: make(chan struct{}), cancel: cancel, used: f.clock}
 	f.slots[slot] = c
 
-	f.wg.Add(1)
-	go func() {
-		defer f.wg.Done()
+	f.wg.Go(func() {
 		data, err := f.fetch(fctx, f.node.VersionID, index)
 		stop()
 		cancel()
@@ -997,7 +992,7 @@ func (f *file) startLocked(ctx context.Context, slot, index int) *chunk {
 		c.err = err
 		f.mu.Unlock()
 		close(c.done)
-	}()
+	})
 
 	return c
 }

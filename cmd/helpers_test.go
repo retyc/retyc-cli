@@ -123,7 +123,7 @@ func TestRandomLetters_Unique(t *testing.T) {
 func TestIsOfflineToken_Valid(t *testing.T) {
 	// Manually crafted JWT with payload {"typ":"Offline"} (base64url-encoded).
 	// header.payload.signature — signature is irrelevant for this check.
-	//nolint:gosec // G101: test fixture JWT, not a real credential
+
 	jwt := "eyJhbGciOiJSUzI1NiJ9.eyJ0eXAiOiJPZmZsaW5lIn0.signature"
 
 	if !isOfflineToken(jwt) {
@@ -133,7 +133,7 @@ func TestIsOfflineToken_Valid(t *testing.T) {
 
 func TestIsOfflineToken_Regular(t *testing.T) {
 	// JWT payload {"typ":"Bearer"}.
-	//nolint:gosec // G101: test fixture JWT, not a real credential
+
 	jwt := "eyJhbGciOiJSUzI1NiJ9.eyJ0eXAiOiJCZWFyZXIifQ.signature"
 
 	if isOfflineToken(jwt) {

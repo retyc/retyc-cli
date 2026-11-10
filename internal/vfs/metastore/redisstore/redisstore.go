@@ -165,7 +165,7 @@ var (
 // discards): the store reports through its errors only.
 type silence struct{}
 
-func (silence) Printf(context.Context, string, ...interface{}) {}
+func (silence) Printf(context.Context, string, ...any) {}
 
 var silenceOnce sync.Once
 
@@ -470,10 +470,7 @@ func remaining(life time.Duration, fetchedAt time.Time) time.Duration {
 // time it was fetched at, on this process's clock. asked is taken before the
 // request leaves, so the value is never dated later than it is.
 func fetchedAt(asked time.Time, lifeMS int64, left time.Duration) time.Time {
-	age := time.Duration(lifeMS)*time.Millisecond - left
-	if age < 0 {
-		age = 0
-	}
+	age := max(time.Duration(lifeMS)*time.Millisecond-left, 0)
 
 	return asked.Add(-age)
 }

@@ -5,12 +5,13 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/schollz/progressbar/v3"
+	"github.com/spf13/cobra"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/ui"
-	"github.com/schollz/progressbar/v3"
-	"github.com/spf13/cobra"
 )
 
 var adminDataroomCmd = &cobra.Command{

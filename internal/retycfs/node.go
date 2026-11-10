@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -321,9 +322,9 @@ func (n *dirNode) path() (string, bool) {
 		dir = parent
 	}
 	var b strings.Builder
-	for i := len(names) - 1; i >= 0; i-- {
+	for _, name := range slices.Backward(names) {
 		b.WriteByte('/')
-		b.WriteString(names[i])
+		b.WriteString(name)
 	}
 	if b.Len() == 0 {
 		return "/", true

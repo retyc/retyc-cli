@@ -4,6 +4,7 @@ package retycfs
 
 import (
 	"context"
+	"maps"
 	"os"
 	"strconv"
 	"sync"
@@ -275,9 +276,7 @@ func (r *spoolRegistry) named() map[location]*openSpool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make(map[location]*openSpool, len(r.byAt))
-	for at, sp := range r.byAt {
-		out[at] = sp
-	}
+	maps.Copy(out, r.byAt)
 
 	return out
 }
@@ -821,7 +820,7 @@ func (d *driver) closeSpools() (closed <-chan struct{}) {
 			retired.Done()
 
 			if !returned {
-				<-flushed
+				<-flushed //nolint:errcheck // the flush ends; its outcome comes too late to be used
 			}
 			_ = sp.spool.Close()
 		})

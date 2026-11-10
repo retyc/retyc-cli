@@ -213,7 +213,7 @@ func TestSharedRedis_HighConfidentialityStoresNoName(t *testing.T) {
 	a.put("d-contracts", "latest-offer",
 		fakeNode{id: "l-offer", kind: api.NodeTypeSymlink, target: "offers/final-bid.pdf"})
 	shared := newSharedRedis(t, a)
-	sealed, clear := shared.instance(true), shared.instance(false)
+	sealed, inClear := shared.instance(true), shared.instance(false)
 	ctx := context.Background()
 
 	for _, p := range []string{"/", "/contracts-2026"} {
@@ -239,7 +239,7 @@ func TestSharedRedis_HighConfidentialityStoresNoName(t *testing.T) {
 		}
 	}
 
-	nodes, err := clear.ReadDir(ctx, "dr1", "/contracts-2026")
+	nodes, err := inClear.ReadDir(ctx, "dr1", "/contracts-2026")
 	if err != nil {
 		t.Fatalf("clear instance: ReadDir: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestSharedRedis_HighConfidentialityStoresNoName(t *testing.T) {
 			t.Errorf("clear instance reads the target %q", n.Target)
 		}
 	}
-	mustLookup(t, clear, "/", "contracts-2026", "d-contracts")
+	mustLookup(t, inClear, "/", "contracts-2026", "d-contracts")
 	if l, k := shared.asked(); l != listings || k != lookups {
 		t.Errorf("reading the sealed listings cost %d listings and %d lookups, want none", l-listings, k-lookups)
 	}

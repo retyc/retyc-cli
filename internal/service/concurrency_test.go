@@ -40,6 +40,7 @@ func newBarrier(want int) *barrier {
 
 // enter runs one call through the barrier; it is safe from any goroutine.
 func (b *barrier) enter(t *testing.T) {
+	t.Helper()
 	n := b.inFlight.Add(1)
 	defer b.inFlight.Add(-1)
 	for {

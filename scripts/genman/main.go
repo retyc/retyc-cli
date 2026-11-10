@@ -9,6 +9,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,7 +33,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) != 3 {
-		return fmt.Errorf("usage: genman <output-dir> <version> <date YYYY-MM-DD>")
+		return errors.New("usage: genman <output-dir> <version> <date YYYY-MM-DD>")
 	}
 
 	dir, version := args[0], args[1]
@@ -111,7 +112,7 @@ func fixOptions(page []byte) ([]byte, error) {
 	page = optionRe.ReplaceAll(page, []byte(".TP\n$1\n\\&"))
 
 	example := false
-	for _, l := range strings.Split(string(page), "\n") {
+	for l := range strings.SplitSeq(string(page), "\n") {
 		switch {
 		case strings.HasPrefix(l, ".EX"):
 			example = true

@@ -12,13 +12,14 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/keyring"
 	"github.com/retyc/retyc-cli/internal/telemetry"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // ErrWrongKeyPassphrase is returned when the key passphrase does not decrypt
@@ -68,7 +69,7 @@ func MachineIdentity(_ context.Context, userKey *api.UserKey) (*age.HybridIdenti
 func parseMachineAgeKey(data []byte, name string) (*age.HybridIdentity, error) {
 	// The standard age-keygen format puts comment lines before the key.
 	var keyLines []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -317,7 +318,7 @@ func LoginStart(ctx context.Context, baseURL string, httpClient *http.Client) (*
 	if err != nil {
 		return nil, fmt.Errorf("fetching OIDC config: %w", err)
 	}
-	dar, err := auth.RequestDeviceCode(*oidcCfg, httpClient)
+	dar, err := auth.RequestDeviceCode(ctx, *oidcCfg, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("requesting device code: %w", err)
 	}
@@ -363,7 +364,7 @@ func LoginPoll(ctx context.Context, baseURL, deviceCode string, httpClient *http
 	if err != nil {
 		return nil, fmt.Errorf("fetching OIDC config: %w", err)
 	}
-	tok, err := auth.PollToken(*oidcCfg, deviceCode, httpClient)
+	tok, err := auth.PollToken(ctx, *oidcCfg, deviceCode, httpClient)
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrDeviceCodeExpired):

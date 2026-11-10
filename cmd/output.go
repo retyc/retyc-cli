@@ -1,4 +1,4 @@
-// Package cmd — --json output support shared by every command.
+// --json output support shared by every command.
 //
 // Convention: stdout carries command results only; prompts, spinners,
 // progress bars and warnings always go to stderr. With --json, results are
@@ -8,6 +8,7 @@
 // The JSON view types below are CLI-only. They are deliberately separate
 // from the internal/service result structs, which are marshalled as-is by
 // the MCP server: tagging those would change the MCP output.
+
 package cmd
 
 import (

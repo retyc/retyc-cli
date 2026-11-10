@@ -36,7 +36,7 @@ func TestImportedByTestsOnly(t *testing.T) {
 	}
 
 	for _, tags := range []string{"", "prod"} {
-		out, err := exec.Command(goCmd, "list", "-tags", tags, //nolint:gosec // fixed arguments
+		out, err := exec.CommandContext(t.Context(), goCmd, "list", "-tags", tags, //nolint:gosec // fixed arguments
 			"-f", "{{.ImportPath}}{{range .Imports}} {{.}}{{end}}", modulePath+"/...").Output()
 		if err != nil {
 			t.Fatalf("go list -tags %q: %v", tags, err)

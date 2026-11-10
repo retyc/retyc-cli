@@ -13,9 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/oauth2"
+
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/machinekey"
-	"golang.org/x/oauth2"
 )
 
 // ErrMachineRevoked is wrapped when the identity provider refuses the

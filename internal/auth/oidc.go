@@ -14,9 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/oauth2"
+
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/ui"
-	"golang.org/x/oauth2"
 )
 
 // ErrNoToken is returned when no token is stored on disk.
@@ -64,7 +65,7 @@ type TokenResponse struct {
 // TLS certificates (e.g. in development environments).
 func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client) (*oauth2.Token, error) {
 	// Step 1: request a device code
-	devResp, err := RequestDeviceCode(cfg, httpClient)
+	devResp, err := RequestDeviceCode(ctx, cfg, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("requesting device code: %w", err)
 	}
@@ -93,7 +94,7 @@ func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Cli
 	// requests, so the initial poll can happen immediately. This makes the
 	// response feel instantaneous when the user authenticates right away.
 	for time.Now().Before(deadline) {
-		tok, err := PollToken(cfg, devResp.DeviceCode, httpClient)
+		tok, err := PollToken(ctx, cfg, devResp.DeviceCode, httpClient)
 		if err != nil {
 			if !errors.Is(err, ErrSlowDown) {
 				return nil, err
@@ -117,13 +118,15 @@ func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Cli
 }
 
 // RequestDeviceCode calls the device authorization endpoint.
-func RequestDeviceCode(cfg config.OIDCConfig, httpClient *http.Client) (*DeviceAuthResponse, error) {
+func RequestDeviceCode(
+	ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client,
+) (*DeviceAuthResponse, error) {
 	data := url.Values{
 		"client_id": {cfg.ClientID},
 		"scope":     {strings.Join(cfg.Scopes, " ")},
 	}
 
-	resp, err := httpClient.PostForm(cfg.DeviceAuthURL, data)
+	resp, err := postForm(ctx, httpClient, cfg.DeviceAuthURL, data)
 	if err != nil {
 		return nil, err
 	}
@@ -146,19 +149,33 @@ func RequestDeviceCode(cfg config.OIDCConfig, httpClient *http.Client) (*DeviceA
 	return &dar, nil
 }
 
+// postForm is http.Client.PostForm bound to ctx: an interrupted login does not
+// wait for the identity provider to answer.
+func postForm(ctx context.Context, httpClient *http.Client, endpoint string, data url.Values) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	return httpClient.Do(req)
+}
+
 // PollToken exchanges a device code for tokens at the token endpoint.
 // Returns (token, nil) on success, (nil, nil) when authorization is pending,
 // ErrSlowDown when the server requests a reduced polling rate,
 // ErrDeviceCodeExpired when the code has expired, ErrAccessDenied when the
 // user denied access, or a non-nil error for unexpected failures.
-func PollToken(cfg config.OIDCConfig, deviceCode string, httpClient *http.Client) (*oauth2.Token, error) {
+func PollToken(
+	ctx context.Context, cfg config.OIDCConfig, deviceCode string, httpClient *http.Client,
+) (*oauth2.Token, error) {
 	data := url.Values{
 		"client_id":   {cfg.ClientID},
 		"device_code": {deviceCode},
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 	}
 
-	resp, err := httpClient.PostForm(cfg.TokenURL, data)
+	resp, err := postForm(ctx, httpClient, cfg.TokenURL, data)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +331,7 @@ func Refresh(
 // in the identity provider's admin panel.
 func Revoke(ctx context.Context, cfg config.OIDCConfig, refreshToken string, httpClient *http.Client) error {
 	if cfg.EndSessionURL == "" {
-		return fmt.Errorf("OIDC end_session endpoint not available")
+		return errors.New("OIDC end_session endpoint not available")
 	}
 
 	data := url.Values{

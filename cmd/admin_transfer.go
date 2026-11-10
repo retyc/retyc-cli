@@ -1,14 +1,16 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/ui"
-	"github.com/spf13/cobra"
 )
 
 var adminTransferCmd = &cobra.Command{
@@ -216,7 +218,7 @@ var adminTransferRmCmd = &cobra.Command{
 		force, _ := cmd.Flags().GetBool("force")
 		yes, _ := cmd.Flags().GetBool("yes")
 		if !force {
-			return fmt.Errorf("this permanently removes the transfer data: re-run with --force")
+			return errors.New("this permanently removes the transfer data: re-run with --force")
 		}
 		_, client, err := newAdminClient()
 		if err != nil {

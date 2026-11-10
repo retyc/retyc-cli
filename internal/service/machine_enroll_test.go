@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -74,7 +74,7 @@ func (f *fakeEnrollAPI) serve(w http.ResponseWriter, r *http.Request) {
 			fp = f.fpFn(req)
 		}
 		_ = json.NewEncoder(w).Encode(api.Enrollment{
-			EnrollmentID: "enr-" + fmt.Sprint(len(f.posts)), Fingerprint: fp,
+			EnrollmentID: "enr-" + strconv.Itoa(len(f.posts)), Fingerprint: fp,
 			ApprovalURI: "https://app/approve", ExpiresIn: 600, Interval: 5,
 		})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/machine/enrollments/"):
@@ -248,8 +248,10 @@ func TestEnrollRejectsX25519AgeKey(t *testing.T) {
 func TestEnrollAlreadyEnrolled(t *testing.T) {
 	dir := t.TempDir()
 	seedKeys(t, dir)
-	b, _ := json.Marshal(config.MachineInfo{Version: 1, MachineID: "m9", OrganizationID: testOrg,
-		ClientID: "c9", Issuer: "i", TokenEndpoint: "t"})
+	b, _ := json.Marshal(config.MachineInfo{
+		Version: 1, MachineID: "m9", OrganizationID: testOrg,
+		ClientID: "c9", Issuer: "i", TokenEndpoint: "t",
+	})
 	writeFile(t, dir, "machine.json", b)
 	f := newFakeEnrollAPI(t, dir)
 	ev, err := enrollRun(t, f, dir)
@@ -422,7 +424,7 @@ func TestEnrollPostErrors(t *testing.T) {
 			return true
 		}, api.ErrMachineUnsupported, true},
 		{"unknown org", func(w http.ResponseWriter) bool {
-			http.Error(w, `{"detail":"Unknown organization"}`, 404)
+			http.Error(w, `{"detail":"Unknown organization"}`, http.StatusNotFound)
 
 			return true
 		}, api.ErrUnknownOrganization, true},
@@ -496,8 +498,10 @@ func TestEnrollRegeneratedKeysIgnoreStaleEnrollment(t *testing.T) {
 func TestEnrollMachineOtherOrganization(t *testing.T) {
 	dir := t.TempDir()
 	seedKeys(t, dir)
-	b, _ := json.Marshal(config.MachineInfo{Version: 1, MachineID: "m9",
-		OrganizationID: "22222222-2222-2222-2222-222222222222", ClientID: "c9", Issuer: "i", TokenEndpoint: "t"})
+	b, _ := json.Marshal(config.MachineInfo{
+		Version: 1, MachineID: "m9",
+		OrganizationID: "22222222-2222-2222-2222-222222222222", ClientID: "c9", Issuer: "i", TokenEndpoint: "t",
+	})
 	writeFile(t, dir, "machine.json", b)
 	f := newFakeEnrollAPI(t, dir)
 	ev, err := enrollRun(t, f, dir)
@@ -529,8 +533,10 @@ func TestEnrollApprovalOtherOrganization(t *testing.T) {
 func TestEnrollAlreadyEnrolledCaseInsensitive(t *testing.T) {
 	dir := t.TempDir()
 	seedKeys(t, dir)
-	b, _ := json.Marshal(config.MachineInfo{Version: 1, MachineID: "m9", OrganizationID: strings.ToUpper(testOrg),
-		ClientID: "c9", Issuer: "i", TokenEndpoint: "t"})
+	b, _ := json.Marshal(config.MachineInfo{
+		Version: 1, MachineID: "m9", OrganizationID: strings.ToUpper(testOrg),
+		ClientID: "c9", Issuer: "i", TokenEndpoint: "t",
+	})
 	writeFile(t, dir, "machine.json", b)
 	f := newFakeEnrollAPI(t, dir)
 	ev, err := enrollRun(t, f, dir)

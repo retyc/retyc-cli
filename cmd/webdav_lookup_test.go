@@ -93,7 +93,7 @@ func TestWebdavFS_StatLooksTheNameUp(t *testing.T) {
 			t.Fatalf("Stat of a file: %v", err)
 		}
 		wfi := info.(*webdavFileInfo)
-		if wfi.isDir || wfi.size != 7 || wfi.versionID != "v-1" || wfi.Mode().Perm() != 0755 {
+		if wfi.isDir || wfi.size != 7 || wfi.versionID != "v-1" || wfi.Mode().Perm() != 0o755 {
 			t.Errorf("Stat = %+v, want the file as a listing would report it", wfi)
 		}
 		if ct, _ := wfi.ContentType(ctx); ct != "text/plain" {

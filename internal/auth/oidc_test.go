@@ -10,8 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/retyc/retyc-cli/internal/config"
 	"golang.org/x/oauth2"
+
+	"github.com/retyc/retyc-cli/internal/config"
 )
 
 func TestTokenFromResponse_WithExpiry(t *testing.T) {
@@ -69,7 +70,7 @@ func TestRequestDeviceCode_Success(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test-client", Scopes: []string{"openid"}, DeviceAuthURL: srv.URL}
 
-	resp, err := RequestDeviceCode(cfg, http.DefaultClient)
+	resp, err := RequestDeviceCode(t.Context(), cfg, http.DefaultClient)
 	if err != nil {
 		t.Fatalf("RequestDeviceCode() error = %v", err)
 	}
@@ -91,7 +92,7 @@ func TestRequestDeviceCode_NonOK(t *testing.T) {
 
 	cfg := config.OIDCConfig{DeviceAuthURL: srv.URL}
 
-	_, err := RequestDeviceCode(cfg, http.DefaultClient)
+	_, err := RequestDeviceCode(t.Context(), cfg, http.DefaultClient)
 	if err == nil {
 		t.Error("RequestDeviceCode() should return error for non-2xx status")
 	}
@@ -105,7 +106,7 @@ func TestRequestDeviceCode_InvalidJSON(t *testing.T) {
 
 	cfg := config.OIDCConfig{DeviceAuthURL: srv.URL}
 
-	_, err := RequestDeviceCode(cfg, http.DefaultClient)
+	_, err := RequestDeviceCode(t.Context(), cfg, http.DefaultClient)
 	if err == nil {
 		t.Error("RequestDeviceCode() should return error for invalid JSON")
 	}
@@ -124,7 +125,7 @@ func TestPollToken_Success(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	tok, err := PollToken(cfg, "device-code", http.DefaultClient)
+	tok, err := PollToken(t.Context(), cfg, "device-code", http.DefaultClient)
 	if err != nil {
 		t.Fatalf("PollToken() error = %v", err)
 	}
@@ -147,7 +148,7 @@ func TestPollToken_AuthorizationPending(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	tok, err := PollToken(cfg, "device-code", http.DefaultClient)
+	tok, err := PollToken(t.Context(), cfg, "device-code", http.DefaultClient)
 	if err != nil {
 		t.Errorf("PollToken() error = %v, want nil for authorization_pending", err)
 	}
@@ -166,7 +167,7 @@ func TestPollToken_SlowDown(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	tok, err := PollToken(cfg, "device-code", http.DefaultClient)
+	tok, err := PollToken(t.Context(), cfg, "device-code", http.DefaultClient)
 	if !errors.Is(err, ErrSlowDown) || tok != nil {
 		t.Errorf("PollToken() = (%v, %v), want (nil, ErrSlowDown) for slow_down", tok, err)
 	}
@@ -181,7 +182,7 @@ func TestPollToken_ExpiredToken(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	_, err := PollToken(cfg, "device-code", http.DefaultClient)
+	_, err := PollToken(t.Context(), cfg, "device-code", http.DefaultClient)
 	if err == nil {
 		t.Error("PollToken() should return error for expired_token")
 	}
@@ -196,7 +197,7 @@ func TestPollToken_AccessDenied(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	_, err := PollToken(cfg, "device-code", http.DefaultClient)
+	_, err := PollToken(t.Context(), cfg, "device-code", http.DefaultClient)
 	if err == nil {
 		t.Error("PollToken() should return error for access_denied")
 	}
@@ -214,7 +215,7 @@ func TestPollToken_UnknownError(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	_, err := PollToken(cfg, "device-code", http.DefaultClient)
+	_, err := PollToken(t.Context(), cfg, "device-code", http.DefaultClient)
 	if err == nil {
 		t.Error("PollToken() should return error for unknown error field")
 	}
@@ -228,7 +229,7 @@ func TestPollToken_InvalidJSON(t *testing.T) {
 
 	cfg := config.OIDCConfig{ClientID: "test", TokenURL: srv.URL}
 
-	_, err := PollToken(cfg, "device-code", http.DefaultClient)
+	_, err := PollToken(t.Context(), cfg, "device-code", http.DefaultClient)
 	if err == nil {
 		t.Error("PollToken() should return error for invalid JSON response")
 	}
@@ -468,7 +469,7 @@ func TestRefreshingTokenSource_NoRefreshToken(t *testing.T) {
 		t.Fatal("Token() should return error when token expired and no refresh token available")
 	}
 
-	if err != ErrNoRefreshToken {
+	if !errors.Is(err, ErrNoRefreshToken) {
 		t.Errorf("error = %v, want ErrNoRefreshToken", err)
 	}
 }
@@ -576,7 +577,7 @@ func TestGetValidToken_ExpiredNoRefresh(t *testing.T) {
 		t.Fatal("GetValidToken() should return error when token expired and no refresh token")
 	}
 
-	if err != ErrNoRefreshToken {
+	if !errors.Is(err, ErrNoRefreshToken) {
 		t.Errorf("error = %v, want ErrNoRefreshToken", err)
 	}
 }
@@ -590,7 +591,7 @@ func TestGetValidToken_NoToken(t *testing.T) {
 		t.Fatal("GetValidToken() should return error when no token stored")
 	}
 
-	if err != ErrNoToken {
+	if !errors.Is(err, ErrNoToken) {
 		t.Errorf("error = %v, want ErrNoToken", err)
 	}
 }

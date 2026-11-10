@@ -206,13 +206,13 @@ func (fi *webdavFileInfo) Mode() os.FileMode {
 	perm := fi.mode.Perm()
 	if fi.isDir {
 		if !fi.modeSet {
-			perm = 0755
+			perm = 0o755
 		}
 
 		return os.ModeDir | perm
 	}
 	if !fi.modeSet {
-		perm = 0644
+		perm = 0o644
 	}
 
 	return perm
@@ -368,10 +368,7 @@ func (h *dirHandle) Readdir(count int) ([]os.FileInfo, error) {
 	if h.offset >= len(h.entries) {
 		return nil, io.EOF
 	}
-	end := h.offset + count
-	if end > len(h.entries) {
-		end = len(h.entries)
-	}
+	end := min(h.offset+count, len(h.entries))
 	result := h.entries[h.offset:end]
 	h.offset = end
 
@@ -1457,7 +1454,7 @@ Example:
 
 				return
 			}
-			if r.Method == "PUT" {
+			if r.Method == http.MethodPut {
 				rctx := withIsPut(r.Context())
 				if r.ContentLength >= 0 {
 					rctx = withContentLength(rctx, r.ContentLength)
@@ -1468,7 +1465,7 @@ Example:
 			// which would otherwise trigger a full buffered download before the
 			// streaming path engages. We use the node's decrypted MIME type when
 			// available (cached Stat), falling back to the filename extension.
-			if r.Method == "GET" || r.Method == "HEAD" {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
 				w.Header().Set("Content-Type", fs.contentTypeForPath(r.Context(), r.URL.Path))
 			}
 			davHandler.ServeHTTP(w, r)
@@ -1495,7 +1492,7 @@ Example:
 				"WARNING: binding to %s without authentication exposes all dataroom contents "+
 					"in cleartext to the network; consider --auth\n", addr)
 		}
-		srv := &http.Server{ //nolint:gosec // G112: local-only server; Slowloris not a concern
+		srv := &http.Server{
 			Addr:              addr,
 			Handler:           rootHandler,
 			ReadHeaderTimeout: 30 * time.Second,
@@ -1611,10 +1608,12 @@ func serveUntilDrained(srv *http.Server, ln net.Listener, shutdown func(), backg
 }
 
 // Compile-time interface checks.
-var _ webdav.File = (*dirHandle)(nil)
-var _ webdav.File = (*readFileHandle)(nil)
-var _ webdav.File = (*writeFileHandle)(nil)
-var _ webdav.File = (*createHandle)(nil)
+var (
+	_ webdav.File = (*dirHandle)(nil)
+	_ webdav.File = (*readFileHandle)(nil)
+	_ webdav.File = (*writeFileHandle)(nil)
+	_ webdav.File = (*createHandle)(nil)
+)
 
 func init() {
 	webdavServeCmd.Flags().String("addr", "127.0.0.1:8888", "host:port to bind")

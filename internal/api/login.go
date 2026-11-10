@@ -1,4 +1,5 @@
-// Package api — login/OIDC configuration.
+// Login/OIDC configuration.
+
 package api
 
 import (

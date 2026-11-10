@@ -302,7 +302,7 @@ func TestFile_ReadAt(t *testing.T) {
 					if n > 0 && want < n {
 						wantErr = io.EOF
 					}
-					if got != want || err != wantErr {
+					if got != want || !errors.Is(err, wantErr) {
 						t.Fatalf("ReadAt(%d bytes at %d) = %d, %v; want %d, %v", n, off, got, err, want, wantErr)
 					}
 					if !bytes.Equal(p[:got], data[min(off, size):min(off, size)+want]) {
@@ -328,7 +328,7 @@ func TestFile_EmptyFileDownloadsNothing(t *testing.T) {
 	// With or without a chunk count: there is nothing to read.
 	if f, err := fs.Open(context.Background(), "dr1", Node{Type: TypeFile, ChunkCount: 1}); err != nil {
 		t.Fatalf("Open: %v", err)
-	} else if n, err := f.ReadAt(make([]byte, 8), 0); n != 0 || err != io.EOF {
+	} else if n, err := f.ReadAt(make([]byte, 8), 0); n != 0 || !errors.Is(err, io.EOF) {
 		t.Errorf("ReadAt = %d, %v; want 0, io.EOF", n, err)
 	}
 	f, err := fs.Open(context.Background(), "dr1", Node{Type: TypeFile})
@@ -337,7 +337,7 @@ func TestFile_EmptyFileDownloadsNothing(t *testing.T) {
 	}
 	defer func() { _ = f.Close() }()
 
-	if n, err := f.ReadAt(make([]byte, 8), 0); n != 0 || err != io.EOF {
+	if n, err := f.ReadAt(make([]byte, 8), 0); n != 0 || !errors.Is(err, io.EOF) {
 		t.Errorf("ReadAt = %d, %v; want 0, io.EOF", n, err)
 	}
 	wantCounts(t, src, map[int]int{})
@@ -521,7 +521,7 @@ func TestFile_SequentialReadDownloadsEachChunkOnce(t *testing.T) {
 	p := make([]byte, 5)
 	for off := 0; off < len(data); {
 		n, err := f.ReadAt(p, int64(off))
-		if err != nil && err != io.EOF {
+		if err != nil && !errors.Is(err, io.EOF) {
 			t.Fatalf("ReadAt at %d: %v", off, err)
 		}
 		got = append(got, p[:n]...)
@@ -1084,9 +1084,7 @@ func TestFile_ConcurrentRandomReads(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
 	for g := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			rng := rand.New(rand.NewSource(int64(g))) //nolint:gosec // G404: test offsets
 			off := 0
 			for i := range 300 {
@@ -1097,8 +1095,8 @@ func TestFile_ConcurrentRandomReads(t *testing.T) {
 				p := make([]byte, n)
 				got, err := f.ReadAt(p, int64(off))
 				want := data[off:min(off+n, len(data))]
-				if (err != nil && err != io.EOF) || !bytes.Equal(p[:got], want) {
-					errs <- fmt.Errorf("ReadAt(%d bytes at %d) = %q, %v; want %q", n, off, p[:got], err, want)
+				if (err != nil && !errors.Is(err, io.EOF)) || !bytes.Equal(p[:got], want) {
+					errs <- fmt.Errorf("ReadAt(%d bytes at %d) = %q, %w; want %q", n, off, p[:got], err, want)
 
 					return
 				}
@@ -1109,7 +1107,7 @@ func TestFile_ConcurrentRandomReads(t *testing.T) {
 				}
 				off = (off + got) % len(data)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

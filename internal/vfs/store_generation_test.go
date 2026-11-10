@@ -51,6 +51,7 @@ func nodeNames(nodes []Node) []string {
 // the shared store is answered to whoever waits for it, and not stored: this
 // FS knows nothing of that write, the generation of the store does.
 func TestFetch_NotStoredWhenTheStoreMovedElsewhere(t *testing.T) {
+	//nolint:thelper // table cases, not helpers
 	writes := map[string]func(t *testing.T, store *memstore.Store, other *FS){
 		"an edit by another FS": func(_ *testing.T, _ *memstore.Store, other *FS) {
 			other.upsert("dr1", "/", Node{ID: "n-new", Name: "new", Type: TypeFile})

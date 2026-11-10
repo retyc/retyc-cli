@@ -1,5 +1,6 @@
-// Package api — management of the machine accounts of the caller's
+// Management of the machine accounts of the caller's
 // organization (private surface, organization admins only).
+
 package api
 
 import (

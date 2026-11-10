@@ -3,7 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -68,7 +68,7 @@ func TestUploadChunks_ErrorCancelsWorkers(t *testing.T) {
 	var uploaded atomic.Int64
 	uploadFn := func(_ context.Context, chunkID int, _ []byte) error {
 		if chunkID == 1 {
-			return fmt.Errorf("simulated network error")
+			return errors.New("simulated network error")
 		}
 		uploaded.Add(1)
 
@@ -97,7 +97,7 @@ func TestDownloadChunks_PartialFileCleanup(t *testing.T) {
 	}
 
 	downloadFn := func(_ context.Context, _ int) ([]byte, error) {
-		return nil, fmt.Errorf("simulated download error")
+		return nil, errors.New("simulated download error")
 	}
 
 	if err := DownloadChunks(context.Background(), dir, name, 1024, 2, identity, nil, downloadFn); err == nil {
@@ -125,7 +125,7 @@ func TestDownloadChunks_RetryAfterFailure(t *testing.T) {
 
 	// First attempt always fails.
 	failFn := func(_ context.Context, _ int) ([]byte, error) {
-		return nil, fmt.Errorf("first attempt fails")
+		return nil, errors.New("first attempt fails")
 	}
 	_ = DownloadChunks(context.Background(), dir, name, 16, 1, identity, nil, failFn)
 
@@ -188,7 +188,7 @@ func TestUploadChunks_ReaderInterface(t *testing.T) {
 		t.Fatalf("got %d chunks, want 3", len(received))
 	}
 	var got []byte
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		got = append(got, received[i]...)
 	}
 	if !bytes.Equal(got, data) {
@@ -206,7 +206,7 @@ func TestUploadChunks_ReaderErrorPropagation(t *testing.T) {
 
 	uploadFn := func(_ context.Context, chunkID int, _ []byte) error {
 		if chunkID == 1 {
-			return fmt.Errorf("simulated error on chunk 1")
+			return errors.New("simulated error on chunk 1")
 		}
 
 		return nil
@@ -269,7 +269,7 @@ func TestStreamDownloadChunks_ErrorPropagation(t *testing.T) {
 		t.Fatalf("generating keypair: %v", err)
 	}
 	downloadFn := func(_ context.Context, _ int) ([]byte, error) {
-		return nil, fmt.Errorf("simulated download error")
+		return nil, errors.New("simulated download error")
 	}
 	var buf bytes.Buffer
 	if err := StreamDownloadChunks(context.Background(), &buf, 16, 1, identity, nil, downloadFn); err == nil {
@@ -288,7 +288,7 @@ func TestStreamDownloadChunks_EmptyFile(t *testing.T) {
 	downloadFn := func(_ context.Context, _ int) ([]byte, error) {
 		called = true
 
-		return nil, fmt.Errorf("should not be called for 0 chunks")
+		return nil, errors.New("should not be called for 0 chunks")
 	}
 	var buf bytes.Buffer
 	if err := StreamDownloadChunks(context.Background(), &buf, 0, 0, identity, nil, downloadFn); err != nil {
@@ -312,7 +312,7 @@ func TestStreamDownloadChunks_ManyChunksInOrder(t *testing.T) {
 		t.Fatalf("generating keypair: %v", err)
 	}
 	encrypted := make([][]byte, chunkCount)
-	for i := 0; i < chunkCount; i++ {
+	for i := range chunkCount {
 		enc, encErr := crypto.EncryptBinaryForKey([]byte{byte(i)}, identity.Recipient().String())
 		if encErr != nil {
 			t.Fatalf("encrypting chunk %d: %v", i, encErr)
@@ -339,7 +339,7 @@ func TestStreamDownloadChunks_ManyChunksInOrder(t *testing.T) {
 	if len(got) != chunkCount {
 		t.Fatalf("output = %d bytes, want %d", len(got), chunkCount)
 	}
-	for i := 0; i < chunkCount; i++ {
+	for i := range chunkCount {
 		if got[i] != byte(i) {
 			t.Fatalf("byte %d = %d, want %d (out of order)", i, got[i], i)
 		}

@@ -390,6 +390,8 @@ func (fs *FS) undoUpload(dataroomID, path string, node Node, created bool, prior
 //
 // Unlinked makes it a fourth thing, for good: a local file and nothing else,
 // that no method sends to the API any more.
+//
+//nolint:interfacebloat // the file operations a spool stands in for
 type Spool interface {
 	// ReadAt reads the content as it will be flushed. Like WriteAt, it first
 	// brings in the version being modified when the spool was opened on one

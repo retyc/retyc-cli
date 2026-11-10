@@ -18,20 +18,23 @@ import (
 
 func rfcKey(t *testing.T) *ecdsa.PublicKey {
 	t.Helper()
-	dec := func(s string) *big.Int {
+	dec := func(s string) []byte {
 		b, err := base64.RawURLEncoding.DecodeString(s)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		return new(big.Int).SetBytes(b)
+		return b
+	}
+	// Uncompressed SEC 1 point: 0x04, then X and Y.
+	point := append([]byte{4}, dec("MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4")...)
+	point = append(point, dec("4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM")...)
+	key, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	return &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     dec("MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4"),
-		Y:     dec("4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"),
-	}
+	return key
 }
 
 func TestThumbprintRFC7517Key(t *testing.T) {

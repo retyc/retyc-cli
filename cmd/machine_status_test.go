@@ -212,7 +212,9 @@ func callAuthTool(t *testing.T, name string) (*mcp.CallToolResult, string) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(res.Content[0])
-	var w struct{ Text string }
+	var w struct {
+		Text string `json:"text"`
+	}
 	_ = json.Unmarshal(raw, &w)
 
 	return res, w.Text

@@ -191,7 +191,7 @@ func testTreeAttributesAndContent(t *testing.T, opts mountOptions) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, line := range strings.Split(string(info), "\n") {
+		for line := range strings.SplitSeq(string(info), "\n") {
 			if !strings.Contains(line, " "+m.srv.mountpoint+" ") {
 				continue
 			}
@@ -532,7 +532,7 @@ func TestMount_ListingCost(t *testing.T) {
 			t.Skip("no ls")
 		}
 		check(t, func() int {
-			out, err := exec.Command(ls, "-l", dir).Output() //nolint:gosec // G204: ls, on the test's mount
+			out, err := exec.CommandContext(t.Context(), ls, "-l", dir).Output() //nolint:gosec // G204: ls, on the test's mount
 			if err != nil {
 				t.Fatalf("ls -l: %v", err)
 			}
@@ -821,7 +821,7 @@ func TestMount_MovedNodeLookedUpAtItsOldPlace(t *testing.T) {
 	if got, err := readFile(filepath.Join(m.dir, "b", "y.txt")); err != nil || string(got) != "a file" {
 		t.Errorf("the moved file read %q, %v", got, err)
 	}
-	fd, err := syscall.Openat(int(held.Fd()), "x.txt", syscall.O_RDONLY, 0) //nolint:gosec // G115: a descriptor
+	fd, err := syscall.Openat(int(held.Fd()), "x.txt", syscall.O_RDONLY, 0)
 	if err != nil {
 		t.Errorf("open of a file of the moved folder, from the folder held open: %v", err)
 	} else {
@@ -1161,7 +1161,10 @@ func unmountHelper(dir string) ([]byte, error) {
 		helper = "fusermount"
 	}
 
-	return exec.Command(helper, "-u", dir).CombinedOutput() //nolint:gosec // G204: the test's mount
+	// Background: it may run from a cleanup, once the test's context is done.
+	cmd := exec.CommandContext(context.Background(), helper, "-u", dir) //nolint:gosec // G204: the test's mount
+
+	return cmd.CombinedOutput()
 }
 
 // A mount point that stays busy is detached after the grace period, so that
