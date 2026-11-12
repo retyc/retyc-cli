@@ -1,0 +1,17 @@
+{
+  "name": "@retyc/mcp-PLATFORM",
+  "version": "0.0.0",
+  "description": "Retyc CLI binary for one platform, used by @retyc/mcp",
+  "license": "MIT",
+  "homepage": "https://retyc.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/retyc/retyc-cli.git"
+  },
+  "os": [],
+  "cpu": [],
+  "files": [
+    "bin/"
+  ],
+  "preferUnplugged": true
+}

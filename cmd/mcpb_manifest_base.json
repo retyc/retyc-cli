@@ -40,8 +40,7 @@
         "serve"
       ],
       "env": {
-        "RETYC_KEY_PASSPHRASE": "${user_config.key_passphrase}",
-        "RETYC_TOKEN": "${user_config.token}"
+        "RETYC_KEY_PASSPHRASE": "${user_config.key_passphrase}"
       },
       "platform_overrides": {
         "linux": {
@@ -66,13 +65,6 @@
       "title": "Encryption Key Passphrase",
       "description": "Passphrase for your Retyc private key (minimum 8 characters). Required for all E2E encrypted operations: transfer_info, transfer_send, transfer_download, and all dataroom_* tools.",
       "required": true,
-      "sensitive": true
-    },
-    "token": {
-      "type": "string",
-      "title": "Retyc Token",
-      "description": "Optional offline token to bypass the interactive login flow. Leave empty to authenticate via auth_login_start / auth_login_poll.",
-      "required": false,
       "sensitive": true
     }
   }

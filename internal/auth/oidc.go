@@ -64,6 +64,14 @@ type TokenResponse struct {
 // httpClient is used for all requests; pass an insecure client to accept self-signed
 // TLS certificates (e.g. in development environments).
 func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client) (*oauth2.Token, error) {
+	return DeviceFlowNotify(ctx, cfg, httpClient, nil)
+}
+
+// DeviceFlowNotify is DeviceFlow, with notify (when not nil) called with the
+// verification URI once it is printed, e.g. to open it in a browser.
+func DeviceFlowNotify(
+	ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client, notify func(uri string),
+) (*oauth2.Token, error) {
 	// Step 1: request a device code
 	devResp, err := RequestDeviceCode(ctx, cfg, httpClient)
 	if err != nil {
@@ -74,6 +82,9 @@ func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Cli
 	// stdout stays reserved for command results (e.g. --json output).
 	fmt.Fprintf(os.Stderr, "\nOpen the following URL in your browser:\n\n  %s\n\n", devResp.VerificationURIComplete)
 	fmt.Fprintf(os.Stderr, "Enter code: %s\n\n", devResp.UserCode)
+	if notify != nil {
+		notify(devResp.VerificationURIComplete)
+	}
 
 	spinner := ui.NewSpinner("Waiting for authentication…")
 	spinner.Start()

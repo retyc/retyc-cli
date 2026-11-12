@@ -1,0 +1,62 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.retyc/mcp",
+  "title": "Retyc",
+  "description": "End-to-end encrypted file transfers and secure datarooms for your AI agent.",
+  "websiteUrl": "https://retyc.com",
+  "repository": {
+    "url": "https://github.com/retyc/retyc-cli",
+    "source": "github"
+  },
+  "version": "0.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@retyc/mcp",
+      "version": "0.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "RETYC_KEY_PASSPHRASE",
+          "description": "Passphrase of your Retyc encryption key. Never type it in the chat.",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "RETYC_TOKEN",
+          "description": "Offline token written by `npx -y @retyc/mcp setup`. Leave empty to sign in from the chat.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    },
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/retyc/retyc-cli/releases/download/v0.0.0/retyc-0.0.0.mcpb",
+      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "RETYC_KEY_PASSPHRASE",
+          "description": "Passphrase of your Retyc encryption key. Never type it in the chat.",
+          "format": "string",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "RETYC_TOKEN",
+          "description": "Offline token written by `npx -y @retyc/mcp setup`. Leave empty to sign in from the chat.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

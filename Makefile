@@ -3,7 +3,7 @@ BINARY   := retyc
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS  := -X $(MODULE)/cmd.Version=$(VERSION)
 
-.PHONY: all build build-prod test test-coverage vet lint lint-fix clean install goreleaser goreleaser-full goreleaser-quick mcpb
+.PHONY: all build build-prod test test-coverage vet lint lint-fix clean install goreleaser goreleaser-full goreleaser-quick mcpb npm npm-test
 
 ## Default target: dev build (config in .retyc/ relative to CWD)
 all: build
@@ -52,7 +52,7 @@ install:
 goreleaser: goreleaser-full
 
 goreleaser-full:
-	goreleaser release --snapshot --clean
+	goreleaser release --snapshot --clean --skip=sign
 
 ## Quick local release: linux/amd64 only, no signature (as the CI package job)
 goreleaser-quick:
@@ -64,3 +64,13 @@ goreleaser-quick:
 ## Requires goreleaser, jq, zip — no Node.js
 mcpb: goreleaser-full
 	scripts/build-mcpb.sh
+
+## Build the npm packages (@retyc/mcp + platform packages) into dist/npm/
+## Requires goreleaser, jq; Node.js only for the smoke test
+npm: goreleaser-full
+	scripts/build-npm.sh
+
+## Smoke-test the npm launcher on this host (linux/amd64 build only)
+npm-test: goreleaser-quick
+	scripts/build-npm.sh --host-only
+	scripts/test-npm.sh

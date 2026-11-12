@@ -12,6 +12,8 @@ on:
       - 'scripts/manpages.sh'
       - 'scripts/genman/**'
       - 'go.mod'
+      - 'scripts/build-npm.sh'
+      - 'scripts/test-npm.sh'
       - 'LICENSE'
       - 'packaging/**'
       - 'retyc.env.example'

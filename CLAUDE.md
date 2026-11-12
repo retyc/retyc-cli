@@ -15,7 +15,7 @@ cmd/                     # cobra commands, flag/viper binding, output; thin adap
   root.go                #   root flags, initConfig, PersistentPreRunE, exitCode
   common.go output.go errorjson.go   # shared helpers, --json output, error kinds
   auth.go transfer.go dataroom.go admin*.go config.go version.go
-  mcp*.go                #   mcp serve (stdio) + manifest for the MCPB bundle
+  mcp*.go                #   mcp serve (stdio), mcp setup (interactive), manifest for the MCPB bundle
   fs.go                  #   `fs` group: parent of `webdav serve` and `mount`
   webdav*.go             #   WebDAV adapter over internal/vfs
   mount*.go              #   fs mount (mount_linux.go: runMount / serveMount)
@@ -27,14 +27,19 @@ internal/
   config/                # viper defaults, Config structs, env.go (env-only settings), envfile.go
   crypto/                # AGE helpers (PQ only)
   keyring/               # Linux session keyring cache of the decrypted identity
+  mcpsetup/              # `mcp setup`: retyc entry in AI client configs + stable binary; files
+                         #   only (stdlib + YAML, TestImports), secrets in 0600 files, .bak kept
   service/               # business logic shared by commands and MCP (sessions, uploads, …)
   vfs/                   # file-tree service shared by WebDAV and FUSE (caches, mutations, I/O)
     metastore/           #   MetaStore interface; memstore/ (default), redisstore/ (shared)
   retycfs/               # FUSE driver (linux build tag), go-fuse v2 `fs` API
   metrics/               # Prometheus collectors of `fs mount`, all retycfs_*
   telemetry/             # OpenTelemetry tracing of `fs mount`; env.go is the only reader of OTEL_*
-packaging/               # files shipped as is in the .deb / .rpm (example systemd units)
-scripts/                 # build-mcpb.sh, completions.sh + manpages.sh/genman (packages), benches,
+packaging/               # files shipped as is in the .deb / .rpm (example systemd units);
+                         #   npm/ (@retyc/mcp templates), mcp/server.json (MCP Registry),
+                         #   hermes/ openclaw/ (catalog entries, submitted by hand)
+scripts/                 # build-mcpb.sh, build-npm.sh + test-npm.sh, build-server-json.sh,
+                         #   completions.sh + manpages.sh/genman (packages), benches,
                          #   start-jaeger.sh, start-redis.sh,
                          #   redis-cache-dump (diagnostic, not released)
 ```
@@ -291,7 +296,10 @@ spans: unregistered collectors and the no-op tracer cost nothing elsewhere.
 
 `main.yml` → `_ci.yml` (vet, race tests with `fuse3` installed and a `redis:8.10.2`
 service, dev + prod builds) → `_docker.yml`. `_package.yml` (goreleaser snapshot
-linux/amd64, lintian, `.deb` / `.rpm` install) runs from `package-check.yml` when the
-packaging files change, and before goreleaser in `release.yml`. `release.yml` on `v*`
-tags: goreleaser (binaries, `.deb`, `.rpm`), MCPB bundle, GitHub release. Keyless cosign (`sigstore/cosign-installer`): pushed images except
+linux/amd64, lintian, `.deb` / `.rpm` install, npm launcher smoke test) runs from
+`package-check.yml` when the packaging files change, and before goreleaser in
+`release.yml`. `release.yml` on `v*` tags: goreleaser (binaries, `.deb`, `.rpm`), MCPB
+bundle, GitHub release, npm `@retyc/mcp` (trusted publishing, pre-releases on `beta`), MCP
+Registry `com.retyc/mcp` (final releases, DNS auth, `MCP_PRIVATE_KEY`); see `doc/mcpb.md`.
+Keyless cosign (`sigstore/cosign-installer`): pushed images except
 the dev one, checksum file (goreleaser `signs:`), MCPB bundle. See `doc/ci-cd.md`.

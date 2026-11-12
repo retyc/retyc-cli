@@ -74,3 +74,65 @@ jobs:
         run: gh release upload "${GITHUB_REF_NAME}" dist/retyc-*.mcpb dist/retyc-*.mcpb.sigstore.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # npm: same process as retyc-ts-sdk (trusted publishing through the
+      # job's OIDC token, no NPM_TOKEN; provenance is attached by npm).
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false  # never use caching in release builds
+
+      - name: Build npm packages
+        run: scripts/build-npm.sh --expect-version "${GITHUB_REF_NAME#v}"
+
+      # MCP Registry entry: built and validated before anything irreversible
+      # (npm publish), published at the end for final releases only.
+      - name: Build MCP Registry entry
+        run: scripts/build-server-json.sh
+
+      - name: Install mcp-publisher
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.4
+          MCP_PUBLISHER_SHA256: 5dc2fd415369c73551259f31cd33e2aacc9e0d1021e7f08fef1492d93b781628
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/mcp-publisher.tar.gz" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  $RUNNER_TEMP/mcp-publisher.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/mcp-publisher.tar.gz" -C "$RUNNER_TEMP" mcp-publisher
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Validate MCP Registry entry
+        run: mcp-publisher validate dist/server.json
+
+      # Platform packages first: @retyc/mcp depends on them. A version already
+      # on the registry is skipped, never republished. A re-run of the whole
+      # job stops earlier (goreleaser and the MCPB upload refuse existing
+      # release assets): recovery is manual, see doc/mcpb.md.
+      - name: Publish npm packages
+        run: |
+          VERSION=$(cat dist/npm/version)
+          # Any pre-release (as goreleaser's `prerelease: auto`) goes to the
+          # beta dist-tag, never to latest.
+          TAG_ARGS=()
+          case "$VERSION" in *-*) TAG_ARGS=(--tag beta) ;; esac
+          for dir in dist/npm/mcp-*/ dist/npm/mcp/; do
+            name=$(jq -r .name "$dir/package.json")
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "skip $name@$VERSION (already published)"
+              continue
+            fi
+            (cd "$dir" && npm publish --access public "${TAG_ARGS[@]}")
+          done
+
+      # Metadata only, pointing at the npm package and the MCPB bundle
+      # published above (the registry checks they exist, hence the order).
+      # DNS authentication on retyc.com (TXT record, see doc/mcpb.md).
+      - name: Publish to the MCP Registry
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          MCP_PRIVATE_KEY: ${{ secrets.MCP_PRIVATE_KEY }}
+        run: |
+          mcp-publisher login dns --domain retyc.com --private-key "$MCP_PRIVATE_KEY"
+          mcp-publisher publish dist/server.json

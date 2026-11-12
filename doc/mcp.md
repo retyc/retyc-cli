@@ -1,29 +1,53 @@
 # MCP Server
 
 `retyc mcp serve` runs a **Model Context Protocol (MCP) server** over stdio, exposing
-Retyc operations as tools to AI agents. For Claude Desktop, the [MCPB bundle](mcpb.md)
-needs no terminal.
+Retyc operations as tools to AI agents.
 
-## Client integrations
+## Install
 
-### Claude Code
+### Claude Desktop, Hermes, OpenClaw: one command
+
+```sh
+npx -y @retyc/mcp setup
+```
+
+Needs Node.js 18+. It asks which of the AI clients found on this machine to configure, signs you
+in through your browser, checks your key passphrase, then writes the `retyc` server with your
+offline token and passphrase into each client's config. Restart the client afterwards; run it
+again to update the binary, token or passphrase.
+
+| Client         | What the setup writes                                                                          |
+|----------------|------------------------------------------------------------------------------------------------|
+| Claude Desktop | `mcpServers.retyc` in `claude_desktop_config.json`, secrets in its `env` block                 |
+| Hermes         | `mcp_servers.retyc` in `~/.hermes/config.yaml` (`$HERMES_HOME`), secrets in `.env` next to it  |
+| OpenClaw       | secrets in `.env` of its state dir (`~/.openclaw`, `$OPENCLAW_STATE_DIR`), then `openclaw config set mcp.servers.retyc …` |
+
+Files holding secrets get mode 0600, and the previous version of each file is kept as
+`<file>.bak`. The binary goes to `~/.local/share/retyc/bin/` (Linux),
+`~/Library/Application Support/retyc/bin/` (macOS) or `%LOCALAPPDATA%\retyc\bin\` (Windows).
+Never type your passphrase in the chat.
+
+For Claude Desktop without a terminal, use the [MCPB bundle](mcpb.md).
+
+### Other clients
+
+Claude Code:
 
 ```sh
 # Use read -s to avoid storing the passphrase in shell history
 read -rs RETYC_KEY_PASSPHRASE
-claude mcp add --transport stdio retyc --env RETYC_KEY_PASSPHRASE="$RETYC_KEY_PASSPHRASE" -- /path/to/retyc mcp serve
+claude mcp add --transport stdio retyc --env RETYC_KEY_PASSPHRASE="$RETYC_KEY_PASSPHRASE" -- npx -y @retyc/mcp
 ```
 
-### Claude Desktop / Cursor / Windsurf
-
-Add the following to your client's MCP config file:
+Cursor (`~/.cursor/mcp.json`), Windsurf (`~/.codeium/windsurf/mcp_config.json`) and other
+clients:
 
 ```json
 {
   "mcpServers": {
     "retyc": {
-      "command": "retyc",
-      "args": ["mcp", "serve"],
+      "command": "npx",
+      "args": ["-y", "@retyc/mcp"],
       "env": {
         "RETYC_KEY_PASSPHRASE": "your-key-passphrase"
       }
@@ -32,22 +56,20 @@ Add the following to your client's MCP config file:
 }
 ```
 
-| Client                   | Config file                                                       |
-|--------------------------|-------------------------------------------------------------------|
-| Claude Desktop (macOS)   | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Claude Desktop (Windows) | `%APPDATA%\Claude\claude_desktop_config.json`                     |
-| Cursor                   | `~/.cursor/mcp.json`                                              |
-| Windsurf                 | `~/.codeium/windsurf/mcp_config.json`                             |
+With the CLI installed (`.deb`, `.rpm`, binary), use `"command": "retyc", "args": ["mcp", "serve"]`
+instead. Retyc is also listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as
+`com.retyc/mcp`.
 
 ## Environment variables
 
 | Variable               | Required | Description                                                                 |
 |------------------------|----------|-----------------------------------------------------------------------------|
 | `RETYC_KEY_PASSPHRASE` | Yes      | Unlocks your private key, for transfers and datarooms.                      |
-| `RETYC_TOKEN`          | No       | Offline refresh token, used instead of the token stored on disk.           |
+| `RETYC_TOKEN`          | No       | Offline token (written by `mcp setup`), used instead of the token on disk.  |
 | `RETYC_CONFIG_DIR`     | No       | Config directory (default `~/.config/retyc/`).                              |
 
-Without a stored login, ask the agent *"Log me into Retyc"* and open the URL it gives you.
+Without a token, ask the agent *"Log me into Retyc"* and open the URL it gives you. For a CI
+job or a machine without a browser: `retyc auth login --offline`.
 
 ## Example prompts
 

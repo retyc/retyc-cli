@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -83,6 +86,83 @@ func TestMCPToolAnnotations(t *testing.T) {
 		}
 		if ann.ReadOnlyHint == nil && ann.DestructiveHint == nil {
 			t.Errorf("tool %q has neither readOnlyHint nor destructiveHint", st.Tool.Name)
+		}
+	}
+}
+
+// TestMCPBManifestDeclaresOnlyPassphrase: the Claude Desktop form asks for the
+// key passphrase only; the login happens from the chat (no token field).
+func TestMCPBManifestDeclaresOnlyPassphrase(t *testing.T) {
+	manifest, err := buildMCPBManifest("1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userConfig, _ := manifest["user_config"].(map[string]any)
+	if len(userConfig) != 1 || userConfig["key_passphrase"] == nil {
+		t.Errorf("user_config = %v, want key_passphrase only", userConfig)
+	}
+	env := manifest["server"].(map[string]any)["mcp_config"].(map[string]any)["env"].(map[string]any)
+	if len(env) != 1 || env["RETYC_KEY_PASSPHRASE"] != "${user_config.key_passphrase}" {
+		t.Errorf("mcp_config.env = %v", env)
+	}
+}
+
+// TestServerJSONMatchesMCPBManifest keeps the MCP Registry entry
+// (packaging/mcp/server.json) consistent with the MCPB manifest: every
+// variable of the bundle is declared by every package with the same
+// required/secret flags, and RETYC_TOKEN is an optional secret.
+func TestServerJSONMatchesMCPBManifest(t *testing.T) {
+	raw, err := os.ReadFile("../packaging/mcp/server.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serverJSON struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Packages    []struct {
+			RegistryType         string `json:"registryType"`
+			EnvironmentVariables []struct {
+				Name       string `json:"name"`
+				IsRequired bool   `json:"isRequired"`
+				IsSecret   bool   `json:"isSecret"`
+			} `json:"environmentVariables"`
+		} `json:"packages"`
+	}
+	if err := json.Unmarshal(raw, &serverJSON); err != nil {
+		t.Fatal(err)
+	}
+	if serverJSON.Name != "com.retyc/mcp" {
+		t.Errorf("name = %q", serverJSON.Name)
+	}
+	if n := len(serverJSON.Description); n == 0 || n > 100 {
+		t.Errorf("description length %d, the registry allows 1-100", n)
+	}
+
+	manifest, err := buildMCPBManifest("1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userConfig := manifest["user_config"].(map[string]any)
+	env := manifest["server"].(map[string]any)["mcp_config"].(map[string]any)["env"].(map[string]any)
+
+	if len(serverJSON.Packages) != 2 {
+		t.Fatalf("packages = %d, want npm + mcpb", len(serverJSON.Packages))
+	}
+	for _, pkg := range serverJSON.Packages {
+		declared := map[string][2]bool{}
+		for _, v := range pkg.EnvironmentVariables {
+			declared[v.Name] = [2]bool{v.IsRequired, v.IsSecret}
+		}
+		for name, ref := range env {
+			key := strings.TrimSuffix(strings.TrimPrefix(ref.(string), "${user_config."), "}")
+			uc := userConfig[key].(map[string]any)
+			want := [2]bool{uc["required"] == true, uc["sensitive"] == true}
+			if got, ok := declared[name]; !ok || got != want {
+				t.Errorf("%s: %s declared %v (present %v), want required/secret %v", pkg.RegistryType, name, got, ok, want)
+			}
+		}
+		if got, ok := declared["RETYC_TOKEN"]; !ok || got != [2]bool{false, true} {
+			t.Errorf("%s: RETYC_TOKEN = %v (present %v), want optional secret", pkg.RegistryType, got, ok)
 		}
 	}
 }

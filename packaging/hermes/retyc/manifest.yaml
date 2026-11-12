@@ -1,0 +1,60 @@
+# DRAFT of the Hermes MCP catalog entry (NousResearch/hermes-agent,
+# optional-mcps/retyc/manifest.yaml), to submit by pull request.
+#
+# Before opening the PR, check the keys of this entry against the catalog
+# loader of hermes-agent: the schema of a local (stdio) entry and of
+# install-time secret prompts is not documented, and every entry of the
+# catalog was a hosted (http) server when this draft was written (2026-11).
+# The top-level layout follows the existing entries (context7, grafana).
+manifest_version: 1
+
+name: retyc
+description: >-
+  End-to-end encrypted file transfers and secure datarooms; files are
+  encrypted on your machine before upload.
+source: https://github.com/retyc/retyc-cli
+
+# Local stdio server: npx fetches the @retyc/mcp package (signed provenance)
+# and runs the Retyc binary of the platform. The secrets are passed as ${VAR}
+# references resolved from ~/.hermes/.env.
+transport:
+  type: stdio
+  command: npx
+  args: ["-y", "@retyc/mcp"]
+  env:
+    RETYC_KEY_PASSPHRASE: "${RETYC_KEY_PASSPHRASE}"
+    RETYC_TOKEN: "${RETYC_TOKEN}"
+
+# Prompted at install time, written to ~/.hermes/.env (key names to confirm).
+auth:
+  type: env
+  env:
+    - name: RETYC_KEY_PASSPHRASE
+      prompt: Passphrase of your Retyc encryption key
+      secret: true
+      required: true
+    - name: RETYC_TOKEN
+      prompt: >-
+        Offline token (optional: leave empty and ask the agent to log you
+        into Retyc)
+      secret: true
+      required: false
+
+# Composer-suggestion triggers.
+suggest:
+  keywords:
+    - retyc
+    - encrypted transfer
+    - secure file transfer
+    - dataroom
+  hosts:
+    - retyc.com
+
+post_install: |
+  Restart the session, then ask: "log me into Retyc" if you left the token
+  empty (open the link it gives you to sign in).
+
+  Easiest alternative: run `npx -y @retyc/mcp setup` in a terminal. It signs
+  you in, checks your passphrase and writes this entry for you.
+
+  Your passphrase stays in ~/.hermes/.env: never type it in the chat.

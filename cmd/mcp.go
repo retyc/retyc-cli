@@ -1032,5 +1032,6 @@ func registerDataroomTools(srv *server.MCPServer) {
 func init() {
 	mcpCmd.AddCommand(mcpServeCmd)
 	mcpCmd.AddCommand(mcpManifestCmd)
+	mcpCmd.AddCommand(mcpSetupCmd)
 	rootCmd.AddCommand(mcpCmd)
 }
