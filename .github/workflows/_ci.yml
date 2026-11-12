@@ -37,7 +37,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.11.3
+          version: v2.15.0
           # The action keys its cache without the Go version: after a Go
           # upgrade it served stale analysis facts (false SA5011). A cold
           # lint takes a few seconds; the Go build cache of setup-go stays.
