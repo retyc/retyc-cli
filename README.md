@@ -2,7 +2,6 @@
 
 <p align="center">
   <a href="https://github.com/retyc/retyc-cli/actions/workflows/main.yml"><img src="https://github.com/retyc/retyc-cli/actions/workflows/main.yml/badge.svg" alt="CI" /></a>
-  <a href="https://goreportcard.com/report/github.com/retyc/retyc-cli"><img src="https://goreportcard.com/badge/github.com/retyc/retyc-cli" alt="GoReportCard" /></a>
   <a href="https://github.com/retyc/retyc-cli/releases/latest"><img src="https://img.shields.io/github/v/release/retyc/retyc-cli" alt="Release" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
 </p>
