@@ -674,17 +674,17 @@ func TestUpdateDataroomNode_OnlySetFields(t *testing.T) {
 			want:   map[string]any{"parent_id": nil},
 		},
 		"chmod": {
-			update: NodeUpdate{AccessMode: ptr("0755")},
+			update: NodeUpdate{AccessMode: new("0755")},
 			want:   map[string]any{"access_mode": "0755"},
 		},
 		"rename in place": {
-			update: NodeUpdate{NameEnc: ptr("e"), NameHash: ptr("h")},
+			update: NodeUpdate{NameEnc: new("e"), NameHash: new("h")},
 			want:   map[string]any{"name_enc": "e", "name_hash": "h"},
 		},
 		// replace is sent only when asked: the API refuses a field it does
 		// not know, and false is its default.
 		"rename replacing the holder of the name": {
-			update: NodeUpdate{NameEnc: ptr("e"), NameHash: ptr("h"), Replace: true},
+			update: NodeUpdate{NameEnc: new("e"), NameHash: new("h"), Replace: true},
 			want:   map[string]any{"name_enc": "e", "name_hash": "h", "replace": true},
 		},
 	}
@@ -711,8 +711,6 @@ func TestUpdateDataroomNode_OnlySetFields(t *testing.T) {
 		})
 	}
 }
-
-func ptr[T any](v T) *T { return &v }
 
 func TestSetDataroomNodeAccessMode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

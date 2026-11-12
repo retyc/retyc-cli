@@ -115,7 +115,7 @@ func TestServeMount_ReadinessEndsBeforeTheDrain(t *testing.T) {
 			}
 			probe := func() int {
 				rec := httptest.NewRecorder()
-				handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+				handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
 
 				return rec.Code
 			}
@@ -389,8 +389,7 @@ func TestMount_A401StopsTheMountAtOnce(t *testing.T) {
 	client := api.New(srv.URL, "retyc-test/1.0", src, false, false,
 		apiTransportWatching(watch), api.WithRetry(time.Millisecond, 1))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	expired := make(chan error, 1)
 	go watch.run(ctx, func(err error) { expired <- err })
 
@@ -442,15 +441,14 @@ func TestAuthWatch_ChecksOnA401(t *testing.T) {
 	rt := watch.roundTripper(roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: int(status.Load()), Body: http.NoBody}, nil
 	}))
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	failed := make(chan error, 1)
 	go watch.run(ctx, func(err error) { failed <- err })
 
 	// send makes one request and returns the status passed on.
 	send := func() int {
 		t.Helper()
-		req, _ := http.NewRequest(http.MethodGet, "http://api.invalid/dataroom", nil)
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.invalid/dataroom", nil)
 		resp, err := rt.RoundTrip(req)
 		if err != nil {
 			t.Fatal(err)
@@ -559,8 +557,7 @@ func TestAuthWatch_TransientFailureKeepsServing(t *testing.T) {
 
 				return append([]string(nil), lines...)
 			}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			failed := make(chan error, 1)
 			go watch.run(ctx, func(err error) { failed <- err })
 
@@ -602,14 +599,12 @@ func TestAuthWatch_RefusalStops(t *testing.T) {
 	watch := newAuthWatch(src)
 	watch.interval = 5 * time.Millisecond
 	watch.logf = func(string, ...any) {}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	failed := make(chan error, 1)
 	go watch.run(ctx, func(err error) { failed <- err })
 	select {
 	case err := <-failed:
-		var refused *auth.RefreshError
-		if !errors.As(err, &refused) {
+		if _, ok := errors.AsType[*auth.RefreshError](err); !ok {
 			t.Errorf("onFail(%v), want the refusal", err)
 		}
 	case <-time.After(5 * time.Second):
@@ -625,8 +620,7 @@ func TestServeMount_TransientLoginFailureKeepsTheMount(t *testing.T) {
 	watch := newAuthWatch(src)
 	watch.interval = 5 * time.Millisecond
 	watch.logf = func(string, ...any) {}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	expired := make(chan error, 1)
 	go watch.run(ctx, func(err error) { expired <- err })
 
@@ -725,8 +719,8 @@ func TestStartWarmup(t *testing.T) {
 		settings mountSettings
 		want     []string
 	}{
-		"one dataroom":  {mountTarget{dataroomID: "dr-1"}, on, []string{"dr-1 depth 2"}},
-		"all datarooms": {mountTarget{all: true}, on, []string{" depth 2"}},
+		"one dataroom":   {mountTarget{dataroomID: "dr-1"}, on, []string{"dr-1 depth 2"}},
+		"all datarooms":  {mountTarget{all: true}, on, []string{" depth 2"}},
 		"--warmup=false": {mountTarget{dataroomID: "dr-1"}, mountSettings{warmupDepth: 2}, nil},
 	} {
 		t.Run(label, func(t *testing.T) {

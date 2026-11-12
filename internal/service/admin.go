@@ -1,4 +1,5 @@
-// Package service — admin (organization public API) helpers.
+// Admin (organization public API) helpers.
+
 package service
 
 import (
@@ -7,6 +8,7 @@ import (
 	"strings"
 
 	"filippo.io/age"
+
 	"github.com/retyc/retyc-cli/internal/crypto"
 )
 
@@ -21,7 +23,7 @@ func LoadAdminIdentity(path string) (*age.HybridIdentity, error) {
 		return nil, fmt.Errorf("reading organization key file: %w", err)
 	}
 
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

@@ -8,11 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
 )
 
 func attr(span tracetest.SpanStub, key string) (attribute.Value, bool) {
@@ -29,7 +30,7 @@ func TestRoundTripper_SpanPerCall(t *testing.T) {
 	exp := telemetrytest.Install(t)
 	var gotTraceparent string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotTraceparent = r.Header.Get("traceparent")
+		gotTraceparent = r.Header.Get("Traceparent")
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer srv.Close()
@@ -111,30 +112,49 @@ func TestRouteAttributes(t *testing.T) {
 		path string
 		want map[string]string
 	}{
-		{"/dataroom/019d7cba-c700-73c2-8eac-f3dc311d1b25/nodes",
-			map[string]string{"retyc.dataroom.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25"}},
-		{"/dataroom/node/019e9e07-2200-743e-8ca4-054abf48702b/version",
-			map[string]string{"retyc.node.id": "019e9e07-2200-743e-8ca4-054abf48702b"}},
-		{"/dataroom/node/version/01a0a11c-8e25-7659-a358-e33684b6bb19/chunk/7",
-			map[string]string{"retyc.version.id": "01a0a11c-8e25-7659-a358-e33684b6bb19", "retyc.chunk.index": "7"}},
-		{"/dataroom/node/019e9e07-2200-743e-8ca4-054abf48702b/download/3",
-			map[string]string{"retyc.node.id": "019e9e07-2200-743e-8ca4-054abf48702b", "retyc.chunk.index": "3"}},
-		{"/share/019d7cba-c700-73c2-8eac-f3dc311d1b25/details",
-			map[string]string{"retyc.transfer.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25"}},
-		{"/file/019d7cba-c700-73c2-8eac-f3dc311d1b25/12",
-			map[string]string{"retyc.file.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25", "retyc.chunk.index": "12"}},
-		{"/organization/member/019d7cba-c700-73c2-8eac-f3dc311d1b25",
-			map[string]string{"retyc.member.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25"}},
-		{"/v1/transfer/019d7cba-c700-73c2-8eac-f3dc311d1b25/tracking",
-			map[string]string{"retyc.transfer.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25"}},
-		{"/unknown/019d7cba-c700-73c2-8eac-f3dc311d1b25",
-			map[string]string{"retyc.path.params": `["019d7cba-c700-73c2-8eac-f3dc311d1b25"]`}},
+		{
+			"/dataroom/019d7cba-c700-73c2-8eac-f3dc311d1b25/nodes",
+			map[string]string{"retyc.dataroom.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25"},
+		},
+		{
+			"/dataroom/node/019e9e07-2200-743e-8ca4-054abf48702b/version",
+			map[string]string{"retyc.node.id": "019e9e07-2200-743e-8ca4-054abf48702b"},
+		},
+		{
+			"/dataroom/node/version/01a0a11c-8e25-7659-a358-e33684b6bb19/chunk/7",
+			map[string]string{"retyc.version.id": "01a0a11c-8e25-7659-a358-e33684b6bb19", "retyc.chunk.index": "7"},
+		},
+		{
+			"/dataroom/node/019e9e07-2200-743e-8ca4-054abf48702b/download/3",
+			map[string]string{"retyc.node.id": "019e9e07-2200-743e-8ca4-054abf48702b", "retyc.chunk.index": "3"},
+		},
+		{
+			"/share/019d7cba-c700-73c2-8eac-f3dc311d1b25/details",
+			map[string]string{"retyc.transfer.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25"},
+		},
+		{
+			"/file/019d7cba-c700-73c2-8eac-f3dc311d1b25/12",
+			map[string]string{"retyc.file.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25", "retyc.chunk.index": "12"},
+		},
+		{
+			"/organization/member/019d7cba-c700-73c2-8eac-f3dc311d1b25",
+			map[string]string{"retyc.member.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25"},
+		},
+		{
+			"/v1/transfer/019d7cba-c700-73c2-8eac-f3dc311d1b25/tracking",
+			map[string]string{"retyc.transfer.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25"},
+		},
+		{
+			"/unknown/019d7cba-c700-73c2-8eac-f3dc311d1b25",
+			map[string]string{"retyc.path.params": `["019d7cba-c700-73c2-8eac-f3dc311d1b25"]`},
+		},
 		{"/user/me/key/active", map[string]string{}},
 		// A user-typed identifier is not a UUID: it is never exported.
 		{"/dataroom/SENTINEL-title/nodes", map[string]string{}},
 		// A number is a chunk index only under the chunk routes.
 		{"/dataroom/019d7cba-c700-73c2-8eac-f3dc311d1b25/nodes/2", map[string]string{
-			"retyc.dataroom.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25"}},
+			"retyc.dataroom.id": "019d7cba-c700-73c2-8eac-f3dc311d1b25",
+		}},
 	}
 	for _, tc := range cases {
 		got := map[string]string{}

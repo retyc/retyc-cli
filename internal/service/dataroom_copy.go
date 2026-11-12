@@ -53,7 +53,7 @@ func CopyDataroomNodeByID(
 	case err != nil:
 		return DataroomNodeInfo{}, fmt.Errorf("copying node: %w", err)
 	case item.Version == nil:
-		return DataroomNodeInfo{}, fmt.Errorf("copying node: the API returned no version")
+		return DataroomNodeInfo{}, errors.New("copying node: the API returned no version")
 	}
 	version, err := waitForVersion(ctx, client, item.Version)
 	if err != nil {
@@ -106,7 +106,7 @@ func CopyDataroomNodeWithSession(
 		return DataroomNodeInfo{}, err
 	}
 	if src == nil {
-		return DataroomNodeInfo{}, fmt.Errorf("cannot copy the root folder")
+		return DataroomNodeInfo{}, errors.New("cannot copy the root folder")
 	}
 	if src.Node.IsFolder() {
 		return DataroomNodeInfo{}, fmt.Errorf("%s is a folder: server-side copy applies to files only", srcPath)
@@ -141,7 +141,7 @@ func CopyDataroomNode(
 		return DataroomNodeInfo{}, fmt.Errorf("destination: %w", err)
 	}
 	if src.DataroomID != dst.DataroomID {
-		return DataroomNodeInfo{}, fmt.Errorf("source and destination must be in the same dataroom")
+		return DataroomNodeInfo{}, errors.New("source and destination must be in the same dataroom")
 	}
 
 	sess, err := resolveDataroomSession(ctx, cfg, client, src.DataroomID, reader)

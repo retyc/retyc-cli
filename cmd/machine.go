@@ -1,4 +1,5 @@
-// Package cmd — machine command group (machine accounts).
+// The `machine` command group (machine accounts).
+
 package cmd
 
 import (

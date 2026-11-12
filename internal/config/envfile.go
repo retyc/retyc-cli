@@ -225,7 +225,7 @@ func validEnvName(s string) bool {
 	if s == "" {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		switch {
 		case c == '_', c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':

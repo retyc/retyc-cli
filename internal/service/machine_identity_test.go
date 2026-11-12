@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"filippo.io/age"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"

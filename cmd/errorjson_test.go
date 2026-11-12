@@ -103,8 +103,10 @@ func TestPrintError_JSONCarriesCode(t *testing.T) {
 	jsonOutput = true
 	defer func() { jsonOutput = false }()
 
-	err := fmt.Errorf("set: %w", &api.HTTPError{Status: 400, Code: api.CodeStorageCapacityShrink,
-		Body: `{"detail":"A reserved capacity can only be enlarged"}`})
+	err := fmt.Errorf("set: %w", &api.HTTPError{
+		Status: 400, Code: api.CodeStorageCapacityShrink,
+		Body: `{"detail":"A reserved capacity can only be enlarged"}`,
+	})
 	out := captureStream(t, &os.Stderr, func() { printError(err) })
 	var got map[string]any
 	if jErr := json.Unmarshal([]byte(out), &got); jErr != nil {

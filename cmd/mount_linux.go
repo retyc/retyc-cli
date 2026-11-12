@@ -183,8 +183,8 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	defer func() {
 		if !initDone {
 			telemetry.RecordError(initSpan, retErr)
-			initSpan.End()
 		}
+		initSpan.End() // a no-op once ended, when the mount is ready
 	}()
 
 	// Fail fast, before the token, the API and the key are asked for.
@@ -253,7 +253,7 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	// The observability listener is bound before anything is mounted, so a bad
 	// address fails fast. /readyz answers 503 until the filesystem is mounted.
 	health := newServeHealth()
-	metricsSrv, err := startObservability(settings.metrics, health, tree)
+	metricsSrv, err := startObservability(initCtx, settings.metrics, health, tree)
 	if err != nil {
 		return err
 	}
@@ -453,8 +453,7 @@ func serveMount(
 		// Wrapped: the exit code tells a supervisor not to restart (77).
 		authErr = fmt.Errorf("authentication expired: %w\n%s", authErr, authLostAdvice("mount again"))
 		// The files lost on the way are still told: the count, never a name.
-		var lost *retycfs.LostWritesError
-		if errors.As(err, &lost) {
+		if lost, ok := errors.AsType[*retycfs.LostWritesError](err); ok {
 			return errors.Join(authErr, lostWritesError{lost})
 		}
 
@@ -463,8 +462,7 @@ func serveMount(
 
 	// A *retycfs.LostWritesError included: exit code 75, with the count.
 	if err != nil {
-		var lost *retycfs.LostWritesError
-		if errors.As(err, &lost) {
+		if _, ok := errors.AsType[*retycfs.LostWritesError](err); ok {
 			return lostWritesError{err}
 		}
 	}

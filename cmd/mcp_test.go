@@ -35,7 +35,7 @@ func TestMCPPassphraseReader_EnvUnset(t *testing.T) {
 
 // TestToolErr_StructuredJSON verifies that toolErr returns valid JSON with error_code and message.
 func TestToolErr_StructuredJSON(t *testing.T) {
-	result, handlerErr := toolErr(fmt.Errorf("something went wrong"))
+	result, handlerErr := toolErr(errors.New("something went wrong"))
 	if handlerErr != nil {
 		t.Fatalf("toolErr returned unexpected handler error: %v", handlerErr)
 	}
@@ -78,7 +78,9 @@ func TestToolErr_NotAuthenticated(t *testing.T) {
 	}
 
 	raw, _ := json.Marshal(result.Content[0])
-	var wrapper struct{ Text string }
+	var wrapper struct {
+		Text string `json:"text"`
+	}
 	_ = json.Unmarshal(raw, &wrapper)
 
 	var payload mcpToolError
@@ -93,7 +95,9 @@ func TestToolErr_NotAuthenticated(t *testing.T) {
 func TestToolErr_GenericError(t *testing.T) {
 	result, _ := toolErr(errors.New("random failure"))
 	raw, _ := json.Marshal(result.Content[0])
-	var wrapper struct{ Text string }
+	var wrapper struct {
+		Text string `json:"text"`
+	}
 	_ = json.Unmarshal(raw, &wrapper)
 	var payload mcpToolError
 	_ = json.Unmarshal([]byte(wrapper.Text), &payload)

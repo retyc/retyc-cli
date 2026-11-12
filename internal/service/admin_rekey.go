@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
 	"filippo.io/age"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
 )
@@ -128,7 +130,7 @@ func AdminRekeyTransfer(
 		return nil, fmt.Errorf("fetching transfer: %w", err)
 	}
 	if tr.SessionPrivateKeyEnc == nil {
-		return nil, fmt.Errorf("the organization key was not enabled when this transfer was created: nothing to decrypt")
+		return nil, errors.New("the organization key was not enabled when this transfer was created: nothing to decrypt")
 	}
 
 	sessionPrivKey, err := crypto.DecryptToString(*tr.SessionPrivateKeyEnc, orgKey)

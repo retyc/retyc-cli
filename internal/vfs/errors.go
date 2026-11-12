@@ -105,8 +105,7 @@ func as(kind, err error) error { return &kindError{kind: kind, err: err} }
 // httpStatus returns the status of the API refusal in err's chain, 0 when
 // there is none.
 func httpStatus(err error) int {
-	var httpErr *api.HTTPError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[*api.HTTPError](err); ok {
 		return httpErr.Status
 	}
 

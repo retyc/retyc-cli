@@ -54,6 +54,8 @@ type operation struct {
 // the operation and the dataroom ID, never a key, a field, a value or a path;
 // the context it would return is not used, what the codec decrypts after the
 // round trip is not under it.
+//
+//nolint:spancheck // ended by operation.end
 func begin(ctx context.Context, name, dataroomID string) operation {
 	o := operation{name: name, start: time.Now()}
 	if trace.SpanContextFromContext(ctx).IsValid() {
@@ -88,8 +90,7 @@ func (o operation) end(err error) {
 	if o.span == nil {
 		return
 	}
-	var se *storeError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*storeError](err); ok {
 		err = se.err
 	}
 	telemetry.RecordError(o.span, err)

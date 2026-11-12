@@ -19,11 +19,12 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"go.opentelemetry.io/otel"
+	"golang.org/x/oauth2"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
-	"go.opentelemetry.io/otel"
-	"golang.org/x/oauth2"
 )
 
 // — ParseRetycURI —————————————————————————————————————————————————————————————
@@ -198,9 +199,9 @@ func TestIsConflict(t *testing.T) {
 		{nil, false},
 		{fmt.Errorf("%w: duplicate node name hash", api.ErrConflict), true},
 		{fmt.Errorf("wrapping: %w", fmt.Errorf("%w: conflict", api.ErrConflict)), true},
-		{fmt.Errorf("API error 400: bad request"), false},
-		{fmt.Errorf("API error 500: internal server error"), false},
-		{fmt.Errorf("network timeout"), false},
+		{errors.New("API error 400: bad request"), false},
+		{errors.New("API error 500: internal server error"), false},
+		{errors.New("network timeout"), false},
 	}
 
 	for _, tt := range tests {
@@ -462,12 +463,14 @@ func smallFileServer(
 
 			return
 		}
-		if err := r.ParseMultipartForm(10 << 20); err != nil { //nolint:gosec // G120: test server
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
 			t.Errorf("ParseMultipartForm: %v", err)
 		}
-		form := map[string]string{"parent_id": r.FormValue("parent_id"), "overwrite": r.FormValue("overwrite"),
+		form := map[string]string{
+			"parent_id": r.FormValue("parent_id"), "overwrite": r.FormValue("overwrite"),
 			"original_size": r.FormValue("original_size"), "name_hash": r.FormValue("name_hash"),
-			"client_mtime": r.FormValue("client_mtime")}
+			"client_mtime": r.FormValue("client_mtime"),
+		}
 		form["name"], _ = crypto.DecryptToString(r.FormValue("name_enc"), identity)
 		form["type"], _ = crypto.DecryptToString(r.FormValue("type_enc"), identity)
 		if f, _, err := r.FormFile("upload_file"); err == nil {

@@ -5,9 +5,10 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/ui"
-	"github.com/spf13/cobra"
 )
 
 var adminBlacklistCmd = &cobra.Command{

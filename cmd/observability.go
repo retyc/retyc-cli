@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -71,11 +72,12 @@ func newObservabilityHandler(health *serveHealth, opts observabilityOptions) (ht
 	if len(opts.labels) > 0 {
 		registerer = prometheus.WrapRegistererWith(opts.labels, reg)
 	}
-	cs := []prometheus.Collector{
+	cs := make([]prometheus.Collector, 0, 3+len(metrics.All())+len(opts.extra))
+	cs = append(cs,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		newBuildInfoCollector(),
-	}
+	)
 	cs = append(cs, metrics.All()...)
 	cs = append(cs, opts.extra...)
 	for _, c := range cs {
@@ -169,7 +171,9 @@ type metricsSettings struct {
 //
 // The listener is bound here, synchronously: a bad address or a label that
 // cannot be registered fails the command before it serves anything.
-func startObservability(settings metricsSettings, health *serveHealth, tree *vfs.FS) (*http.Server, error) {
+func startObservability(
+	ctx context.Context, settings metricsSettings, health *serveHealth, tree *vfs.FS,
+) (*http.Server, error) {
 	if settings.addr == "" {
 		return nil, nil
 	}
@@ -184,7 +188,7 @@ func startObservability(settings metricsSettings, health *serveHealth, tree *vfs
 	if err != nil {
 		return nil, err
 	}
-	srv, err := startObservabilityServer(settings.addr, handler)
+	srv, err := startObservabilityServer(ctx, settings.addr, handler)
 	if err != nil {
 		return nil, err
 	}
@@ -196,12 +200,12 @@ func startObservability(settings metricsSettings, health *serveHealth, tree *vfs
 // startObservabilityServer binds addr and serves handler in the background.
 // The bind happens synchronously so a port already in use fails at startup,
 // before anything is mounted; srv.Addr holds the resolved address.
-func startObservabilityServer(addr string, handler http.Handler) (*http.Server, error) {
-	ln, err := net.Listen("tcp", addr)
+func startObservabilityServer(ctx context.Context, addr string, handler http.Handler) (*http.Server, error) {
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("metrics listener: %w", err)
 	}
-	srv := &http.Server{ //nolint:gosec // G112: metrics endpoint; Slowloris not a concern
+	srv := &http.Server{
 		Addr:              ln.Addr().String(),
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,

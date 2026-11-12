@@ -144,8 +144,7 @@ func checkMachineFile(path string) error {
 // errReason is the short reason of a file system error, without the path
 // (the caller already names it).
 func errReason(err error) string {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*fs.PathError](err); ok {
 		return pe.Err.Error()
 	}
 

@@ -227,7 +227,7 @@ func TestMetrics_FuseOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Write([]byte("seven b")); err != nil {
+	if _, err := w.WriteString("seven b"); err != nil {
 		t.Fatal(err)
 	}
 	if got := testutil.ToFloat64(metrics.OpenHandles.WithLabelValues("write")) - writers; got != 1 {

@@ -159,8 +159,8 @@ func New(client *api.Client, opts Options) *FS {
 			float64(opts.ttl())),
 		revalidated:        make(map[ListingKey]time.Time),
 		revalidatedSweepAt: minGenSweep,
-		uploadSlots: make(chan struct{}, opts.uploadConcurrency()),
-		quota:       make(map[string]quotaEntry),
+		uploadSlots:        make(chan struct{}, opts.uploadConcurrency()),
+		quota:              make(map[string]quotaEntry),
 	}
 	fs.locks = LockManager{fs: fs, locks: make(map[string]*heldLock)}
 	if b, ok := store.(metastore.Binder); ok {

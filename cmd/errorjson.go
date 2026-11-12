@@ -66,8 +66,7 @@ const (
 // newErrorJSON builds the JSON view of err.
 func newErrorJSON(err error) errorJSON {
 	v := errorJSON{Error: err.Error(), Kind: errorKind(err)}
-	var httpErr *api.HTTPError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[*api.HTTPError](err); ok {
 		v.Status = httpErr.Status
 		v.Code = httpErr.Code
 		v.Detail = httpDetail(httpErr)
@@ -80,9 +79,8 @@ func newErrorJSON(err error) errorJSON {
 // a lost login (77) or a configuration error (78) is told before the writes
 // lost with it (75), and a rate limit before the 429 it wraps.
 func errorKind(err error) string {
-	var httpErr *api.HTTPError
 	status, code, detail := 0, "", ""
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[*api.HTTPError](err); ok {
 		status, code, detail = httpErr.Status, httpErr.Code, httpDetail(httpErr)
 	}
 	// The detail texts below are the fallback of a refusal without a code.

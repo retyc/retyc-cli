@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"strconv"
+
+	"github.com/spf13/cobra"
 
 	"github.com/retyc/retyc-cli/internal/ui"
-	"github.com/spf13/cobra"
 )
 
 var userCmd = &cobra.Command{
@@ -108,7 +110,7 @@ func formatCount(n *int) string {
 		return "unlimited"
 	}
 
-	return fmt.Sprintf("%d", *n)
+	return strconv.Itoa(*n)
 }
 
 func init() {

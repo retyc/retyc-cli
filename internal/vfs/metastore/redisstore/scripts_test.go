@@ -3,6 +3,7 @@ package redisstore
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -179,7 +180,7 @@ func TestScripts_ErrorsAreErrors(t *testing.T) {
 		}
 	}
 	// The largest start, plus writes, stays exact.
-	must(t, e.raw.Set(ctx, f.gen, fmt.Sprint(maxGenerationStart), time.Minute).Err())
+	must(t, e.raw.Set(ctx, f.gen, strconv.Itoa(maxGenerationStart), time.Minute).Err())
 	g := gen(t, s, "/a")
 	if stored, err := s.PutListingIf(ctx, lk("/a"), l, g-1); stored || err != nil {
 		t.Errorf("PutListingIf with a generation one below: stored=%v err=%v", stored, err)
@@ -481,8 +482,10 @@ func TestPutListing_ClearNodeWithoutNameIsNotStored(t *testing.T) {
 	s := e.store(false)
 	ctx := context.Background()
 	g := gen(t, s, "/a")
-	l := &metastore.Listing{Nodes: []metastore.Node{file("x"), {ID: "n-anon", Type: metastore.TypeFile}},
-		FetchedAt: time.Now()}
+	l := &metastore.Listing{
+		Nodes:     []metastore.Node{file("x"), {ID: "n-anon", Type: metastore.TypeFile}},
+		FetchedAt: time.Now(),
+	}
 	stored, err := s.PutListingIf(ctx, lk("/a"), l, g)
 	must(t, err)
 	if nodes, ok := held(t, s, "/a"); ok {

@@ -41,7 +41,7 @@ func newNodeTreeFixture(t *testing.T, nodes []fixtureNode) *nodeTreeFixture {
 	for _, n := range nodes {
 		node := api.DataroomNode{ID: n.id, NameEnc: encName(t, n.name, pub)}
 		if n.parent != "" {
-			node.ParentID = ptr(n.parent)
+			node.ParentID = new(n.parent)
 		}
 		if !n.folder {
 			node.TypeEnc = &mime

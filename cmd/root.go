@@ -10,12 +10,13 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 var (
@@ -31,7 +32,7 @@ var (
 
 	// envFileErr is why the designated environment file was not loaded. It is
 	// fatal for every command but the offline ones (PersistentPreRunE).
-	envFileErr error
+	envFileErr error //nolint:errname // a load outcome, not a sentinel
 
 	// configFileLoaded is the config file that was actually read, or "" when
 	// none was. It is not viper.ConfigFileUsed(): with --config, viper records
@@ -43,7 +44,7 @@ var (
 	// --config path, YAML syntax error). It stays nil when there is simply no
 	// config file, which is the normal case. Commands still run on defaults
 	// and environment; `config path` and --debug report it.
-	configFileErr error
+	configFileErr error //nolint:errname // a load outcome, not a sentinel
 )
 
 // annotationOffline marks commands that make no network call. They skip the
@@ -186,7 +187,7 @@ func init() {
 	// Build the default config path hint from the active build mode so the
 	// help text always reflects the real default location.
 	defaultCfgHint := "auto"
-	if dir, err := config.ConfigDir(); err == nil {
+	if dir, err := config.Dir(); err == nil {
 		defaultCfgHint = dir + "/config.yaml"
 	}
 
@@ -246,7 +247,7 @@ func initConfig() {
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {
-		dir, err := config.ConfigDir()
+		dir, err := config.Dir()
 		if err != nil {
 			// Flags are already parsed here (cobra.OnInitialize), so --json is honoured.
 			printError(fmt.Errorf("could not determine config directory: %w", err))

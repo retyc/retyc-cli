@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 )
@@ -14,7 +15,7 @@ func TestIsMachineForbidden(t *testing.T) {
 		{"machine 403", fmt.Errorf("x: %w", &HTTPError{Status: 403, Body: `{"detail":"machine_account_forbidden"}`}), true},
 		{"other 403", &HTTPError{Status: 403, Body: `{"detail":"nope"}`}, false},
 		{"401 same detail", &HTTPError{Status: 401, Body: `{"detail":"machine_account_forbidden"}`}, false},
-		{"not an API error", fmt.Errorf("boom"), false},
+		{"not an API error", errors.New("boom"), false},
 		{"nil", nil, false},
 	}
 	for _, tt := range tests {

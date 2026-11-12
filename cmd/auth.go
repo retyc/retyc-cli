@@ -14,13 +14,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+	"golang.org/x/oauth2"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/telemetry"
-	"github.com/spf13/cobra"
-	"golang.org/x/oauth2"
 )
 
 var authCmd = &cobra.Command{
@@ -73,7 +74,7 @@ var authLoginCmd = &cobra.Command{
 
 		if offlineLogin {
 			if token.RefreshToken == "" {
-				return fmt.Errorf("server did not return an offline token (check that offline_access scope is supported)")
+				return errors.New("server did not return an offline token (check that offline_access scope is supported)")
 			}
 			// Do not persist to disk: the offline token is intended to be copied
 			// into RETYC_TOKEN and used non-interactively in CI/CD pipelines.

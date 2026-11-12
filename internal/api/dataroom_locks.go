@@ -1,4 +1,5 @@
-// Package api — dataroom node locks, server-side copy and version lookup.
+// Dataroom node locks, server-side copy and version lookup.
+
 package api
 
 import (

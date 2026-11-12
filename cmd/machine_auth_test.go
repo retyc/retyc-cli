@@ -166,7 +166,7 @@ func TestMachineForbiddenMessage(t *testing.T) {
 		t.Errorf("exitCode = %d, want 1", got)
 	}
 	other := &api.HTTPError{Status: http.StatusForbidden, Body: `{"detail":"nope"}`}
-	if explainMachineForbidden(other) != error(other) {
+	if !errors.Is(explainMachineForbidden(other), error(other)) {
 		t.Error("another 403 was rewrapped")
 	}
 }
@@ -185,8 +185,13 @@ func TestDebugRedactsMachineSecrets(t *testing.T) {
 	orig := os.Stderr
 	os.Stderr = w
 	client := &http.Client{Transport: &debugTransport{wrapped: http.DefaultTransport}}
-	resp, reqErr := client.Post(srv.URL, "application/x-www-form-urlencoded",
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL,
 		strings.NewReader("grant_type=client_credentials&client_assertion=jwt-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, reqErr := client.Do(req)
 	os.Stderr = orig
 	_ = w.Close()
 	trace, _ := io.ReadAll(r)
@@ -298,8 +303,7 @@ func TestAuthWatchNotMachineIgnoresRepeated401(t *testing.T) {
 	watch := newAuthWatch(src)
 	watch.machine = false
 	watch.interval = time.Hour
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	failed := make(chan error, 1)
 	go watch.run(ctx, func(err error) { failed <- err })
 	for range machineRefusedChecks + 1 {
@@ -430,7 +434,7 @@ func (e errRoundTripper) RoundTrip(*http.Request) (*http.Response, error) { retu
 // A transport error that is permanent (machine account refused) asks for a
 // check at once; a transient one does not.
 func TestAuthWatchTransportPermanentErrorAsksCheck(t *testing.T) {
-	req, err := http.NewRequest(http.MethodGet, "http://example.invalid/", http.NoBody)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.invalid/", http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}

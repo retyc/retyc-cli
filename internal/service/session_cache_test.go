@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,14 +14,14 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/crypto/cryptotest"
 	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/codes"
-	"strings"
 )
 
 // countingResolver returns a resolver that records how many times it ran and the
@@ -102,16 +103,14 @@ func TestSessionCache_SingleFlightAndSerialized(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for _, drID := range []string{"dr1", "dr1", "dr1", "dr2", "dr2"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sess, err := c.Get(ctx, drID, resolve)
 			if err != nil {
 				t.Errorf("Get(%s): %v", drID, err)
 			} else if sess.PublicKey != "pub-"+drID {
 				t.Errorf("Get(%s) = %q", drID, sess.PublicKey)
 			}
-		}()
+		})
 	}
 	// Let every goroutine reach the cache miss before releasing the resolver.
 	time.Sleep(50 * time.Millisecond)

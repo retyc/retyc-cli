@@ -1,4 +1,5 @@
-// Package cmd — shared helpers used by multiple command files.
+// Shared helpers used by multiple command files.
+
 package cmd
 
 import (
@@ -9,13 +10,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/schollz/progressbar/v3"
+	"golang.org/x/oauth2"
+	"golang.org/x/term"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/ui"
-	"github.com/schollz/progressbar/v3"
-	"golang.org/x/oauth2"
-	"golang.org/x/term"
 )
 
 // minPassphraseLen is the minimum number of characters for a transfer passphrase.
@@ -32,7 +34,7 @@ func readKeyPassphrase() (string, error) {
 		return "", fmt.Errorf("no TTY detected: %w", config.ErrNoKeyPassphrase)
 	}
 	fmt.Fprint(os.Stderr, "Key passphrase: ")
-	pb, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115: Fd() fits in int on all supported platforms
+	pb, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprint(os.Stderr, "\r\033[2K")
 	if err != nil {
 		return "", fmt.Errorf("reading key passphrase: %w", err)
@@ -44,7 +46,7 @@ func readKeyPassphrase() (string, error) {
 // stdinIsTerminal reports whether a passphrase can be prompted for. A variable
 // so that tests do not depend on how they are run.
 var stdinIsTerminal = func() bool {
-	return term.IsTerminal(int(os.Stdin.Fd())) //nolint:gosec // G115: Fd() fits in int on all supported platforms
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 // spinnerReader wraps readKeyPassphrase to stop s before prompting.

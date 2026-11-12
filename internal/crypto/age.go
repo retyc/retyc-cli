@@ -9,6 +9,7 @@ package crypto
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -174,7 +175,7 @@ func EncryptStringForKeys(value string, publicKeys []string) (string, error) {
 		recipients = append(recipients, rec)
 	}
 	if len(recipients) == 0 {
-		return "", fmt.Errorf("no valid recipients")
+		return "", errors.New("no valid recipients")
 	}
 
 	return EncryptToString(value, recipients...)

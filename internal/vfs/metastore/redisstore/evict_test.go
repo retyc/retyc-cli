@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -306,8 +307,10 @@ func (m *evictionModel) step() {
 		must(t, err)
 		l, ok, err := s.GetListing(ctx, lk(p))
 		must(t, err)
-		m.fetches = append(m.fetches, pendingFetch{p: p, gen: g, names: slices.Clone(m.truth[p]),
-			renew: ok && names(l.Nodes) == strings.Join(m.truth[p], ",")})
+		m.fetches = append(m.fetches, pendingFetch{
+			p: p, gen: g, names: slices.Clone(m.truth[p]),
+			renew: ok && names(l.Nodes) == strings.Join(m.truth[p], ","),
+		})
 	case 5: // a fetch ends
 		if len(m.fetches) == 0 {
 			return
@@ -397,7 +400,7 @@ func (m *evictionModel) check() {
 // no stale value is ever served.
 func TestEviction_Random(t *testing.T) {
 	for seed := range uint64(8) {
-		t.Run(fmt.Sprint(seed), func(t *testing.T) {
+		t.Run(strconv.FormatUint(seed, 10), func(t *testing.T) {
 			e := newEnv(t)
 			m := &evictionModel{
 				t: t, e: e, rng: rand.New(rand.NewPCG(seed, 0x5eed)), //nolint:gosec // a reproducible sequence, not a secret

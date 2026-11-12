@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
 )
@@ -106,7 +107,7 @@ func (a *mimeAPI) handle(w http.ResponseWriter, r *http.Request) {
 		a.write(w, form, r.URL.Path)
 	case r.Method == http.MethodPost && r.URL.Path == "/dataroom/dr1/node/file":
 		r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
-		if err := r.ParseMultipartForm(10 << 20); err != nil { //nolint:gosec // G120: test server
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
 			a.t.Errorf("ParseMultipartForm: %v", err)
 		}
 		form := map[string]string{}
@@ -166,11 +167,14 @@ func (a *mimeAPI) write(w http.ResponseWriter, form map[string]string, path stri
 		fmt.Fprint(w, `{"id":"v-2","node_id":"n-1","original_size":9,"chunk_count":0,"version_number":2,`+
 			`"created_at":"2026-10-05T10:00:00Z"}`)
 	case strings.HasSuffix(path, "/node/file"):
-		node := api.DataroomNode{ID: "n-1", Type: api.NodeTypeFile, NameEnc: form["name_enc"], MimeTypeID: mimeID,
-			AccessMode: "0644"}
+		node := api.DataroomNode{
+			ID: "n-1", Type: api.NodeTypeFile, NameEnc: form["name_enc"], MimeTypeID: mimeID,
+			AccessMode: "0644",
+		}
 		_ = json.NewEncoder(w).Encode(api.DataroomNodeItem{Node: node, Version: &api.DataroomNodeVersion{
 			ID: "v-1", NodeID: "n-1", OriginalSize: 5, ChunkCount: 1, VersionNumber: 1,
-			CreatedAt: time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)}})
+			CreatedAt: time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC),
+		}})
 	default:
 		_ = json.NewEncoder(w).Encode(api.DataroomNode{ID: "n-1", Type: api.NodeTypeFile, MimeTypeID: mimeID})
 	}
@@ -227,10 +231,14 @@ func TestNodesFromItems_MimeTable(t *testing.T) {
 	later := "mt-later"
 
 	items := []api.DataroomNodeItem{
-		{Node: api.DataroomNode{ID: "a", Type: api.NodeTypeFile, NameEnc: nameEnc, MimeTypeID: &pdf, AccessMode: "0640"},
-			Version: &api.DataroomNodeVersion{ID: "v", OriginalSize: 3, ChunkCount: 1, CreatedAt: created, ClientMtime: &mtime}},
-		{Node: api.DataroomNode{ID: "b", Type: api.NodeTypeFile, NameEnc: nameEnc, TypeEnc: &legacyEnc},
-			Version: &api.DataroomNodeVersion{ID: "v2", CreatedAt: created}},
+		{
+			Node:    api.DataroomNode{ID: "a", Type: api.NodeTypeFile, NameEnc: nameEnc, MimeTypeID: &pdf, AccessMode: "0640"},
+			Version: &api.DataroomNodeVersion{ID: "v", OriginalSize: 3, ChunkCount: 1, CreatedAt: created, ClientMtime: &mtime},
+		},
+		{
+			Node:    api.DataroomNode{ID: "b", Type: api.NodeTypeFile, NameEnc: nameEnc, TypeEnc: &legacyEnc},
+			Version: &api.DataroomNodeVersion{ID: "v2", CreatedAt: created},
+		},
 		{Node: api.DataroomNode{ID: "c", Type: api.NodeTypeFolder, NameEnc: nameEnc, CreatedAt: created, AccessMode: "0000"}},
 		{Node: api.DataroomNode{ID: "d", Type: api.NodeTypeFile, NameEnc: nameEnc, MimeTypeID: &later, AccessMode: "9z"}},
 	}
@@ -328,6 +336,10 @@ func TestWithMIME_Fallbacks(t *testing.T) {
 	}
 }
 
+// testWithMIMEFallbacks is the body of TestWithMIME_Fallbacks, not a helper:
+// its failures point at its own lines.
+//
+//nolint:thelper // see above
 func testWithMIMEFallbacks(t *testing.T, codes bool) {
 	identity, err := crypto.GenerateKeyPair()
 	if err != nil {
@@ -386,8 +398,10 @@ func TestLegacyAPI_TypeEncAndListing(t *testing.T) {
 	sess := fake.session()
 	pub := identity.Recipient().String()
 	nameEnc, _ := crypto.EncryptStringForKeys("doc.txt", []string{pub})
-	fake.nodes = []api.DataroomNodeItem{{Node: api.DataroomNode{ID: "n-doc", NameEnc: nameEnc, TypeEnc: &nameEnc},
-		Version: &api.DataroomNodeVersion{ID: "v-doc"}}}
+	fake.nodes = []api.DataroomNodeItem{{
+		Node:    api.DataroomNode{ID: "n-doc", NameEnc: nameEnc, TypeEnc: &nameEnc},
+		Version: &api.DataroomNodeVersion{ID: "v-doc"},
+	}}
 
 	if _, _, err := UploadSmallFile(context.Background(), client, "dr1", nil, "a.pdf", []byte("x"), sess); err != nil {
 		t.Fatal(err)
@@ -422,13 +436,17 @@ func TestMimeRefusal(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"code unknown", &api.HTTPError{Status: 422, Code: api.CodeMimeTypeUnknown, Body: `{"detail":"x"}`},
-			api.CodeMimeTypeUnknown},
+		{
+			"code unknown", &api.HTTPError{Status: 422, Code: api.CodeMimeTypeUnknown, Body: `{"detail":"x"}`},
+			api.CodeMimeTypeUnknown,
+		},
 		{"code limit", &api.HTTPError{Status: 400, Code: api.CodeMimeTypesLimit}, api.CodeMimeTypesLimit},
 		{"detail unknown", &api.HTTPError{Status: 422, Body: `{"detail":"mime_type_unknown"}`}, api.CodeMimeTypeUnknown},
 		{"detail limit", &api.HTTPError{Status: 400, Body: `{"detail":"mime_types_limit"}`}, api.CodeMimeTypesLimit},
-		{"other code, old detail", &api.HTTPError{Status: 400, Code: api.CodeVersionsLimit,
-			Body: `{"detail":"mime_types_limit"}`}, api.CodeVersionsLimit},
+		{"other code, old detail", &api.HTTPError{
+			Status: 400, Code: api.CodeVersionsLimit,
+			Body: `{"detail":"mime_types_limit"}`,
+		}, api.CodeVersionsLimit},
 		{"no code, other detail", &api.HTTPError{Status: 400, Body: `{"detail":"bad"}`}, ""},
 	} {
 		if got := mimeRefusal(fmt.Errorf("wrapped: %w", tc.err)); got != tc.want {
@@ -584,8 +602,10 @@ func TestNodeFromItem_Symlink(t *testing.T) {
 	created := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
 
 	n := nodeFromItem(context.Background(), client, "dr1", &api.DataroomNodeItem{
-		Node: api.DataroomNode{ID: "l", Type: api.NodeTypeSymlink, NameEnc: nameEnc, TargetEnc: &targetEnc,
-			AccessMode: "0777", CreatedAt: created},
+		Node: api.DataroomNode{
+			ID: "l", Type: api.NodeTypeSymlink, NameEnc: nameEnc, TargetEnc: &targetEnc,
+			AccessMode: "0777", CreatedAt: created,
+		},
 	}, sess)
 
 	if n.Type != "symlink" || n.Target() != "../docs/readme.md" || n.Size != int64(len("../docs/readme.md")) ||
@@ -612,7 +632,8 @@ func TestSymlink_RefusedAsFileTarget(t *testing.T) {
 	targetEnc, _ := crypto.EncryptStringForKeys("target", []string{pub})
 	fake.nodes = []api.DataroomNodeItem{{Node: api.DataroomNode{
 		ID: "l", Type: api.NodeTypeSymlink, NameEnc: nameEnc, NameHash: nodeNameHash("link", fake.salt),
-		TargetEnc: &targetEnc}}}
+		TargetEnc: &targetEnc,
+	}}}
 	ctx := context.Background()
 
 	holder, err := findNodeByName(ctx, client, "dr1", nil, "link", sess)

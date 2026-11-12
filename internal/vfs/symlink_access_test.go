@@ -140,7 +140,7 @@ func TestSymlink_Errors(t *testing.T) {
 			if tc.also != nil && !errors.Is(err, tc.also) {
 				t.Errorf("Symlink(%s) = %v, which no longer matches %v", tc.path, err, tc.also)
 			}
-			if tc.want == api.ErrRateLimited && !carriesNoSentinel(err) {
+			if errors.Is(tc.want, api.ErrRateLimited) && !carriesNoSentinel(err) {
 				t.Errorf("Symlink = %v: a rate limit takes no sentinel", err)
 			}
 			if got := len(fake.only("POST")); got != tc.requests {

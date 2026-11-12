@@ -56,6 +56,8 @@ func attrOf(s tracetest.SpanStub, key attribute.Key) (attribute.Value, bool) {
 }
 
 // traced returns a context that carries a span, and that span.
+//
+//nolint:spancheck // the caller ends it
 func traced(t *testing.T) (context.Context, trace.Span) {
 	t.Helper()
 

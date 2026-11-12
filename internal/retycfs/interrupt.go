@@ -67,7 +67,7 @@ var procUsable = sync.OnceValue(func() bool {
 // listed (hidden, or there is none: a container whose processes all run as
 // this user) nothing is known, and a missing entry proves nothing.
 var procShowsAll = sync.OnceValue(func() bool {
-	return procListsOthers("/proc", uint32(os.Geteuid())) //nolint:gosec // G115: IDs are 32 bits on Linux
+	return procListsOthers("/proc", uint32(os.Geteuid()))
 })
 
 // procListsOthers reports whether root, a /proc, lists a process that does

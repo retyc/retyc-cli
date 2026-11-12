@@ -18,11 +18,12 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/crypto"
 	"github.com/retyc/retyc-cli/internal/telemetry"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // — URI and path helpers —————————————————————————————————————————————————————
@@ -395,7 +396,7 @@ func nodeFromItem(
 		return info
 	}
 	if item.Node.IsSymlink() {
-		info.Type = "symlink"
+		info.Type = api.NodeTypeSymlink
 		if item.Node.TargetEnc != nil {
 			if target, err := crypto.DecryptToString(*item.Node.TargetEnc, sess.Identity); err == nil {
 				info.target = target
@@ -705,7 +706,7 @@ func resolveGlob(
 	ctx context.Context, client *api.Client, dataroomID, rawPath string, identity *age.HybridIdentity,
 ) ([]api.DataroomNodeItem, error) {
 	var parts []string
-	for _, p := range strings.Split(strings.TrimPrefix(strings.TrimSpace(rawPath), "/"), "/") {
+	for p := range strings.SplitSeq(strings.TrimPrefix(strings.TrimSpace(rawPath), "/"), "/") {
 		if p != "" {
 			parts = append(parts, p)
 		}
@@ -1405,7 +1406,7 @@ func uploadDataroomDir(
 		entry := queue[0]
 		queue = queue[1:]
 
-		entries, err := os.ReadDir(entry.localPath) //nolint:gosec // G304
+		entries, err := os.ReadDir(entry.localPath)
 		if err != nil {
 			return fmt.Errorf("reading directory %s: %w", entry.localPath, err)
 		}
@@ -1591,7 +1592,7 @@ func organizationKey(ctx context.Context, client *api.Client, machine bool) (str
 			return "", fmt.Errorf("reading the organization key: %w", err)
 		}
 		if ctx.Err() != nil {
-			return "", nil // interrupted: the creation fails on the same context
+			return "", nil //nolint:nilerr // interrupted: the creation fails on the same context
 		}
 		fmt.Fprintf(os.Stderr,
 			"warning: could not read the organization key (%v); the dataroom is created without it\n", err)
@@ -1756,7 +1757,7 @@ func DownloadFromDataroom(
 	if outputDir == "" {
 		outputDir = "."
 	}
-	if err := os.MkdirAll(outputDir, 0700); err != nil {
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating output directory: %w", err)
 	}
 
@@ -1802,7 +1803,7 @@ func DownloadFromDataroom(
 		return nil, err
 	}
 	if item == nil {
-		return nil, fmt.Errorf("cannot download the root folder")
+		return nil, errors.New("cannot download the root folder")
 	}
 	if item.Node.IsFolder() {
 		return nil, fmt.Errorf("%s is a folder — use `ls` to browse it", src.Path)
@@ -1811,7 +1812,7 @@ func DownloadFromDataroom(
 		return nil, fmt.Errorf("%s is a symlink: it has no content to download", src.Path)
 	}
 	if item.Version == nil {
-		return nil, fmt.Errorf("node has no version yet")
+		return nil, errors.New("node has no version yet")
 	}
 
 	name, err := crypto.DecryptToString(item.Node.NameEnc, sess.Identity)
@@ -1955,7 +1956,7 @@ func SymlinkDataroomInto(
 		return DataroomNodeInfo{}, fmt.Errorf("creating symlink: %w", err)
 	}
 	info := DataroomNodeInfo{
-		ID: node.ID, Name: name, Type: "symlink", Size: int64(len(target)), target: target,
+		ID: node.ID, Name: name, Type: api.NodeTypeSymlink, Size: int64(len(target)), target: target,
 		modTime: node.CreatedAt, createdAt: node.CreatedAt,
 		sealed: sealedOf(node),
 	}
@@ -2033,7 +2034,7 @@ func DeleteDataroomNodeLiteralWithSession(
 		return 0, err
 	}
 	if nodeID == nil {
-		return 0, fmt.Errorf("cannot delete the root folder")
+		return 0, errors.New("cannot delete the root folder")
 	}
 	if err := client.DeleteDataroomNode(ctx, *nodeID); err != nil {
 		return 0, fmt.Errorf("deleting node: %w", err)
@@ -2055,7 +2056,7 @@ func MoveDataroomNode(
 		return fmt.Errorf("destination: %w", err)
 	}
 	if src.DataroomID != dst.DataroomID {
-		return fmt.Errorf("source and destination must be in the same dataroom")
+		return errors.New("source and destination must be in the same dataroom")
 	}
 
 	sess, err := resolveDataroomSession(ctx, cfg, client, src.DataroomID, reader)
@@ -2076,7 +2077,7 @@ func MoveDataroomNodeWithSession(
 		return err
 	}
 	if srcNodeID == nil {
-		return fmt.Errorf("cannot move the root folder")
+		return errors.New("cannot move the root folder")
 	}
 
 	dstParentPath, newName := splitPathParent(dstPath)

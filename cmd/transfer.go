@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,12 +11,13 @@ import (
 	"syscall"
 	"text/tabwriter"
 
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	"github.com/retyc/retyc-cli/internal/api"
+	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/internal/ui"
 )
 
 var transferCmd = &cobra.Command{
@@ -31,7 +33,7 @@ var transferLsCmd = &cobra.Command{
 		received, _ := cmd.Flags().GetBool("received")
 
 		if sent && received {
-			return fmt.Errorf("--sent and --received are mutually exclusive")
+			return errors.New("--sent and --received are mutually exclusive")
 		}
 
 		listType := "sent"
@@ -170,7 +172,7 @@ var transferInfoCmd = &cobra.Command{
 func promptTransferPassphrase(minLen int) (string, error) {
 	for {
 		fmt.Fprint(os.Stderr, "Transfer passphrase: ")
-		pb, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115
+		pb, err := term.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Fprint(os.Stderr, "\r\033[2K")
 		if err != nil {
 			return "", fmt.Errorf("reading passphrase: %w", err)
@@ -181,7 +183,7 @@ func promptTransferPassphrase(minLen int) (string, error) {
 			continue
 		}
 		fmt.Fprint(os.Stderr, "Confirm passphrase: ")
-		pb2, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115
+		pb2, err := term.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Fprint(os.Stderr, "\r\033[2K")
 		if err != nil {
 			return "", fmt.Errorf("reading passphrase confirmation: %w", err)
@@ -322,12 +324,12 @@ var transferCreateCmd = &cobra.Command{
 			}
 			var extras []string
 			if title != "" {
-				extras = append(extras, fmt.Sprintf("  Title:    %s", title))
+				extras = append(extras, "  Title:    "+title)
 			}
 			if len(toEmails) > 0 {
-				extras = append(extras, fmt.Sprintf("  To:       %s", strings.Join(toEmails, ", ")))
+				extras = append(extras, "  To:       "+strings.Join(toEmails, ", "))
 			}
-			extras = append(extras, fmt.Sprintf("  Expires:  %s", formatExpiry(expire)))
+			extras = append(extras, "  Expires:  "+formatExpiry(expire))
 			ok, err := confirmFileList(names, sizes, totalSize, extras)
 			if err != nil {
 				return err
@@ -509,10 +511,10 @@ var transferDownloadCmd = &cobra.Command{
 		var transferPassphrase string
 		if userKey == nil || details.SessionPrivateKeyEnc == nil {
 			if details.EphemeralPrivateKeyEnc == nil || details.SessionPrivateKeyEncForPassphrase == nil {
-				return fmt.Errorf("no decryption path available - neither user key nor passphrase data found")
+				return errors.New("no decryption path available - neither user key nor passphrase data found")
 			}
 			fmt.Fprint(os.Stderr, "Transfer passphrase: ")
-			pb, err := term.ReadPassword(int(os.Stdin.Fd())) //nolint:gosec // G115
+			pb, err := term.ReadPassword(int(os.Stdin.Fd()))
 			fmt.Fprint(os.Stderr, "\r\033[2K")
 			if err != nil {
 				return fmt.Errorf("reading passphrase: %w", err)

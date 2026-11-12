@@ -1,4 +1,5 @@
-// Package cmd — fs mount command (FUSE driver, Linux only).
+// The `fs mount` command (FUSE driver, Linux only).
+
 package cmd
 
 import (

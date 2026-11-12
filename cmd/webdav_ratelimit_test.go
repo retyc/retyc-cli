@@ -70,7 +70,7 @@ func TestWebdav_APIRateLimitBecomes429(t *testing.T) {
 			var logged error
 			h := newWebdavHandler(fs, webdav.NewMemLS(), func(_ *http.Request, err error) { logged = err })
 
-			r := httptest.NewRequest(tc.method, tc.path, nil)
+			r := httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, nil)
 			if tc.depth != "" {
 				r.Header.Set("Depth", tc.depth)
 			}
@@ -95,7 +95,7 @@ func TestHandleCopy_APIRateLimitBecomes429(t *testing.T) {
 	fs := newStatusFS(t, http.StatusTooManyRequests)
 	w := httptest.NewRecorder()
 
-	fs.handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/copy.txt", ""))
+	fs.handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", "/dataroom/DR/copy.txt", ""))
 
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d (%s), want 429", w.Code, w.Body.String())
@@ -112,7 +112,7 @@ func TestWebdav_OtherResponsesAreUntouched(t *testing.T) {
 	h := newWebdavHandler(fs, webdav.NewMemLS(), nil)
 
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("DELETE", "/dataroom/DR/old.txt", nil))
+	h.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/dataroom/DR/old.txt", nil))
 	if w.Code != http.StatusMethodNotAllowed || w.Body.String() != http.StatusText(http.StatusMethodNotAllowed) {
 		t.Errorf("failed DELETE = %d %q, want the 405 of x/net/webdav", w.Code, w.Body.String())
 	}
@@ -121,7 +121,7 @@ func TestWebdav_OtherResponsesAreUntouched(t *testing.T) {
 	}
 
 	// Served from the cached listing: no API call.
-	r := httptest.NewRequest("PROPFIND", "/dataroom/DR/doc.txt", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/dataroom/DR/doc.txt", nil)
 	r.Header.Set("Depth", "0")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -172,7 +172,7 @@ func TestRateLimitStatus_HoldsOnlyPropfindDepth1(t *testing.T) {
 				midway = rec.Body.Len()
 				_, _ = w.Write([]byte("<second-entry/>"))
 			}))
-			r := httptest.NewRequest(tc.method, "/dataroom/DR/sub", nil)
+			r := httptest.NewRequestWithContext(t.Context(), tc.method, "/dataroom/DR/sub", nil)
 			if tc.depth != "" {
 				r.Header.Set("Depth", tc.depth)
 			}
@@ -200,7 +200,7 @@ func TestRateLimitStatus_StreamedPropfindKeepsItsStatus(t *testing.T) {
 		noteHandlerError(r, refusal)
 	}))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("PROPFIND", "/dataroom/DR", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/dataroom/DR", nil))
 	if rec.Code != http.StatusMultiStatus || rec.Header().Get("Retry-After") != "" {
 		t.Errorf("response = %d, Retry-After %q; want the 207 already sent", rec.Code, rec.Header().Get("Retry-After"))
 	}
@@ -214,7 +214,7 @@ func TestWebdav_PropfindDepth1OtherFailureIsUnchanged(t *testing.T) {
 	var logged error
 	h := newWebdavHandler(fs, webdav.NewMemLS(), func(_ *http.Request, err error) { logged = err })
 
-	r := httptest.NewRequest("PROPFIND", "/dataroom/DR/sub", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/dataroom/DR/sub", nil)
 	r.Header.Set("Depth", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)

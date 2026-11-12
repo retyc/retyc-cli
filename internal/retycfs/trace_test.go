@@ -3,13 +3,14 @@
 package retycfs
 
 import (
-	"go.opentelemetry.io/otel/codes"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel/codes"
 
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 

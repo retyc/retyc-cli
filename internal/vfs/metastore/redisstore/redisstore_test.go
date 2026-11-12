@@ -350,13 +350,13 @@ func TestListing_Conformance(t *testing.T) {
 
 func TestListing_Large(t *testing.T) {
 	e := newEnv(t)
-	high, clear := e.store(true), e.store(false)
+	high, inClear := e.store(true), e.store(false)
 	nodes := make([]metastore.Node, 3*hsetBatch+7)
 	for i := range nodes {
 		nodes[i] = seal(file(fmt.Sprintf("f%05d", i)))
 	}
 	put(t, high, "/big", nodes...)
-	got, ok := held(t, clear, "/big")
+	got, ok := held(t, inClear, "/big")
 	if !ok || len(got) != len(nodes) {
 		t.Fatalf("large listing: %d nodes, ok=%v", len(got), ok)
 	}
@@ -370,7 +370,7 @@ func TestListing_Large(t *testing.T) {
 	}
 	// One node that does not open makes the listing absent, not shorter.
 	e.codec.failOpen.Store(true)
-	if _, ok := held(t, clear, "/big"); ok {
+	if _, ok := held(t, inClear, "/big"); ok {
 		t.Fatal("a listing with nodes that cannot be opened is served")
 	}
 }
@@ -631,7 +631,7 @@ func TestEntries(t *testing.T) {
 
 func TestHighConfidentiality(t *testing.T) {
 	e := newEnv(t)
-	high, clear := e.store(true), e.store(false)
+	high, inClear := e.store(true), e.store(false)
 	ctx := context.Background()
 	secrets := []string{"confidential-dir", "secret-report", "secret-target", "x-secret-mime", "missing-name"}
 	doc := seal(metastore.Node{
@@ -661,7 +661,7 @@ func TestHighConfidentiality(t *testing.T) {
 	}
 
 	// Both configurations read the sealed values.
-	for _, s := range []*Store{clear, high} {
+	for _, s := range []*Store{inClear, high} {
 		nodes, ok := held(t, s, dir)
 		if !ok || len(nodes) != 2 || !reflect.DeepEqual(nodes, []metastore.Node{link, doc}) {
 			t.Fatalf("sealed listing read back: %+v ok=%v", nodes, ok)
@@ -682,12 +682,12 @@ func TestHighConfidentiality(t *testing.T) {
 	// A clear writer adds to the same hash; the hash now mixes both forms and
 	// both configurations read it. The clear value does hold the name.
 	plain := file("plain-name")
-	_, err = clear.UpsertNode(ctx, lk(dir), plain)
+	_, err = inClear.UpsertNode(ctx, lk(dir), plain)
 	must(t, err)
 	if !strings.Contains(e.dump(), "plain-name") {
 		t.Fatal("a clear writer did not store the name")
 	}
-	for _, s := range []*Store{clear, high} {
+	for _, s := range []*Store{inClear, high} {
 		if nodes, ok := held(t, s, dir); !ok || names(nodes) != "plain-name,secret-report.lnk,secret-report.pdf" {
 			t.Fatalf("mixed listing: %s ok=%v", names(nodes), ok)
 		}
@@ -698,26 +698,26 @@ func TestHighConfidentiality(t *testing.T) {
 	before := gen(t, high, dir)
 	g, err := high.UpsertNode(ctx, lk(dir), file("unsealed"))
 	must(t, err)
-	if _, ok := held(t, clear, dir); ok || g != before+1 {
+	if _, ok := held(t, inClear, dir); ok || g != before+1 {
 		t.Fatalf("upsert of an unsealed node: listing held=%v gen=%d (from %d)", ok, g, before)
 	}
 	// Same for a whole listing: nothing stored, the previous one removed.
 	put(t, high, dir, doc)
 	put(t, high, dir, doc, file("unsealed"))
-	if _, ok := held(t, clear, dir); ok {
+	if _, ok := held(t, inClear, dir); ok {
 		t.Fatal("a listing with an unsealed node was stored, or the previous one kept")
 	}
 	put(t, high, dir, doc)
 	g = gen(t, high, dir)
 	bad := &metastore.Listing{Nodes: []metastore.Node{file("unsealed")}, FetchedAt: time.Now()}
 	stored, err := high.PutListingIf(ctx, lk(dir), bad, g)
-	if _, ok := held(t, clear, dir); ok || stored || err != nil {
+	if _, ok := held(t, inClear, dir); ok || stored || err != nil {
 		t.Fatalf("PutListingIf with an unsealed node: stored=%v held=%v err=%v", stored, ok, err)
 	}
 	// And for a positive entry: the field goes.
 	unsealed := file("unsealed")
 	must(t, high.PutEntry(ctx, ek(dir, doc.Name), &metastore.Entry{Node: &unsealed, FetchedAt: time.Now()}))
-	if _, ok, _ := clear.GetEntry(ctx, ek(dir, doc.Name)); ok {
+	if _, ok, _ := inClear.GetEntry(ctx, ek(dir, doc.Name)); ok {
 		t.Fatal("an unsealed positive entry was stored, or the previous one kept")
 	}
 	if strings.Contains(e.dump(), "unsealed") {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"regexp"
@@ -214,9 +215,7 @@ func (b *bufferedResponse) Write(p []byte) (int, error) { return b.body.Write(p)
 
 // flush replays the captured response onto w.
 func (b *bufferedResponse) flush(w http.ResponseWriter) {
-	for k, v := range b.header {
-		w.Header()[k] = v
-	}
+	maps.Copy(w.Header(), b.header)
 	w.WriteHeader(b.status)
 	_, _ = w.Write(b.body.Bytes())
 }

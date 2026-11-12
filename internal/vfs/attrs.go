@@ -11,7 +11,7 @@ import (
 )
 
 // DefaultFileMode is the mode of a file whose node stores none.
-const DefaultFileMode os.FileMode = 0644
+const DefaultFileMode os.FileMode = 0o644
 
 // WithExecutable returns mode with its execute bits set for whoever may read
 // the file (what chmod +x gives under the usual umask), or cleared. A node
@@ -27,10 +27,10 @@ func WithExecutable(mode os.FileMode, executable bool) os.FileMode {
 // withExecutable is WithExecutable for a stored mode, 0 included.
 func withExecutable(mode os.FileMode, executable bool) os.FileMode {
 	if !executable {
-		return mode &^ 0111
+		return mode &^ 0o111
 	}
 
-	return mode | 0100 | (mode&0444)>>2
+	return mode | 0o100 | (mode&0o444)>>2
 }
 
 // Chmod stores mode as the POSIX mode of the file at path (PUT

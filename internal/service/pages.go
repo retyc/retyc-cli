@@ -45,11 +45,9 @@ func fetchAllPages[R, T any](
 	var processing sync.WaitGroup
 	firstRound := make([]T, 1)
 	rounds := [][]T{firstRound}
-	processing.Add(1)
-	go func() {
-		defer processing.Done()
+	processing.Go(func() {
 		firstRound[0] = process(ctx, first)
-	}()
+	})
 
 	for next := 2; next <= pages; {
 		round, reported, err := fetchPageRange(ctx, next, pages, fetch, process, &processing)
@@ -97,9 +95,7 @@ func fetchPageRange[R, T any](
 		if fetchCtx.Err() != nil {
 			break
 		}
-		fetching.Add(1)
-		go func() {
-			defer fetching.Done()
+		fetching.Go(func() {
 			raw, count, err := fetch(fetchCtx, page)
 			<-slots // the round trip is over: free the slot before processing
 			mu.Lock()
@@ -116,12 +112,10 @@ func fetchPageRange[R, T any](
 				return // the listing already failed: skip the wasted work
 			}
 			reported = max(reported, count)
-			processing.Add(1)
-			go func() {
-				defer processing.Done()
+			processing.Go(func() {
 				results[page-from] = process(ctx, raw)
-			}()
-		}()
+			})
+		})
 	}
 	fetching.Wait()
 

@@ -1,4 +1,5 @@
-// Package cmd — admin command group (organization public API).
+// The `admin` command group (organization public API).
+
 package cmd
 
 import (
@@ -7,11 +8,12 @@ import (
 	"net/http"
 
 	"filippo.io/age"
+	"github.com/spf13/cobra"
+	"golang.org/x/oauth2"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/spf13/cobra"
-	"golang.org/x/oauth2"
 )
 
 var adminCmd = &cobra.Command{
@@ -33,9 +35,8 @@ func newAdminClient() (*config.Config, *api.Client, error) {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
 	if cfg.Admin.APIKey == "" {
-		return nil, nil, fmt.Errorf(
-			"no admin API key configured: create one from the dashboard, then set " +
-				"admin.api_key in the config file or the RETYC_ADMIN_API_KEY environment variable")
+		return nil, nil, errors.New("no admin API key configured: create one from the dashboard, then set " +
+			"admin.api_key in the config file or the RETYC_ADMIN_API_KEY environment variable")
 	}
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: cfg.Admin.APIKey, TokenType: "Bearer"})
 
@@ -46,9 +47,8 @@ func newAdminClient() (*config.Config, *api.Client, error) {
 // configured key file.
 func adminIdentity(cfg *config.Config) (*age.HybridIdentity, error) {
 	if cfg.Admin.PrivateKeyFile == "" {
-		return nil, fmt.Errorf(
-			"this command needs the organization key: set admin.private_key_file " +
-				"in the config file or the RETYC_ADMIN_PRIVATE_KEY_FILE environment variable")
+		return nil, errors.New("this command needs the organization key: set admin.private_key_file " +
+			"in the config file or the RETYC_ADMIN_PRIVATE_KEY_FILE environment variable")
 	}
 
 	return service.LoadAdminIdentity(cfg.Admin.PrivateKeyFile)

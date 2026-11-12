@@ -401,7 +401,7 @@ func Mount(ctx context.Context, tree *vfs.FS, mountpoint string, opts Options) (
 		// The leases of the API are short (five minutes at most) and a file
 		// stays open for hours: the manager renews the locks until the
 		// filesystem is unmounted, then releases those no handle did.
-		lockCtx, stop := context.WithCancel(context.Background()) //nolint:gosec // G118: called by finish (Server.stopLocks)
+		lockCtx, stop := context.WithCancel(context.Background())
 		s.stopLocks, s.locksDone = stop, make(chan struct{})
 		go func() {
 			defer close(s.locksDone)
@@ -702,7 +702,8 @@ func detach(mountpoint string) error {
 
 			continue
 		}
-		out, err := exec.Command(bin, "-u", "-z", mountpoint).CombinedOutput() //nolint:gosec // fixed helper, our mount point
+		// No context: nothing may cancel a detach.
+		out, err := exec.Command(bin, "-u", "-z", mountpoint).CombinedOutput() //nolint:gosec,noctx // our mount point
 		if err == nil {
 			return nil
 		}

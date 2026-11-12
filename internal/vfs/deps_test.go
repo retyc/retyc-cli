@@ -157,7 +157,8 @@ func TestDependencyRule(t *testing.T) {
 				}
 				t.Skip("go tool not found")
 			}
-			cmd := exec.Command(tool, "list", "-deps", "-tags", tags, "./...") // #nosec G204 -- fixed arguments
+			// #nosec G204 -- fixed arguments
+			cmd := exec.CommandContext(t.Context(), tool, "list", "-deps", "-tags", tags, "./...")
 			out, err := cmd.Output()
 			if err != nil {
 				t.Fatalf("go list -deps: %v", err)

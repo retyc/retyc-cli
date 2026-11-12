@@ -360,7 +360,7 @@ func TestInterrupt_KilledReader(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command(exe) //nolint:gosec // G204: the test binary itself
+			cmd := exec.CommandContext(t.Context(), exe) //nolint:gosec // G204: the test binary itself
 			cmd.Env = append(os.Environ(), helperReadEnv+"="+filepath.Join(m.dir, "big.bin"))
 			var output bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &output, &output
@@ -398,11 +398,12 @@ func TestInterrupt_KilledReader(t *testing.T) {
 				t.Fatal(err)
 			}
 			select {
-			case <-exited:
+			case err := <-exited:
+				t.Logf("killed reader: %v", err)
 			case <-time.After(5 * time.Second):
 				release()
-				<-exited
-				t.Fatal("the killed reader waited for the download the API holds")
+				err := <-exited
+				t.Fatalf("the killed reader waited for the download the API holds (exit: %v)", err)
 			}
 			took := time.Since(killed)
 			t.Logf("the reader was gone %s after its kill", took.Round(time.Millisecond))

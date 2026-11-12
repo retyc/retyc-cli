@@ -5,8 +5,9 @@ package cmd
 import (
 	"testing"
 
-	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/spf13/viper"
+
+	"github.com/retyc/retyc-cli/internal/config"
 )
 
 // insecure is not a setting of a prod binary: `config show` must not list it,

@@ -12,9 +12,10 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"golang.org/x/oauth2"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/crypto"
-	"golang.org/x/oauth2"
 )
 
 // orgKeyServer fakes the routes a dataroom creation goes through. serviceAccounts

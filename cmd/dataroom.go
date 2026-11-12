@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,12 +11,13 @@ import (
 	"syscall"
 	"text/tabwriter"
 
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/ui"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/retyc/retyc-cli/internal/api"
+	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/internal/ui"
 )
 
 var dataroomCmd = &cobra.Command{
@@ -178,7 +180,7 @@ but the next completed upload of a file deletes its older versions.
 			return err
 		}
 		if update.Title == nil && update.VersioningEnabled == nil && update.StorageCapacity == nil {
-			return fmt.Errorf("nothing to update: set at least one of --title, --versioning, --storage-capacity")
+			return errors.New("nothing to update: set at least one of --title, --versioning, --storage-capacity")
 		}
 		if update.VersioningEnabled != nil && !*update.VersioningEnabled {
 			yes, _ := cmd.Flags().GetBool("yes")
@@ -511,17 +513,17 @@ var dataroomCpCmd = &cobra.Command{
 		switch {
 		case dstErr == nil && srcErr == nil:
 			if len(srcs) > 1 {
-				return fmt.Errorf("only one remote source is supported for a server-side copy")
+				return errors.New("only one remote source is supported for a server-side copy")
 			}
 
 			return dataroomCopyRemote(cmd.Context(), srcs[0], dst)
 		case dstErr != nil && srcErr != nil:
-			return fmt.Errorf("either source or destination must be a retyc:// URI")
+			return errors.New("either source or destination must be a retyc:// URI")
 		case dstErr == nil:
 			return dataroomUpload(cmd.Context(), srcs, dst, yes)
 		default:
 			if len(srcs) > 1 {
-				return fmt.Errorf("only one remote source is supported for download")
+				return errors.New("only one remote source is supported for download")
 			}
 
 			return dataroomDownload(cmd.Context(), srcs[0], dst)

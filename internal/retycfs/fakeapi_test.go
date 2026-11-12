@@ -121,6 +121,8 @@ type fakeAPI struct {
 }
 
 func newFakeAPI(t testing.TB) *fakeAPI {
+	t.Helper()
+
 	return &fakeAPI{
 		t:         t,
 		datarooms: make(map[string]*fakeDataroom),

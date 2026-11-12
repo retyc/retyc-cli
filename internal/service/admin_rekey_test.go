@@ -18,14 +18,14 @@ func TestRekeyRecipientKeys(t *testing.T) {
 		{
 			name: "expected key takes precedence over current",
 			holders: []rekeyKeyHolder{
-				{Label: "a@x.co", PublicKey: ptr("old"), ExpectedPublicKey: ptr("new")},
+				{Label: "a@x.co", PublicKey: new("old"), ExpectedPublicKey: new("new")},
 			},
 			wantKeys: []string{"new"},
 		},
 		{
 			name: "current key used when no expected key",
 			holders: []rekeyKeyHolder{
-				{Label: "b@x.co", PublicKey: ptr("cur")},
+				{Label: "b@x.co", PublicKey: new("cur")},
 			},
 			wantKeys: []string{"cur"},
 		},
@@ -33,7 +33,7 @@ func TestRekeyRecipientKeys(t *testing.T) {
 			name: "keyless holder skipped",
 			holders: []rekeyKeyHolder{
 				{Label: "ext@x.co"},
-				{Label: "c@x.co", PublicKey: ptr("k1")},
+				{Label: "c@x.co", PublicKey: new("k1")},
 			},
 			wantKeys:    []string{"k1"},
 			wantSkipped: []string{"ext@x.co"},
@@ -41,8 +41,8 @@ func TestRekeyRecipientKeys(t *testing.T) {
 		{
 			name: "duplicate keys deduplicated",
 			holders: []rekeyKeyHolder{
-				{Label: "a@x.co", PublicKey: ptr("k1")},
-				{Label: "b@x.co", PublicKey: ptr("k1")},
+				{Label: "a@x.co", PublicKey: new("k1")},
+				{Label: "b@x.co", PublicKey: new("k1")},
 			},
 			wantKeys: []string{"k1"},
 		},
@@ -74,7 +74,7 @@ func TestPushRekey_AlwaysIncludesOrganizationKey(t *testing.T) {
 	// The service account is listed without any key (e.g. after a rotation):
 	// the pushed blob must still be decryptable by the organization key.
 	holders := []rekeyKeyHolder{
-		{Label: "member@x.co", PublicKey: ptr(member.Recipient().String())},
+		{Label: "member@x.co", PublicKey: new(member.Recipient().String())},
 		{Label: "service-account@x.co"},
 	}
 
@@ -109,7 +109,7 @@ func TestPushRekey_OrganizationKeyNotDuplicated(t *testing.T) {
 		t.Fatal(err)
 	}
 	holders := []rekeyKeyHolder{
-		{Label: "service-account@x.co", PublicKey: ptr(orgKey.Recipient().String())},
+		{Label: "service-account@x.co", PublicKey: new(orgKey.Recipient().String())},
 	}
 	res, err := pushRekey(context.Background(), "k", orgKey, holders, func(string) error { return nil })
 	if err != nil {

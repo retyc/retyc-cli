@@ -22,8 +22,10 @@ import (
 // link the walk must not follow.
 var warmTree = map[string][]service.DataroomNodeInfo{
 	"/": {
-		{ID: "a", Name: "a", Type: "dir"}, {ID: "c", Name: "c", Type: "dir"},
-		{ID: "f1", Name: "f1", Type: "file"}, {ID: "l", Name: "l", Type: "symlink"},
+		{ID: "a", Name: "a", Type: "dir"},
+		{ID: "c", Name: "c", Type: "dir"},
+		{ID: "f1", Name: "f1", Type: "file"},
+		{ID: "l", Name: "l", Type: "symlink"},
 	},
 	"/a":   {{ID: "b", Name: "b", Type: "dir"}, {ID: "f2", Name: "f2", Type: "file"}},
 	"/a/b": {{ID: "f3", Name: "f3", Type: "file"}},

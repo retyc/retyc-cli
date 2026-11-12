@@ -22,6 +22,7 @@ const (
 	AttrChunkIndex = attribute.Key("retyc.chunk.index")
 	// Identifiers of the other API resources, keyed by the route segment
 	// before them (see resourceKeys in roundtripper.go).
+
 	AttrVersionID         = attribute.Key("retyc.version.id")
 	AttrTransferID        = attribute.Key("retyc.transfer.id") // the backend says "share"
 	AttrFileID            = attribute.Key("retyc.file.id")
@@ -30,6 +31,7 @@ const (
 	AttrBlacklistDomainID = attribute.Key("retyc.blacklist_domain.id")
 	// Chunk sizes differ by direction: the encrypt span sees the plaintext,
 	// the decrypt span the ciphertext (AGE header + payload).
+
 	AttrChunkPlaintextBytes  = attribute.Key("retyc.chunk.plaintext_bytes")
 	AttrChunkCiphertextBytes = attribute.Key("retyc.chunk.ciphertext_bytes")
 	AttrKeyKind              = attribute.Key("retyc.key.kind")   // user | transfer

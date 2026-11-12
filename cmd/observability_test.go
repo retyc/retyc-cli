@@ -12,16 +12,17 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"golang.org/x/oauth2"
+
 	"github.com/retyc/retyc-cli/internal/metrics"
 	"github.com/retyc/retyc-cli/internal/service"
 	"github.com/retyc/retyc-cli/internal/vfs"
-	"golang.org/x/oauth2"
 )
 
 func getObservability(t *testing.T, h http.Handler, path string) (int, string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
 	body, err := io.ReadAll(rec.Result().Body)
 	if err != nil {
 		t.Fatalf("reading body: %v", err)
@@ -63,6 +64,7 @@ func TestObservability_MetricsExposesGoAndBuildInfo(t *testing.T) {
 		t.Error("/metrics body missing process_start_time_seconds")
 	}
 }
+
 func TestObservability_HealthzAlwaysOK(t *testing.T) {
 	health := newServeHealth()
 	h := mustObservability(t, health, observabilityOptions{})
@@ -102,14 +104,18 @@ func TestObservability_UnknownPathIs404(t *testing.T) {
 }
 
 func TestStartObservabilityServer_ServesProbes(t *testing.T) {
-	srv, err := startObservabilityServer("127.0.0.1:0",
+	srv, err := startObservabilityServer(t.Context(), "127.0.0.1:0",
 		mustObservability(t, newServeHealth(), observabilityOptions{}))
 	if err != nil {
 		t.Fatalf("startObservabilityServer: %v", err)
 	}
 	defer srv.Close() //nolint:errcheck
 
-	resp, err := http.Get("http://" + srv.Addr + "/healthz")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+srv.Addr+"/healthz", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /healthz: %v", err)
 	}
@@ -120,13 +126,13 @@ func TestStartObservabilityServer_ServesProbes(t *testing.T) {
 }
 
 func TestStartObservabilityServer_BindError(t *testing.T) {
-	first, err := startObservabilityServer("127.0.0.1:0", http.NotFoundHandler())
+	first, err := startObservabilityServer(t.Context(), "127.0.0.1:0", http.NotFoundHandler())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.Close() //nolint:errcheck
 
-	if _, err := startObservabilityServer(first.Addr, http.NotFoundHandler()); err == nil {
+	if _, err := startObservabilityServer(t.Context(), first.Addr, http.NotFoundHandler()); err == nil {
 		t.Error("second bind on the same address should fail")
 	}
 }
@@ -235,7 +241,7 @@ func TestObservability_ConstLabelsOnEverySeries(t *testing.T) {
 	_, body := getObservability(t, h, "/metrics")
 	for _, prefix := range []string{"retycfs_build_info{", "retycfs_api_requests_total{", "go_goroutines{"} {
 		var found bool
-		for _, line := range strings.Split(body, "\n") {
+		for line := range strings.SplitSeq(body, "\n") {
 			if strings.HasPrefix(line, prefix) {
 				found = true
 				if !strings.Contains(line, `identity="abc"`) {
@@ -270,7 +276,7 @@ func TestObservability_ExposesMountMetrics(t *testing.T) {
 
 	h := mustObservability(t, newServeHealth(), observabilityOptions{})
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 	for _, name := range []string{
 		`retycfs_ops_total{op="lookup",result="ok"}`,

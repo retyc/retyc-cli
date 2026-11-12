@@ -186,8 +186,10 @@ func TestMachineDenyEnableDisable(t *testing.T) {
 		route  string
 		result string
 	}{
-		{[]string{"deny", testEnrollmentID, "--yes"},
-			"POST /organization/machines/enrollments/" + testEnrollmentID + "/deny", "denied"},
+		{
+			[]string{"deny", testEnrollmentID, "--yes"},
+			"POST /organization/machines/enrollments/" + testEnrollmentID + "/deny", "denied",
+		},
 		{[]string{"disable", machineID, "--yes"}, "PUT /organization/machines/" + machineID + "/disable", "disabled"},
 		{[]string{"enable", machineID, "--yes"}, "PUT /organization/machines/" + machineID + "/enable", "enabled"},
 		{[]string{"rm", machineID, "--yes"}, "DELETE /organization/machines/" + machineID, "deleted"},

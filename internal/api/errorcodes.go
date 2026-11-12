@@ -51,8 +51,7 @@ const (
 // ErrorCode returns the X-Error-Code of the HTTPError in err's chain, or ""
 // when err is not an API refusal or the refusal carries no code.
 func ErrorCode(err error) string {
-	var httpErr *HTTPError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[*HTTPError](err); ok {
 		return httpErr.Code
 	}
 

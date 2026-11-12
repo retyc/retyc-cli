@@ -12,7 +12,7 @@ import (
 
 // stderrIsTerminal reports whether stderr is a terminal; a variable for tests.
 var stderrIsTerminal = func() bool {
-	return term.IsTerminal(int(os.Stderr.Fd())) //nolint:gosec // a file descriptor fits an int
+	return term.IsTerminal(int(os.Stderr.Fd()))
 }
 
 var frames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}

@@ -1,4 +1,5 @@
-// Package api — organization routes of the user API.
+// Organization routes of the user API.
+
 package api
 
 import (

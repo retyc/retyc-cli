@@ -1,4 +1,5 @@
-// Package cmd — fs command group (filesystem access to datarooms).
+// The `fs` command group (filesystem access to datarooms).
+
 package cmd
 
 import (

@@ -68,7 +68,7 @@ func TestPropfind_ChildrenAreAnsweredFromTheListing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req := httptest.NewRequest("PROPFIND", "/dataroom/DR/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/dataroom/DR/", nil)
 	req.Header.Set("Depth", "1")
 	rec := httptest.NewRecorder()
 	markReadRequests(newWebdavHandler(fs, webdav.NewMemLS(), nil)).ServeHTTP(rec, req)

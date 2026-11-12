@@ -157,8 +157,9 @@ func newLot2FS(t *testing.T, fake *lot2API) *webdavFS {
 	return fs
 }
 
-func copyRequest(src, dst string, overwrite string) *http.Request {
-	r := httptest.NewRequest("COPY", src, nil)
+func copyRequest(t *testing.T, src, dst string, overwrite string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequestWithContext(t.Context(), "COPY", src, nil)
 	r.Header.Set("Destination", dst)
 	if overwrite != "" {
 		r.Header.Set("Overwrite", overwrite)
@@ -174,7 +175,7 @@ func TestHandleCopy_File(t *testing.T) {
 	fs := newLot2FS(t, fake)
 	w := httptest.NewRecorder()
 
-	fs.handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/sub/copy.txt", ""))
+	fs.handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", "/dataroom/DR/sub/copy.txt", ""))
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d (%s), want 201", w.Code, w.Body.String())
@@ -211,7 +212,7 @@ func TestHandleCopy_Refusals(t *testing.T) {
 			fake := &lot2API{t: t}
 			fs := newLot2FS(t, fake)
 			w := httptest.NewRecorder()
-			fs.handleCopy(w, copyRequest(tc.src, tc.dst, tc.overwrite))
+			fs.handleCopy(w, copyRequest(t, tc.src, tc.dst, tc.overwrite))
 			if w.Code != tc.want {
 				t.Errorf("status = %d (%s), want %d", w.Code, strings.TrimSpace(w.Body.String()), tc.want)
 			}
@@ -239,7 +240,7 @@ func TestHandleCopy_GoneResource(t *testing.T) {
 		fake := &lot2API{t: t, copyGone: tc.status, copyGoneCode: tc.code}
 		fs := newLot2FS(t, fake)
 		w := httptest.NewRecorder()
-		fs.handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/sub/copy.txt", ""))
+		fs.handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", "/dataroom/DR/sub/copy.txt", ""))
 		if w.Code != tc.want {
 			t.Errorf("%d %q: status = %d (%s), want %d", tc.status, tc.code, w.Code,
 				strings.TrimSpace(w.Body.String()), tc.want)
@@ -256,14 +257,14 @@ func TestHandleCopy_ReplaceWaitsForPurge(t *testing.T) {
 
 	fake := &lot2API{t: t, copyConflicts: 2}
 	w := httptest.NewRecorder()
-	newLot2FS(t, fake).handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/old.txt", ""))
+	newLot2FS(t, fake).handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", "/dataroom/DR/old.txt", ""))
 	if w.Code != http.StatusNoContent || fake.count("POST /dataroom/node/n-src/copy") != 3 {
 		t.Errorf("status = %d after %d copies, want 204 after 3", w.Code, fake.count("POST /dataroom/node/n-src/copy"))
 	}
 
 	fake = &lot2API{t: t, copyConflicts: 1000}
 	w = httptest.NewRecorder()
-	newLot2FS(t, fake).handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/old.txt", ""))
+	newLot2FS(t, fake).handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", "/dataroom/DR/old.txt", ""))
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409 once the wait is over", w.Code)
 	}
@@ -271,7 +272,7 @@ func TestHandleCopy_ReplaceWaitsForPurge(t *testing.T) {
 	// A name held by a file this server did not delete is not waited for.
 	fake = &lot2API{t: t, copyConflicts: 1}
 	w = httptest.NewRecorder()
-	newLot2FS(t, fake).handleCopy(w, copyRequest("/dataroom/DR/doc.txt", "/dataroom/DR/sub/new.txt", ""))
+	newLot2FS(t, fake).handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", "/dataroom/DR/sub/new.txt", ""))
 	if w.Code != http.StatusConflict || fake.count("POST /dataroom/node/n-src/copy") != 1 {
 		t.Errorf("status = %d after %d copies, want 409 after 1", w.Code, fake.count("POST /dataroom/node/n-src/copy"))
 	}
@@ -321,13 +322,15 @@ func newLockedHandler(fs *webdavFS) (http.Handler, *lockMirror) {
 const lockBody = `<?xml version="1.0" encoding="utf-8"?><D:lockinfo xmlns:D="DAV:">` +
 	`<D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype><D:owner>me</D:owner></D:lockinfo>`
 
-func lockRequest(path, ifHeader string) *http.Request {
+func lockRequest(t *testing.T, path, ifHeader string) *http.Request {
+	t.Helper()
+
 	var r *http.Request
 	if ifHeader != "" {
-		r = httptest.NewRequest("LOCK", path, nil)
+		r = httptest.NewRequestWithContext(t.Context(), "LOCK", path, nil)
 		r.Header.Set("If", ifHeader)
 	} else {
-		r = httptest.NewRequest("LOCK", path, strings.NewReader(lockBody))
+		r = httptest.NewRequestWithContext(t.Context(), "LOCK", path, strings.NewReader(lockBody))
 	}
 	r.Header.Set("Timeout", "Second-3600")
 	r.Header.Set("Depth", "0")
@@ -343,7 +346,7 @@ func TestLockMirror_LockRefreshUnlock(t *testing.T) {
 	handler, mirror := newLockedHandler(fs)
 
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", ""))
+	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/locked.txt", ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("LOCK status = %d (%s)", w.Code, w.Body.String())
 	}
@@ -353,13 +356,13 @@ func TestLockMirror_LockRefreshUnlock(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", "("+token+")"))
+	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/locked.txt", "("+token+")"))
 	if w.Code != http.StatusOK || fake.count("PUT /dataroom/node/lock/l-1") != 1 {
 		t.Errorf("refresh: status = %d, calls = %v", w.Code, fake.calls)
 	}
 
 	w = httptest.NewRecorder()
-	r := httptest.NewRequest("UNLOCK", "/dataroom/DR/locked.txt", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "UNLOCK", "/dataroom/DR/locked.txt", nil)
 	r.Header.Set("Lock-Token", token)
 	handler.ServeHTTP(w, r)
 	if w.Code != http.StatusNoContent || mirror.held() != 0 || fake.count("DELETE /dataroom/node/lock/l-1") != 1 {
@@ -375,7 +378,7 @@ func TestLockMirror_ServerLocked(t *testing.T) {
 	handler, mirror := newLockedHandler(fs)
 
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", ""))
+	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/locked.txt", ""))
 	if w.Code != webdav.StatusLocked || mirror.held() != 0 {
 		t.Fatalf("status = %d, held = %d, want 423 and nothing held", w.Code, mirror.held())
 	}
@@ -384,7 +387,7 @@ func TestLockMirror_ServerLocked(t *testing.T) {
 	fake.lockStatus = http.StatusCreated
 	fake.mu.Unlock()
 	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", ""))
+	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/locked.txt", ""))
 	if w.Code != http.StatusOK || mirror.held() != 1 {
 		t.Errorf("after the server lock lifted: status = %d, held = %d", w.Code, mirror.held())
 	}
@@ -398,7 +401,7 @@ func TestLockMirror_FolderStaysLocal(t *testing.T) {
 	handler, mirror := newLockedHandler(fs)
 
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest("/dataroom/DR/sub", ""))
+	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/sub", ""))
 	if w.Code != http.StatusOK || mirror.held() != 0 || fake.count("POST") != 0 {
 		t.Errorf("status = %d, held = %d, calls = %v", w.Code, mirror.held(), fake.calls)
 	}
@@ -410,7 +413,7 @@ func TestLockMirror_ReleaseAllOnShutdown(t *testing.T) {
 	fs := newLot2FS(t, fake)
 	handler, mirror := newLockedHandler(fs)
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", ""))
+	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/locked.txt", ""))
 	if mirror.held() != 1 {
 		t.Fatalf("held = %d", mirror.held())
 	}
@@ -462,7 +465,7 @@ func TestLockMirror_RelocksAfterLocalLapse(t *testing.T) {
 	handler, mirror := newLockedHandler(fs)
 
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", ""))
+	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/locked.txt", ""))
 	if w.Code != http.StatusOK || mirror.held() != 1 {
 		t.Fatalf("first LOCK: status = %d, held = %d", w.Code, mirror.held())
 	}
@@ -472,7 +475,7 @@ func TestLockMirror_RelocksAfterLocalLapse(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest("/dataroom/DR/locked.txt", ""))
+	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/locked.txt", ""))
 	if w.Code != http.StatusOK || mirror.held() != 1 {
 		t.Errorf("second LOCK: status = %d (%s), held = %d; want 200 and one lock", w.Code, w.Body.String(), mirror.held())
 	}

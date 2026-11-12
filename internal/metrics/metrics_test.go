@@ -68,8 +68,13 @@ func TestRoundTripper_ObservesStatusAndRoute(t *testing.T) {
 	before := testutil.ToFloat64(counter)
 
 	client := &http.Client{Transport: RoundTripper(http.DefaultTransport)}
-	resp, err := client.Post(srv.URL+"/dataroom/node/version/019d3de3-cba2-76d0-962d-7817e9858661/chunk/7",
-		"application/octet-stream", strings.NewReader("x"))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		srv.URL+"/dataroom/node/version/019d3de3-cba2-76d0-962d-7817e9858661/chunk/7", strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,9 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/retyc/retyc-cli/internal/config"
 )
 
 func TestResolveWebdavAddr_FlagOverridesEnv(t *testing.T) {

@@ -13,12 +13,13 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/spf13/cobra"
+	"golang.org/x/oauth2"
+
 	"github.com/retyc/retyc-cli/internal/api"
 	"github.com/retyc/retyc-cli/internal/auth"
 	"github.com/retyc/retyc-cli/internal/config"
 	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/spf13/cobra"
-	"golang.org/x/oauth2"
 )
 
 var mcpCmd = &cobra.Command{
@@ -142,7 +143,7 @@ func mcpPassphraseReader() (string, error) {
 // mcpProgressFn returns a ProgressFn that sends MCP progress notifications.
 // If progressToken is nil, returns nil (no notifications).
 // done is updated atomically because UploadChunks calls progress from concurrent goroutines.
-func mcpProgressFn(srv *server.MCPServer, ctx context.Context, progressToken mcp.ProgressToken) service.ProgressFn {
+func mcpProgressFn(ctx context.Context, srv *server.MCPServer, progressToken mcp.ProgressToken) service.ProgressFn {
 	if progressToken == nil {
 		return nil
 	}
@@ -268,6 +269,7 @@ func registerAuthTools(srv *server.MCPServer) {
 			}
 			tok, err := mustGetToken(ctx, cfg)
 			if err != nil {
+				//nolint:nilerr // "not logged in" is the tool's answer, not its failure
 				return mcp.NewToolResultText(toJSON(map[string]any{
 					"authenticated": false,
 					"error":         err.Error(),
@@ -345,7 +347,7 @@ func registerAuthTools(srv *server.MCPServer) {
 			}
 			deviceCode := req.GetString("device_code", "")
 			if deviceCode == "" {
-				return toolErr(fmt.Errorf("device_code is required"))
+				return toolErr(errors.New("device_code is required"))
 			}
 			cfg, err := config.Load()
 			if err != nil {
@@ -594,7 +596,7 @@ func registerTransferTools(srv *server.MCPServer) {
 				GeneratePassphrase: req.GetBool("generate_passphrase", false),
 				ToEmails:           req.GetStringSlice("to", nil),
 				ExpireSecs:         req.GetInt("expire", 3600),
-			}, mcpPassphraseReader, mcpProgressFn(srv, ctx, token))
+			}, mcpPassphraseReader, mcpProgressFn(ctx, srv, token))
 			if err != nil {
 				return toolErr(err)
 			}
@@ -630,13 +632,13 @@ func registerTransferTools(srv *server.MCPServer) {
 			}
 			outputDir := req.GetString("output_dir", "")
 			if outputDir == "" {
-				return toolErr(fmt.Errorf("output_dir is required"))
+				return toolErr(errors.New("output_dir is required"))
 			}
 			result, err := service.DownloadTransfer(ctx, cfg, client, service.DownloadTransferParams{
 				ShareID:    req.GetString("id", ""),
 				OutputDir:  outputDir,
 				Passphrase: req.GetString("passphrase", ""),
-			}, mcpPassphraseReader, mcpProgressFn(srv, ctx, token))
+			}, mcpPassphraseReader, mcpProgressFn(ctx, srv, token))
 			if err != nil {
 				return toolErr(err)
 			}
@@ -690,6 +692,7 @@ func registerTransferTools(srv *server.MCPServer) {
 
 // — Dataroom tools ————————————————————————————————————————————————————————————
 
+//nolint:maintidx // a flat list of tool registrations, one closure each
 func registerDataroomTools(srv *server.MCPServer) {
 	var absPathHint string
 	if runtime.GOOS == "windows" {
@@ -824,7 +827,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 				localPaths,
 				req.GetString("remote_uri", ""),
 				mcpPassphraseReader,
-				mcpProgressFn(srv, ctx, token),
+				mcpProgressFn(ctx, srv, token),
 			); err != nil {
 				return toolErr(err)
 			}
@@ -863,14 +866,14 @@ func registerDataroomTools(srv *server.MCPServer) {
 			}
 			localDir := req.GetString("local_dir", "")
 			if localDir == "" {
-				return toolErr(fmt.Errorf("local_dir is required"))
+				return toolErr(errors.New("local_dir is required"))
 			}
 			files, err := service.DownloadFromDataroom(
 				ctx, cfg, client,
 				req.GetString("remote_uri", ""),
 				localDir,
 				mcpPassphraseReader,
-				mcpProgressFn(srv, ctx, token),
+				mcpProgressFn(ctx, srv, token),
 			)
 			if err != nil {
 				return toolErr(err)
