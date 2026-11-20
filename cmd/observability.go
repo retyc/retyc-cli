@@ -139,7 +139,7 @@ func parseMetricsLabels(items []string) (prometheus.Labels, error) {
 func sessionsCachedGauge(tree *vfs.FS) prometheus.Collector {
 	return prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: "retycfs_sessions_cached",
-		Help: "Dataroom sessions held unlocked in memory by the mount.",
+		Help: "Storage space sessions held unlocked in memory by the mount.",
 	}, func() float64 { return float64(tree.SessionsCached()) })
 }
 

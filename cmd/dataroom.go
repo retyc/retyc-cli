@@ -21,20 +21,21 @@ import (
 )
 
 var dataroomCmd = &cobra.Command{
-	Use:   "dataroom",
-	Short: "Manage datarooms",
+	Use:     "space",
+	Aliases: []string{"dataroom"},
+	Short:   "Manage storage spaces (end-to-end encrypted shared storage)",
 }
 
 var dataroomUserCmd = &cobra.Command{
 	Use:   "user",
-	Short: "Manage dataroom users",
+	Short: "Manage the members of a storage space",
 }
 
 // — dataroom ls ——————————————————————————————————————————————————————————————
 
 var dataroomLsCmd = &cobra.Command{
-	Use:   "ls [retyc://dataroom_id[/path]]",
-	Short: "List datarooms, or list files in a dataroom path",
+	Use:   "ls [retyc://space_id[/path]]",
+	Short: "List your storage spaces, or the files at a path of one",
 	Args:  cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -55,12 +56,12 @@ var dataroomLsCmd = &cobra.Command{
 				return printJSON(newItemsJSON(result.Items))
 			}
 			if len(result.Items) == 0 {
-				fmt.Println("No datarooms found.")
+				fmt.Println("No storage spaces found.")
 
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "DATAROOM ID\tTITLE\tROLE\tCREATED")
+			fmt.Fprintln(w, "SPACE ID\tTITLE\tROLE\tCREATED")
 			for _, dr := range result.Items {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 					dr.ID,
@@ -119,7 +120,7 @@ var dataroomLsCmd = &cobra.Command{
 
 var dataroomCreateCmd = &cobra.Command{
 	Use:   "create --title <title> [--versioning=false] [--storage-capacity SIZE]",
-	Short: "Create a new dataroom",
+	Short: "Create a new storage space",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		title, _ := cmd.Flags().GetString("title")
 		opts, err := dataroomOptionsFromFlags(cmd.Flags())
@@ -144,7 +145,7 @@ var dataroomCreateCmd = &cobra.Command{
 		if jsonOutput {
 			return printJSON(dataroomCreateJSON{ID: result.ID, Title: result.Title})
 		}
-		fmt.Printf("Dataroom %s created.\n", result.ID)
+		fmt.Printf("Storage space %s created.\n", result.ID)
 		if result.Title != "" {
 			fmt.Printf("Title: %s\n", ui.Escape(result.Title))
 		}
@@ -156,9 +157,9 @@ var dataroomCreateCmd = &cobra.Command{
 // — dataroom set —————————————————————————————————————————————————————————————
 
 var dataroomSetCmd = &cobra.Command{
-	Use:   "set <dataroom_id|retyc://dataroom_id> [--title T] [--versioning=true|false] [--storage-capacity SIZE]",
-	Short: "Change a dataroom's title, versioning or storage capacity (only the flags you set are sent)",
-	Long: `Change a dataroom's title, versioning or storage capacity. Only the flags you set are sent.
+	Use:   "set <space_id|retyc://space_id> [--title T] [--versioning=true|false] [--storage-capacity SIZE]",
+	Short: "Change a storage space's title, versioning or storage capacity (only the flags you set are sent)",
+	Long: `Change a storage space's title, versioning or storage capacity. Only the flags you set are sent.
 
 --versioning=false keeps one complete version per file: nothing is purged at once,
 but the next completed upload of a file deletes its older versions.
@@ -211,7 +212,7 @@ but the next completed upload of a file deletes its older versions.
 		if jsonOutput {
 			return printJSON(dr)
 		}
-		fmt.Printf("Dataroom %s updated.\n", dr.ID)
+		fmt.Printf("Storage space %s updated.\n", dr.ID)
 		fmt.Printf("Title: %s\n", ui.Escape(dr.Title))
 		if dr.Versioning() {
 			fmt.Println("Versioning: enabled")
@@ -232,7 +233,7 @@ but the next completed upload of a file deletes its older versions.
 func addDataroomOptionFlags(flags *pflag.FlagSet) {
 	// Only read when set: no default shown, so set does not suggest it turns versioning on.
 	flags.Bool("versioning", false, "Keep every version of a file; --versioning=false keeps one complete version per file")
-	flags.String("storage-capacity", "", "Space reserved on the owner's plan, binary units (e.g. 50G, 50GiB, 1.5TiB)")
+	flags.String("storage-capacity", "", "Storage reserved on the owner's plan, binary units (e.g. 50G, 50GiB, 1.5TiB)")
 }
 
 // dataroomOptionsFromFlags returns the dataroom settings whose flags were set.
@@ -264,7 +265,7 @@ func dataroomIDArg(arg string) (string, error) {
 		return "", err
 	}
 	if !uri.IsRoot() {
-		return "", fmt.Errorf("%q names a path, expected a dataroom (retyc://<id>)", arg)
+		return "", fmt.Errorf("%q names a path, expected a storage space (retyc://<id>)", arg)
 	}
 
 	return uri.DataroomID, nil
@@ -273,8 +274,8 @@ func dataroomIDArg(arg string) (string, error) {
 // — dataroom info ————————————————————————————————————————————————————————————
 
 var dataroomInfoCmd = &cobra.Command{
-	Use:   "info <dataroom_id>",
-	Short: "Show dataroom details, stats and members",
+	Use:   "info <space_id>",
+	Short: "Show storage space details, stats and members",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -344,8 +345,8 @@ func printStorage(stats *api.DataroomStats) {
 // — dataroom user add ————————————————————————————————————————————————————————
 
 var dataroomUserAddCmd = &cobra.Command{
-	Use:   "add <dataroom_id> <email>",
-	Short: "Add a user to a dataroom",
+	Use:   "add <space_id> <email>",
+	Short: "Add a user to a storage space",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		drID := args[0]
@@ -382,8 +383,8 @@ var dataroomUserAddCmd = &cobra.Command{
 // — dataroom user rm —————————————————————————————————————————————————————————
 
 var dataroomUserRmCmd = &cobra.Command{
-	Use:   "rm <dataroom_id> <user_id>",
-	Short: "Remove a user from a dataroom",
+	Use:   "rm <space_id> <user_id>",
+	Short: "Remove a user from a storage space",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		drID := args[0]
@@ -419,11 +420,11 @@ var dataroomUserRmCmd = &cobra.Command{
 // — dataroom user chown ——————————————————————————————————————————————————————
 
 var dataroomUserChownCmd = &cobra.Command{
-	Use:   "chown <dataroom_id> <user_id|email>",
-	Short: "Transfer the dataroom ownership to an admin member",
-	Long: `Transfer the dataroom ownership to a member who is already admin of it.
-You become admin and cannot take the ownership back yourself. The dataroom
-then counts against the new owner's plan (dataroom count and storage).`,
+	Use:   "chown <space_id> <user_id|email>",
+	Short: "Transfer the ownership of a storage space to an admin member",
+	Long: `Transfer the ownership of a storage space to a member who is already admin of it.
+You become admin and cannot take the ownership back yourself. The space
+then counts against the new owner's plan (space count and storage).`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		drID := args[0]
@@ -439,7 +440,7 @@ then counts against the new owner's plan (dataroom count and storage).`,
 		}
 
 		yes, _ := cmd.Flags().GetBool("yes")
-		ok, err := confirm(fmt.Sprintf("Transfer the ownership of dataroom %s to %s? You will become admin.",
+		ok, err := confirm(fmt.Sprintf("Transfer the ownership of storage space %s to %s? You will become admin.",
 			drID, ui.Escape(owner.UserEmail)), yes)
 		if err != nil {
 			return err
@@ -465,7 +466,7 @@ then counts against the new owner's plan (dataroom count and storage).`,
 				OwnerEmail string `json:"owner_email"`
 			}{drID, owner.UserID, owner.UserEmail})
 		}
-		fmt.Printf("Dataroom %s ownership transferred to %s.\n", drID, ui.Escape(owner.UserEmail))
+		fmt.Printf("Storage space %s ownership transferred to %s.\n", drID, ui.Escape(owner.UserEmail))
 
 		return nil
 	},
@@ -498,7 +499,7 @@ func dataroomCopyRemote(ctx context.Context, srcURI, dstURI string) error {
 
 var dataroomCpCmd = &cobra.Command{
 	Use: "cp <src...> <dst>",
-	Short: "Copy files to, from or within a dataroom (local→retyc:// uploads, retyc://→local downloads, " +
+	Short: "Copy files to, from or within a storage space (local→retyc:// uploads, retyc://→local downloads, " +
 		"retyc://→retyc:// copies on the server)",
 	Args: cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -691,7 +692,7 @@ func dataroomDownload(ctx context.Context, srcURI, localDst string) error {
 
 var dataroomMvCmd = &cobra.Command{
 	Use:   "mv <retyc://src_path> <retyc://dst_path>",
-	Short: "Move or rename a node within a dataroom",
+	Short: "Move or rename a node within a storage space",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -724,7 +725,7 @@ var dataroomMvCmd = &cobra.Command{
 
 var dataroomRmCmd = &cobra.Command{
 	Use:   "rm <retyc://path>",
-	Short: "Delete a node, or the whole dataroom when path is omitted (retyc://id)",
+	Short: "Delete a node, or the whole storage space when path is omitted (retyc://id)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		yes, _ := cmd.Flags().GetBool("yes")
@@ -740,7 +741,7 @@ var dataroomRmCmd = &cobra.Command{
 
 		prompt := fmt.Sprintf("Delete %s?", uri)
 		if parsed.IsRoot() {
-			prompt = fmt.Sprintf("Delete dataroom %s and all its contents?", parsed.DataroomID)
+			prompt = fmt.Sprintf("Delete storage space %s and all its contents?", parsed.DataroomID)
 		}
 		ok, err := confirm(prompt, yes)
 		if err != nil {
@@ -774,7 +775,7 @@ var dataroomRmCmd = &cobra.Command{
 		}
 
 		if parsed.IsRoot() {
-			fmt.Printf("Dataroom %s deleted.\n", parsed.DataroomID)
+			fmt.Printf("Storage space %s deleted.\n", parsed.DataroomID)
 		} else if count > 1 {
 			fmt.Printf("Deleted %d node(s).\n", count)
 		} else {
@@ -789,7 +790,7 @@ var dataroomRmCmd = &cobra.Command{
 
 var dataroomMkdirCmd = &cobra.Command{
 	Use:   "mkdir <retyc://path>",
-	Short: "Create a folder in a dataroom",
+	Short: "Create a folder in a storage space",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -821,11 +822,11 @@ var dataroomMkdirCmd = &cobra.Command{
 // — init ——————————————————————————————————————————————————————————————————————
 
 func init() {
-	dataroomCreateCmd.Flags().String("title", "", "Title of the dataroom")
+	dataroomCreateCmd.Flags().String("title", "", "Title of the storage space")
 	_ = dataroomCreateCmd.MarkFlagRequired("title")
 	addDataroomOptionFlags(dataroomCreateCmd.Flags())
 
-	dataroomSetCmd.Flags().String("title", "", "New title of the dataroom")
+	dataroomSetCmd.Flags().String("title", "", "New title of the storage space")
 	addDataroomOptionFlags(dataroomSetCmd.Flags())
 	dataroomSetCmd.Flags().BoolP("yes", "y", false, "Skip the confirmation when disabling versioning")
 

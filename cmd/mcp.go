@@ -54,7 +54,7 @@ Example configuration for Claude Desktop (claude_desktop_config.json):
 			Version,
 			server.WithToolCapabilities(false),
 			server.WithDescription(
-				"RETYC end-to-end encrypted file transfer and dataroom management. "+
+				"RETYC end-to-end encrypted file transfer and storage space management. "+
 					"Runs as a local process: reads and encrypts files in-process (post-quantum AGE MLKEM768-X25519) "+
 					"before any byte leaves the machine.",
 			),
@@ -127,8 +127,8 @@ Work with paths, names, sizes, and IDs only — the server performs all crypto a
 1. Call auth_status first if you are unsure whether the user is authenticated.
    If authenticated=false: call auth_login_start immediately — do NOT tell the user to run any CLI command.
 2. If any tool returns error_code=not_authenticated: call auth_login_start immediately.
-3. To upload: pass the user-provided absolute path(s) directly to transfer_send or dataroom_upload.
-4. To download: pass the user-provided absolute destination directory to transfer_download or dataroom_download.
+3. To upload: pass the user-provided absolute path(s) directly to transfer_send or space_upload.
+4. To download: pass the user-provided absolute destination directory to transfer_download or space_download.
 5. Never read, open, preview, hash, or summarize downloaded file contents.`,
 		goos, goarch, homeDir, pathRules,
 	)
@@ -702,9 +702,9 @@ func registerDataroomTools(srv *server.MCPServer) {
 	}
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_list",
-			mcp.WithTitleAnnotation("List datarooms"),
-			mcp.WithDescription("List all datarooms"),
+		mcp.NewTool("space_list",
+			mcp.WithTitleAnnotation("List storage spaces"),
+			mcp.WithDescription("List all your storage spaces"),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -722,12 +722,12 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_create",
-			mcp.WithTitleAnnotation("Create dataroom"),
-			mcp.WithDescription("Create a new dataroom with end-to-end encryption"),
+		mcp.NewTool("space_create",
+			mcp.WithTitleAnnotation("Create storage space"),
+			mcp.WithDescription("Create a new storage space with end-to-end encryption"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
-			mcp.WithString("title", mcp.Required(), mcp.Description("Dataroom title")),
+			mcp.WithString("title", mcp.Required(), mcp.Description("Storage space title")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			cfg, client, err := newAPIClient(ctx)
@@ -745,11 +745,11 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_info",
-			mcp.WithTitleAnnotation("Get dataroom details"),
-			mcp.WithDescription("Get dataroom metadata, file statistics, and member list"),
+		mcp.NewTool("space_info",
+			mcp.WithTitleAnnotation("Get storage space details"),
+			mcp.WithDescription("Get storage space metadata, file statistics, and member list"),
 			mcp.WithReadOnlyHintAnnotation(true),
-			mcp.WithString("id", mcp.Required(), mcp.Description("Dataroom ID")),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Storage space ID")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			_, client, err := newAPIClient(ctx)
@@ -766,9 +766,9 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_ls",
-			mcp.WithTitleAnnotation("List dataroom contents"),
-			mcp.WithDescription("List nodes in a dataroom path. Supports glob patterns (*, ?, [...])"),
+		mcp.NewTool("space_ls",
+			mcp.WithTitleAnnotation("List storage space contents"),
+			mcp.WithDescription("List nodes at a path of a storage space. Supports glob patterns (*, ?, [...])"),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("uri",
 				mcp.Required(),
@@ -790,10 +790,10 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_upload",
-			mcp.WithTitleAnnotation("Upload to dataroom"),
+		mcp.NewTool("space_upload",
+			mcp.WithTitleAnnotation("Upload to a storage space"),
 			mcp.WithDescription(
-				"Upload one or more local files or directories to a dataroom. Directories are walked recursively. "+
+				"Upload one or more local files or directories to a storage space. Directories are walked recursively. "+
 					"This server process has FULL access to the local filesystem: it reads, encrypts (post-quantum AGE), "+
 					"and uploads each file — plaintext never leaves the machine. "+
 					"If the user gives a relative location ('bureau', 'desktop', 'downloads'), "+
@@ -837,10 +837,10 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_download",
-			mcp.WithTitleAnnotation("Download from dataroom"),
+		mcp.NewTool("space_download",
+			mcp.WithTitleAnnotation("Download from a storage space"),
 			mcp.WithDescription(
-				"Download a file (or glob of files) from a dataroom to a local directory. "+
+				"Download a file (or glob of files) from a storage space to a local directory. "+
 					"Decryption happens in-process (post-quantum AGE); only metadata (filenames, sizes, paths) is returned — "+
 					"never read, open, preview, hash, or summarize the written files.",
 			),
@@ -884,9 +884,9 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_mkdir",
-			mcp.WithTitleAnnotation("Create dataroom folder"),
-			mcp.WithDescription("Create a folder in a dataroom"),
+		mcp.NewTool("space_mkdir",
+			mcp.WithTitleAnnotation("Create storage space folder"),
+			mcp.WithDescription("Create a folder in a storage space"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("uri",
@@ -909,15 +909,15 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_rm",
-			mcp.WithTitleAnnotation("Delete dataroom node"),
-			mcp.WithDescription("Delete a node (file or folder) or the entire dataroom. Supports glob patterns."),
+		mcp.NewTool("space_rm",
+			mcp.WithTitleAnnotation("Delete storage space node"),
+			mcp.WithDescription("Delete a node (file or folder) or the entire storage space. Supports glob patterns."),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithString("uri",
 				mcp.Required(),
 				mcp.Description(
-					"retyc:// URI to delete. retyc://id deletes the whole dataroom. Globs expand to multiple deletions.",
+					"retyc:// URI to delete. retyc://id deletes the whole storage space. Globs expand to multiple deletions.",
 				),
 			),
 		),
@@ -936,9 +936,9 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_mv",
+		mcp.NewTool("space_mv",
 			mcp.WithTitleAnnotation("Move or rename node"),
-			mcp.WithDescription("Move or rename a node within the same dataroom"),
+			mcp.WithDescription("Move or rename a node within the same storage space"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithString("src_uri",
@@ -947,7 +947,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 			),
 			mcp.WithString("dst_uri",
 				mcp.Required(),
-				mcp.Description("Destination retyc:// URI (must be in the same dataroom)"),
+				mcp.Description("Destination retyc:// URI (must be in the same storage space)"),
 			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -969,12 +969,12 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_user_add",
-			mcp.WithTitleAnnotation("Add dataroom member"),
-			mcp.WithDescription("Add a user to a dataroom and rekey it for all members"),
+		mcp.NewTool("space_user_add",
+			mcp.WithTitleAnnotation("Add storage space member"),
+			mcp.WithDescription("Add a user to a storage space and rekey it for all members"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
-			mcp.WithString("dataroom_id", mcp.Required(), mcp.Description("Dataroom ID")),
+			mcp.WithString("space_id", mcp.Required(), mcp.Description("Storage space ID")),
 			mcp.WithString("email", mcp.Required(), mcp.Description("User email address to add")),
 			mcp.WithString("role",
 				mcp.Description("Role: \"viewer\" (default), \"editor\", or \"admin\""),
@@ -989,7 +989,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 			}
 			if err := service.AddDataroomUser(
 				ctx, cfg, client,
-				req.GetString("dataroom_id", ""),
+				req.GetString("space_id", ""),
 				req.GetString("email", ""),
 				req.GetString("role", "viewer"),
 				mcpPassphraseReader,
@@ -1002,12 +1002,12 @@ func registerDataroomTools(srv *server.MCPServer) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("dataroom_user_rm",
-			mcp.WithTitleAnnotation("Remove dataroom member"),
-			mcp.WithDescription("Remove a user from a dataroom and rekey it for remaining members"),
+		mcp.NewTool("space_user_rm",
+			mcp.WithTitleAnnotation("Remove storage space member"),
+			mcp.WithDescription("Remove a user from a storage space and rekey it for remaining members"),
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(true),
-			mcp.WithString("dataroom_id", mcp.Required(), mcp.Description("Dataroom ID")),
+			mcp.WithString("space_id", mcp.Required(), mcp.Description("Storage space ID")),
 			mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID to remove")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1017,7 +1017,7 @@ func registerDataroomTools(srv *server.MCPServer) {
 			}
 			if err := service.RemoveDataroomUser(
 				ctx, cfg, client,
-				req.GetString("dataroom_id", ""),
+				req.GetString("space_id", ""),
 				req.GetString("user_id", ""),
 				mcpPassphraseReader,
 			); err != nil {

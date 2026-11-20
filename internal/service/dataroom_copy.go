@@ -141,7 +141,7 @@ func CopyDataroomNode(
 		return DataroomNodeInfo{}, fmt.Errorf("destination: %w", err)
 	}
 	if src.DataroomID != dst.DataroomID {
-		return DataroomNodeInfo{}, errors.New("source and destination must be in the same dataroom")
+		return DataroomNodeInfo{}, errors.New("source and destination must be in the same storage space")
 	}
 
 	sess, err := resolveDataroomSession(ctx, cfg, client, src.DataroomID, reader)

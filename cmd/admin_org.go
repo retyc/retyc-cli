@@ -140,7 +140,7 @@ var adminOrgScopesCmd = &cobra.Command{
 
 func init() {
 	adminOrgUpdateCmd.Flags().String("name", "", "Organization name")
-	adminOrgUpdateCmd.Flags().Int("event-retention-days", 0, "Dataroom event retention in days (2-365)")
+	adminOrgUpdateCmd.Flags().Int("event-retention-days", 0, "Storage space event retention in days (2-365)")
 	adminOrgUpdateCmd.Flags().Bool("api-key-ip-restriction", false, "Restrict API keys to the authorized IPs")
 
 	adminOrgCmd.AddCommand(adminOrgInfoCmd, adminOrgUpdateCmd, adminOrgScopesCmd)

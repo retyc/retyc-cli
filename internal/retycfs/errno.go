@@ -15,7 +15,7 @@ import (
 
 // ErrLegacyAPI is what Options.CheckDataroom returns for a dataroom served by
 // an API that predates the lookup by name: the driver does not serve it.
-var ErrLegacyAPI = errors.New("the API of this dataroom is too old for a FUSE mount")
+var ErrLegacyAPI = errors.New("the API of this storage space is too old for a FUSE mount")
 
 // errGoingAway refuses what would start a new spool once the shutdown has
 // stopped sending them (see spoolRegistry.seal): ENOTCONN, which is what the

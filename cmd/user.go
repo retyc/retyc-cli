@@ -93,7 +93,7 @@ var userQuotaCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Transfers:   %d / %s\n", q.CountShare, formatCount(q.MaxCountShare))
-		fmt.Printf("Datarooms:   %d / %s\n", q.CountDataroom, formatCount(q.MaxCountDataroom))
+		fmt.Printf("Spaces:      %d / %s\n", q.CountDataroom, formatCount(q.MaxCountDataroom))
 		fmt.Printf("Storage:     %s / %s%s\n",
 			ui.FormatSize(q.UsedStorage),
 			ui.FormatSize(q.MaxStorage),

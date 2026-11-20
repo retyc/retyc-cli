@@ -14,10 +14,10 @@ import (
 // path must not be taken for a destination to replace, which would delete the
 // source.
 func TestHandleCopy_DestinationSpelledAsSource(t *testing.T) {
-	for _, dst := range []string{"/dataroom/DR/sub/../doc.txt", "/dataroom/DR//doc.txt", "/dataroom/DR/doc.txt/"} {
+	for _, dst := range []string{"/spaces/DR/sub/../doc.txt", "/spaces/DR//doc.txt", "/spaces/DR/doc.txt/"} {
 		fake := &lot2API{t: t}
 		w := httptest.NewRecorder()
-		newLot2FS(t, fake).handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", dst, ""))
+		newLot2FS(t, fake).handleCopy(w, copyRequest(t, "/spaces/DR/doc.txt", dst, ""))
 		if w.Code != http.StatusForbidden {
 			t.Errorf("%s: status = %d (%s), want 403", dst, w.Code, w.Body.String())
 		}
@@ -30,7 +30,7 @@ func TestHandleCopy_DestinationSpelledAsSource(t *testing.T) {
 // COPY honours the WebDAV locks as the handler does for its own methods: a
 // destination another client locked is not replaced without its token.
 func TestHandleCopy_HonoursDestinationLock(t *testing.T) {
-	const dst = "/dataroom/DR/old.txt"
+	const dst = "/spaces/DR/old.txt"
 	fake := &lot2API{t: t}
 	fs := newLot2FS(t, fake)
 	fs.locks = webdav.NewMemLS()
@@ -40,13 +40,13 @@ func TestHandleCopy_HonoursDestinationLock(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	fs.handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", dst, ""))
+	fs.handleCopy(w, copyRequest(t, "/spaces/DR/doc.txt", dst, ""))
 	if w.Code != webdav.StatusLocked || fake.count("DELETE") != 0 {
 		t.Fatalf("without the token: status = %d, calls = %v, want 423 and nothing deleted", w.Code, fake.calls)
 	}
 
 	w = httptest.NewRecorder()
-	r := copyRequest(t, "/dataroom/DR/doc.txt", dst, "")
+	r := copyRequest(t, "/spaces/DR/doc.txt", dst, "")
 	r.Header.Set("If", "(<urn:uuid:not-the-lock>)")
 	fs.handleCopy(w, r)
 	if w.Code != http.StatusPreconditionFailed || fake.count("DELETE") != 0 {
@@ -54,7 +54,7 @@ func TestHandleCopy_HonoursDestinationLock(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	r = copyRequest(t, "/dataroom/DR/doc.txt", dst, "")
+	r = copyRequest(t, "/spaces/DR/doc.txt", dst, "")
 	r.Header.Set("If", "<http://example.com"+dst+"> (<"+token+">)")
 	fs.handleCopy(w, r)
 	if w.Code != http.StatusNoContent {
@@ -104,7 +104,7 @@ func TestLockMirror_ReleasesLapsedLocks(t *testing.T) {
 	fs := newLot2FS(t, fake)
 	handler, mirror := newLockedHandler(fs)
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/locked.txt", ""))
+	handler.ServeHTTP(w, lockRequest(t, "/spaces/DR/locked.txt", ""))
 	if mirror.held() != 1 {
 		t.Fatalf("held = %d", mirror.held())
 	}
@@ -116,7 +116,7 @@ func TestLockMirror_ReleasesLapsedLocks(t *testing.T) {
 
 	// The client refreshes its lock for zero seconds: the WebDAV lock lapses
 	// at once, and the mirror learns it from the response.
-	r := lockRequest(t, "/dataroom/DR/locked.txt", "("+w.Header().Get("Lock-Token")+")")
+	r := lockRequest(t, "/spaces/DR/locked.txt", "("+w.Header().Get("Lock-Token")+")")
 	r.Header.Set("Timeout", "Second-0")
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, r)

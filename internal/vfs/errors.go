@@ -46,7 +46,7 @@ var (
 	// ErrReadOnly: the role allows the write but the dataroom is read-only,
 	// its owner's plan being exceeded (403 DATAROOM_READ_ONLY). It is given
 	// in addition to ErrForbidden, never in its place.
-	ErrReadOnly = errors.New("dataroom is read-only")
+	ErrReadOnly = errors.New("storage space is read-only")
 	// ErrUnauthenticated: the API answered 401, or there is no token left to
 	// call it with.
 	ErrUnauthenticated = errors.New("not authenticated")

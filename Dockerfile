@@ -45,7 +45,7 @@ COPY --from=builder /retyc /retyc
 # Dynamic ones (revision, created) are injected by the workflow.
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="retyc-cli" \
-      org.opencontainers.image.description="Official command-line interface and MCP server for Retyc: send transfers and manage datarooms from your terminal." \
+      org.opencontainers.image.description="Official command-line interface and MCP server for Retyc: send transfers and manage storage spaces from your terminal." \
       org.opencontainers.image.source="https://github.com/retyc/retyc-cli" \
       org.opencontainers.image.url="https://retyc.com" \
       org.opencontainers.image.documentation="https://github.com/retyc/retyc-cli#readme" \

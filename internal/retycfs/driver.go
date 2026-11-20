@@ -235,16 +235,16 @@ func (d *driver) learnAccess(ctx context.Context, dataroomID string) {
 	case err != nil:
 		if !rights.failed && ctx.Err() == nil {
 			rights.failed = true
-			d.logf("dataroom %s: cannot tell whether it is writable, writes are refused until it can be told: %s",
+			d.logf("storage space %s: cannot tell whether it is writable, writes are refused until it can be told: %s",
 				dataroomID, errnoName(toErrno(err)))
 		}
 	case access.ReadOnly:
 		rights.state.Store(rightsReadOnly)
-		d.logf("dataroom %s is read-only: %s", dataroomID, access.Reason())
+		d.logf("storage space %s is read-only: %s", dataroomID, access.Reason())
 	default:
 		rights.state.Store(rightsWritable)
 		if rights.failed {
-			d.logf("dataroom %s is writable", dataroomID)
+			d.logf("storage space %s is writable", dataroomID)
 		}
 	}
 }
@@ -283,7 +283,7 @@ func (d *driver) served(ctx context.Context, dataroomID string) error {
 		return nil
 	}
 	if _, told := d.reported.LoadOrStore(dataroomID, struct{}{}); !told && ctx.Err() == nil {
-		d.logf("dataroom %s is not served: %s", dataroomID, err)
+		d.logf("storage space %s is not served: %s", dataroomID, err)
 	}
 
 	return err

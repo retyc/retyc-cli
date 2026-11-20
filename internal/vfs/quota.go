@@ -42,7 +42,7 @@ func (fs *FS) Quota(ctx context.Context, dataroomID string) (used, free int64, o
 	case err != nil && ctx.Err() != nil:
 		return 0, 0, false
 	case err != nil:
-		fs.logf("dataroom quota: %s", err)
+		fs.logf("storage space quota: %s", err)
 	case stats.StorageUsed != nil:
 		// Nil is an API without storage counters.
 		entry = quotaEntry{used: *stats.StorageUsed, free: stats.StorageFree, ok: true}

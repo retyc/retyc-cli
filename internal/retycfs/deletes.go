@@ -140,7 +140,7 @@ func (q *deleteQueue) end(j *deleteJob, err error) {
 	d.notify.entry(j.dir.EmbeddedInode(), j.key.name)
 	if !lost {
 		// Neither the error nor the name: both may hold a file name.
-		d.logf("a background delete failed, the file is still in the dataroom: dataroom %s, node %s: %s",
+		d.logf("a background delete failed, the file is still in the storage space: space %s, node %s: %s",
 			j.key.dataroomID, j.nodeID, errnoName(toErrno(err)))
 	}
 }
@@ -154,7 +154,7 @@ func (q *deleteQueue) loseLocked(j *deleteJob) {
 	j.lost = true
 	q.drv.lostDeletes.Add(1)
 	q.drv.logf("a background delete did not end before the end of the shutdown drain, "+
-		"the file may still be in the dataroom: dataroom %s, node %s", j.key.dataroomID, j.nodeID)
+		"the file may still be in the storage space: space %s, node %s", j.key.dataroomID, j.nodeID)
 }
 
 // drain waits for the deletes on their way, for as long as the drain of the

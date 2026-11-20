@@ -116,7 +116,7 @@ func (fs *FS) Open(ctx context.Context, drID string, n Node) (File, error) {
 	if fetch == nil {
 		sess, err := fs.Session(ctx, drID)
 		if err != nil {
-			return nil, fmt.Errorf("dataroom session: %w", err)
+			return nil, fmt.Errorf("storage space session: %w", err)
 		}
 		fetch = func(ctx context.Context, versionID string, index int) ([]byte, error) {
 			return service.ReadDataroomChunkBounded(ctx, fs.client, versionID, index, sess, maxSize)

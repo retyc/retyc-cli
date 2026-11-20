@@ -222,7 +222,7 @@ func TestMountDataroomCheck(t *testing.T) {
 				return sess, nil
 			}
 
-			return nil, fmt.Errorf("fetching dataroom: %w", os.ErrNotExist)
+			return nil, fmt.Errorf("fetching space: %w", os.ErrNotExist)
 		},
 	})
 	defer func() { _ = tree.Close() }()
@@ -232,7 +232,7 @@ func TestMountDataroomCheck(t *testing.T) {
 		t.Errorf("legacy API: %v, want ErrLegacyAPI", err)
 	}
 	if err := check(context.Background(), "unknown"); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("unknown dataroom: %v, want the error of its session", err)
+		t.Errorf("unknown space: %v, want the error of its session", err)
 	}
 }
 
@@ -257,7 +257,7 @@ func TestMountRights(t *testing.T) {
 		"--read-only asks nothing": {target: mountTarget{dataroomID: "editor", readOnly: true}, wantReadOnly: true},
 		"viewer": {
 			target: mountTarget{dataroomID: "viewer"}, wantReadOnly: true, wantAsked: 1,
-			wantWhy: "you are a viewer of this dataroom",
+			wantWhy: "you are a viewer of this storage space",
 		},
 		"plan refuses writes": {
 			target: mountTarget{dataroomID: "overplan"}, wantReadOnly: true, wantAsked: 1,
@@ -719,8 +719,8 @@ func TestStartWarmup(t *testing.T) {
 		settings mountSettings
 		want     []string
 	}{
-		"one dataroom":   {mountTarget{dataroomID: "dr-1"}, on, []string{"dr-1 depth 2"}},
-		"all datarooms":  {mountTarget{all: true}, on, []string{" depth 2"}},
+		"one space":      {mountTarget{dataroomID: "dr-1"}, on, []string{"dr-1 depth 2"}},
+		"all spaces":     {mountTarget{all: true}, on, []string{" depth 2"}},
 		"--warmup=false": {mountTarget{dataroomID: "dr-1"}, mountSettings{warmupDepth: 2}, nil},
 	} {
 		t.Run(label, func(t *testing.T) {

@@ -58,8 +58,8 @@ nfpms:
     maintainer: Retyc <tech@retyc.net>
     description: |-
       Command-line client for the Retyc platform
-      End-to-end encrypted file transfers and datarooms from the command line:
-      send and receive transfers, manage datarooms, mount them with RetycFS,
+      End-to-end encrypted file transfers and storage spaces from the command line:
+      send and receive transfers, manage storage spaces, mount them with RetycFS,
       and expose them to AI assistants over MCP.
     # Required by the RPM header; dpkg ignores it as an extra control field.
     license: MIT

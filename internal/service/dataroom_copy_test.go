@@ -153,8 +153,8 @@ func TestCopyDataroomNodeByID_Cancelled(t *testing.T) {
 // Copying needs two paths of one dataroom; the source must be a file.
 func TestCopyDataroomNode_Validation(t *testing.T) {
 	_, err := CopyDataroomNode(context.Background(), nil, nil, "retyc://a/x", "retyc://b/y", nil)
-	if err == nil || err.Error() != "source and destination must be in the same dataroom" {
-		t.Errorf("cross-dataroom err = %v", err)
+	if err == nil || err.Error() != "source and destination must be in the same storage space" {
+		t.Errorf("cross-space err = %v", err)
 	}
 	identity, _ := crypto.GenerateKeyPair()
 	fake := newMimeAPI(t, identity)

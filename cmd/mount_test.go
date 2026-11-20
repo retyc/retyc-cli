@@ -26,7 +26,7 @@ func TestParseMountArgs(t *testing.T) {
 		err  string
 	}{
 		{
-			name: "one dataroom", args: []string{"retyc://dr-1", "/mnt/dr"},
+			name: "one space", args: []string{"retyc://dr-1", "/mnt/dr"},
 			want: mountTarget{dataroomID: "dr-1", mountpoint: "/mnt/dr"},
 		},
 		{
@@ -34,14 +34,17 @@ func TestParseMountArgs(t *testing.T) {
 			want: mountTarget{dataroomID: "dr-1", mountpoint: "mnt"},
 		},
 		{name: "all", all: true, args: []string{"/mnt/all"}, want: mountTarget{all: true, mountpoint: "/mnt/all"}},
-		{name: "no argument", err: "expected a dataroom and a mount point"},
-		{name: "mount point only", args: []string{"/mnt/dr"}, err: "expected a dataroom and a mount point"},
-		{name: "three arguments", args: []string{"retyc://dr-1", "/mnt", "x"}, err: "expected a dataroom and a mount point"},
+		{name: "no argument", err: "expected a storage space and a mount point"},
+		{name: "mount point only", args: []string{"/mnt/dr"}, err: "expected a storage space and a mount point"},
+		{
+			name: "three arguments", args: []string{"retyc://dr-1", "/mnt", "x"},
+			err: "expected a storage space and a mount point",
+		},
 		{name: "not a URI", args: []string{"dr-1", "/mnt/dr"}, err: "not a retyc URI"},
-		{name: "no dataroom", args: []string{"retyc://", "/mnt/dr"}, err: "missing dataroom ID"},
-		{name: "a folder", args: []string{"retyc://dr-1/docs", "/mnt/dr"}, err: "only a whole dataroom"},
+		{name: "no space", args: []string{"retyc://", "/mnt/dr"}, err: "missing storage space ID"},
+		{name: "a folder", args: []string{"retyc://dr-1/docs", "/mnt/dr"}, err: "only a whole storage space"},
 		{name: "all without mount point", all: true, err: "one argument"},
-		{name: "all with a dataroom", all: true, args: []string{"retyc://dr-1", "/mnt"}, err: "one argument"},
+		{name: "all with a space", all: true, args: []string{"retyc://dr-1", "/mnt"}, err: "one argument"},
 		{name: "all with a URI", all: true, args: []string{"retyc://dr-1"}, err: "mount point only"},
 	} {
 		got, err := parseMountArgs(tc.all, tc.args)

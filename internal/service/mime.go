@@ -89,7 +89,7 @@ func (s *dataroomSession) mimeTable(ctx context.Context, client *api.Client, dat
 		if dataroomID == dataroomIDUnknown || client == nil {
 			c.mu.Unlock()
 
-			return nil, errors.New("MIME table not loaded and no dataroom to load it from")
+			return nil, errors.New("MIME table not loaded and no storage space to load it from")
 		}
 		if err := c.load(ctx, client, dataroomID, s); err != nil {
 			c.mu.Unlock()
