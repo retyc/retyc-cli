@@ -1,0 +1,321 @@
+package service
+
+import (
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/pkg/crypto"
+)
+
+// encName encrypts a node name for the given recipient, as the platform does.
+func encName(t *testing.T, name, pubKey string) string {
+	t.Helper()
+	enc, err := crypto.EncryptStringForKeys(name, []string{pubKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return enc
+}
+
+func TestBuildAdminNodeTree(t *testing.T) {
+	sess, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := sess.Recipient().String()
+
+	size := int64(42)
+	chunks := 1
+	version := 3
+	nodes := []api.AdminDataroomNode{
+		{ID: "root-folder", IsFolder: true, NameEnc: encName(t, "docs", pub)},
+		{
+			ID: "child-file", ParentID: new("root-folder"), NameEnc: encName(t, "report.pdf", pub),
+			OriginalSize: &size, ChunkCount: &chunks, VersionNumber: &version, VersionID: new("v1"),
+		},
+		{
+			ID: "top-file", NameEnc: encName(t, "readme.md", pub), OriginalSize: &size, ChunkCount: &chunks,
+			VersionNumber: new(1), VersionID: new("v2"),
+		},
+	}
+
+	infos, err := buildAdminNodeTree(nodes, sess)
+	if err != nil {
+		t.Fatalf("buildAdminNodeTree() error = %v", err)
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Path < infos[j].Path })
+
+	want := []struct {
+		path     string
+		isFolder bool
+	}{
+		{"/docs", true},
+		{"/docs/report.pdf", false},
+		{"/readme.md", false},
+	}
+	if len(infos) != len(want) {
+		t.Fatalf("got %d nodes, want %d: %+v", len(infos), len(want), infos)
+	}
+	for i, w := range want {
+		if infos[i].Path != w.path || infos[i].IsFolder != w.isFolder {
+			t.Errorf("node %d = {%s %v}, want {%s %v}", i, infos[i].Path, infos[i].IsFolder, w.path, w.isFolder)
+		}
+	}
+	if infos[1].Size != 42 || infos[1].ChunkCount != 1 || !infos[1].HasContent {
+		t.Errorf("file info = %+v", infos[1])
+	}
+	if infos[0].HasContent {
+		t.Error("folder should not have content")
+	}
+}
+
+func TestBuildAdminNodeTree_OrphanParent(t *testing.T) {
+	sess, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := []api.AdminDataroomNode{
+		{ID: "n1", ParentID: new("missing"), NameEnc: encName(t, "lost.txt", sess.Recipient().String())},
+	}
+	infos, err := buildAdminNodeTree(nodes, sess)
+	if err != nil {
+		t.Fatalf("buildAdminNodeTree() error = %v", err)
+	}
+	// An orphan is rooted at "/" rather than dropped: admin must see everything.
+	if len(infos) != 1 || infos[0].Path != "/lost.txt" {
+		t.Errorf("infos = %+v, want lost.txt at root", infos)
+	}
+}
+
+// TestBuildAdminNodeTree_ParentCycle guards the nodePath depth guard: two nodes
+// whose ParentID point at each other bypass the orphan check entirely (both
+// parents are present in the batch), so only the depth guard prevents infinite
+// recursion. This must terminate and must not drop either node.
+func TestBuildAdminNodeTree_ParentCycle(t *testing.T) {
+	sess, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := sess.Recipient().String()
+
+	nodes := []api.AdminDataroomNode{
+		{ID: "a", ParentID: new("b"), NameEnc: encName(t, "a.txt", pub)},
+		{ID: "b", ParentID: new("a"), NameEnc: encName(t, "b.txt", pub)},
+	}
+
+	type result struct {
+		infos []AdminNodeInfo
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		infos, err := buildAdminNodeTree(nodes, sess)
+		done <- result{infos, err}
+	}()
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("buildAdminNodeTree() error = %v", r.err)
+		}
+		if len(r.infos) != 2 {
+			t.Fatalf("got %d nodes, want 2: %+v", len(r.infos), r.infos)
+		}
+		for _, info := range r.infos {
+			if info.Path == "" {
+				t.Errorf("node %+v has empty Path", info)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("buildAdminNodeTree() did not return: parent_id cycle likely caused infinite recursion")
+	}
+}
+
+// TestBuildAdminNodeTree_MaliciousName guards against path traversal: a
+// dataroom owner controls decrypted node names, so a name like "../evil.sh"
+// must never be able to escape the root when building on-disk/display paths.
+func TestBuildAdminNodeTree_MaliciousName(t *testing.T) {
+	sess, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := sess.Recipient().String()
+
+	nodes := []api.AdminDataroomNode{
+		{ID: "n1", NameEnc: encName(t, "../evil.sh", pub)},
+	}
+	infos, err := buildAdminNodeTree(nodes, sess)
+	if err != nil {
+		t.Fatalf("buildAdminNodeTree() error = %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("got %d nodes, want 1", len(infos))
+	}
+	if strings.Contains(infos[0].Path, "..") {
+		t.Errorf("Path = %q, must not contain \"..\"", infos[0].Path)
+	}
+	if !strings.HasPrefix(infos[0].Path, "/") {
+		t.Errorf("Path = %q, must stay rooted at \"/\"", infos[0].Path)
+	}
+}
+
+// TestBuildAdminNodeTree_MaliciousFolderName covers a folder literally named
+// ".." with a child file: the child's path must stay under the root too.
+func TestBuildAdminNodeTree_MaliciousFolderName(t *testing.T) {
+	sess, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := sess.Recipient().String()
+
+	nodes := []api.AdminDataroomNode{
+		{ID: "folder", IsFolder: true, NameEnc: encName(t, "..", pub)},
+		{ID: "child", ParentID: new("folder"), NameEnc: encName(t, "evil.sh", pub)},
+	}
+	infos, err := buildAdminNodeTree(nodes, sess)
+	if err != nil {
+		t.Fatalf("buildAdminNodeTree() error = %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("got %d nodes, want 2: %+v", len(infos), infos)
+	}
+	for _, info := range infos {
+		if strings.Contains(info.Path, "..") {
+			t.Errorf("Path = %q, must not contain \"..\"", info.Path)
+		}
+		if !strings.HasPrefix(info.Path, "/") {
+			t.Errorf("Path = %q, must stay rooted at \"/\"", info.Path)
+		}
+	}
+}
+
+func TestBuildAdminNodeTree_UndecryptableName(t *testing.T) {
+	sess, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := []api.AdminDataroomNode{
+		{ID: "n1", NameEnc: encName(t, "secret.txt", other.Recipient().String())},
+	}
+	_, err = buildAdminNodeTree(nodes, sess)
+	if err == nil {
+		t.Fatal("expected error for a name encrypted for another key")
+	}
+}
+
+func TestMatchAdminNodes(t *testing.T) {
+	nodes := []AdminNodeInfo{
+		{ID: "d1", Path: "/docs", Name: "docs", IsFolder: true},
+		{ID: "f1", Path: "/docs/report.pdf", Name: "report.pdf", HasContent: true},
+		{ID: "f2", Path: "/docs/notes.txt", Name: "notes.txt", HasContent: true},
+		{ID: "f3", Path: "/readme.md", Name: "readme.md", HasContent: true},
+		{ID: "f4", Path: "/empty.bin", Name: "empty.bin", HasContent: false},
+	}
+
+	t.Run("empty pattern selects every file with content", func(t *testing.T) {
+		files, skipped, err := matchAdminNodes(nodes, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 3 {
+			t.Errorf("files = %+v, want 3 entries", files)
+		}
+		if len(skipped) != 0 {
+			t.Errorf("skipped = %v", skipped)
+		}
+	})
+
+	t.Run("glob on path", func(t *testing.T) {
+		files, _, err := matchAdminNodes(nodes, "/docs/*.pdf")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 1 || files[0].ID != "f1" {
+			t.Errorf("files = %+v", files)
+		}
+	})
+
+	t.Run("glob matching a folder reports it skipped", func(t *testing.T) {
+		files, skipped, err := matchAdminNodes(nodes, "/docs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 0 || len(skipped) != 1 || skipped[0] != "/docs" {
+			t.Errorf("files = %+v, skipped = %v", files, skipped)
+		}
+	})
+
+	t.Run("no match is an error", func(t *testing.T) {
+		if _, _, err := matchAdminNodes(nodes, "/nope/*"); err == nil {
+			t.Error("expected error for no match")
+		}
+	})
+}
+
+// Sanitizing is many-to-one ("q1/report.pdf" and "q1_report.pdf" both become
+// "q1_report.pdf"): siblings that collide once sanitized must get distinct
+// on-disk names instead of tripping the "file already exists" guard and
+// aborting the whole download.
+func TestBuildAdminNodeTree_SiblingCollisionsSuffixed(t *testing.T) {
+	sess, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := sess.Recipient().String()
+	nodes := []api.AdminDataroomNode{
+		{ID: "a", NameEnc: encName(t, "q1/report.pdf", pub)},
+		{ID: "b", NameEnc: encName(t, "q1_report.pdf", pub)},
+		{ID: "c", NameEnc: encName(t, "q1\\report.pdf", pub)},
+		{ID: "dir", IsFolder: true, NameEnc: encName(t, "docs", pub)},
+		// Same sanitized name under another parent: no collision, no suffix.
+		{ID: "d", ParentID: new("dir"), NameEnc: encName(t, "q1_report.pdf", pub)},
+		// Orphan (parent missing from the listing): rooted at "/" by nodePath,
+		// so it collides with the root-level siblings and must be suffixed too.
+		{ID: "e", ParentID: new("gone"), NameEnc: encName(t, "q1_report.pdf", pub)},
+	}
+
+	infos, err := buildAdminNodeTree(nodes, sess)
+	if err != nil {
+		t.Fatalf("buildAdminNodeTree() error = %v", err)
+	}
+	got := map[string]string{}
+	for _, i := range infos {
+		got[i.ID] = i.Path
+	}
+	want := map[string]string{
+		"a":   "/q1_report.pdf",
+		"b":   "/q1_report (2).pdf",
+		"c":   "/q1_report (3).pdf",
+		"dir": "/docs",
+		"d":   "/docs/q1_report.pdf",
+		"e":   "/q1_report (4).pdf",
+	}
+	for id, p := range want {
+		if got[id] != p {
+			t.Errorf("node %s path = %q, want %q", id, got[id], p)
+		}
+	}
+}
+
+// Control and bidi characters in a decrypted name must not reach the file
+// system: they are replaced, on top of the separator neutralisation.
+func TestSanitizeNodeName_ControlCharacters(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"facture.pdf\x1b[2K\rFILE  x.pdf\x1b]0;PWNED\x07", "facture.pdf_[2K_FILE  x.pdf_]0;PWNED_"},
+		{"invoice\u202Efdp.exe", "invoice_fdp.exe"},
+		{"a/b\x1b..c", "a_b___c"},
+	}
+	for _, tt := range tests {
+		if got := sanitizeNodeName(tt.in); got != tt.want {
+			t.Errorf("sanitizeNodeName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

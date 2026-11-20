@@ -15,9 +15,9 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/crypto"
-	"github.com/retyc/retyc-cli/internal/machinekey"
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/crypto"
+	"github.com/retyc/retyc-cli/pkg/machinekey"
 )
 
 // statusFixture is a fake token endpoint plus a fake API for auth status.

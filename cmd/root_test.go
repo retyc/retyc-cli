@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/retyc/retyc-cli/internal/auth"
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/pkg/auth"
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/service"
 )
 
 func TestRootPersistentPreRunE_FailsOnUnreadableCABundle(t *testing.T) {

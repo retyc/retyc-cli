@@ -22,12 +22,12 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/auth"
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/retycfs"
-	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/vfs"
+	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/pkg/auth"
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/retycfs"
+	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/pkg/vfs"
 )
 
 func TestCheckMountpoint(t *testing.T) {
@@ -385,13 +385,13 @@ func TestMount_A401StopsTheMountAtOnce(t *testing.T) {
 	src := &expiringTokenSource{}
 	watch := newAuthWatch(src)
 	// The tick never comes during the test: only a 401 can ask for a check.
-	watch.interval = time.Hour
+	watch.Interval = time.Hour
 	client := api.New(srv.URL, "retyc-test/1.0", src, false, false,
 		apiTransportWatching(watch), api.WithRetry(time.Millisecond, 1))
 
 	ctx := t.Context()
 	expired := make(chan error, 1)
-	go watch.run(ctx, func(err error) { expired <- err })
+	go watch.Run(ctx, func(err error) { expired <- err })
 
 	mount := &fakeMountServer{done: make(chan struct{})}
 	result := make(chan error, 1)
@@ -435,15 +435,15 @@ func TestMount_A401StopsTheMountAtOnce(t *testing.T) {
 func TestAuthWatch_ChecksOnA401(t *testing.T) {
 	src := &expiringTokenSource{}
 	watch := newAuthWatch(src)
-	watch.interval = time.Hour
+	watch.Interval = time.Hour
 	var status atomic.Int32
 	status.Store(http.StatusForbidden)
-	rt := watch.roundTripper(roundTripFunc(func(*http.Request) (*http.Response, error) {
+	rt := watch.RoundTripper(roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: int(status.Load()), Body: http.NoBody}, nil
 	}))
 	ctx := t.Context()
 	failed := make(chan error, 1)
-	go watch.run(ctx, func(err error) { failed <- err })
+	go watch.Run(ctx, func(err error) { failed <- err })
 
 	// send makes one request and returns the status passed on.
 	send := func() int {
@@ -543,10 +543,10 @@ func TestAuthWatch_TransientFailureKeepsServing(t *testing.T) {
 			src := &flakyTokenSource{}
 			src.fail(failure)
 			watch := newAuthWatch(src)
-			watch.interval = 5 * time.Millisecond
+			watch.Interval = 5 * time.Millisecond
 			var mu sync.Mutex
 			var lines []string
-			watch.logf = func(format string, args ...any) {
+			watch.Logf = func(format string, args ...any) {
 				mu.Lock()
 				defer mu.Unlock()
 				lines = append(lines, fmt.Sprintf(format, args...))
@@ -559,7 +559,7 @@ func TestAuthWatch_TransientFailureKeepsServing(t *testing.T) {
 			}
 			ctx := t.Context()
 			failed := make(chan error, 1)
-			go watch.run(ctx, func(err error) { failed <- err })
+			go watch.Run(ctx, func(err error) { failed <- err })
 
 			// Several ticks fail: the watch is still running, and said so once.
 			waitFor(t, func() bool { return src.checks() >= 3 })
@@ -597,11 +597,11 @@ func TestAuthWatch_RefusalStops(t *testing.T) {
 	src.fail(fmt.Errorf("refreshing token: %w",
 		&auth.RefreshError{Status: http.StatusUnauthorized, Code: "invalid_client"}))
 	watch := newAuthWatch(src)
-	watch.interval = 5 * time.Millisecond
-	watch.logf = func(string, ...any) {}
+	watch.Interval = 5 * time.Millisecond
+	watch.Logf = func(string, ...any) {}
 	ctx := t.Context()
 	failed := make(chan error, 1)
-	go watch.run(ctx, func(err error) { failed <- err })
+	go watch.Run(ctx, func(err error) { failed <- err })
 	select {
 	case err := <-failed:
 		if _, ok := errors.AsType[*auth.RefreshError](err); !ok {
@@ -618,11 +618,11 @@ func TestServeMount_TransientLoginFailureKeepsTheMount(t *testing.T) {
 	src := &flakyTokenSource{}
 	src.fail(fmt.Errorf("refreshing token: %w", &auth.RefreshError{Status: http.StatusServiceUnavailable}))
 	watch := newAuthWatch(src)
-	watch.interval = 5 * time.Millisecond
-	watch.logf = func(string, ...any) {}
+	watch.Interval = 5 * time.Millisecond
+	watch.Logf = func(string, ...any) {}
 	ctx := t.Context()
 	expired := make(chan error, 1)
-	go watch.run(ctx, func(err error) { expired <- err })
+	go watch.Run(ctx, func(err error) { expired <- err })
 
 	health := newServeHealth()
 	health.setReady(true)

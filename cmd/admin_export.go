@@ -8,8 +8,8 @@ import (
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 
-	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/ui"
+	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/pkg/ui"
 )
 
 var adminExportCmd = &cobra.Command{

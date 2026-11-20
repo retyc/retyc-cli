@@ -5,7 +5,7 @@ package cmd
 import (
 	"testing"
 
-	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/pkg/config"
 )
 
 // `config show` promises flag > env > config > default, but viper cannot see

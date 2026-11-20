@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/retyc/retyc-cli/internal/auth"
+	"github.com/retyc/retyc-cli/pkg/auth"
 )
 
 // TestMCPPassphraseReader_EnvSet verifies that mcpPassphraseReader returns the env value.

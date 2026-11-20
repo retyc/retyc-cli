@@ -43,7 +43,7 @@ jobs:
           # lint takes a few seconds; the Go build cache of setup-go stays.
           skip-cache: true
 
-      # The tests of internal/retycfs mount a FUSE filesystem. They skip on a
+      # The tests of pkg/retycfs mount a FUSE filesystem. They skip on a
       # machine without FUSE and fail here (CI is set): the runner has
       # /dev/fuse, the fusermount3 helper is not guaranteed.
       - name: Install FUSE

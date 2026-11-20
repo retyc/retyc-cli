@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/pkg/config"
 )
 
 func TestParseMountArgs(t *testing.T) {

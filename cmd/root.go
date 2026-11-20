@@ -13,10 +13,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/auth"
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/pkg/auth"
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/service"
 )
 
 var (
@@ -180,6 +180,13 @@ func run(ctx context.Context, args []string) error {
 }
 
 func init() {
+	// The CLI keeps the login in <configDir>/token.json; the core has no token
+	// store of its own (see auth.SetTokenStore).
+	auth.SetTokenStore(config.TokenFile{})
+	// The CLI logs in from RETYC_TOKEN or a machine account when the
+	// environment says so; the core ignores these variables by default.
+	config.SetEnvLogin(true)
+
 	// The environment file comes first: its variables must be in the
 	// environment before viper, or anything else, reads a RETYC_ variable.
 	cobra.OnInitialize(loadEnvFile, initConfig)

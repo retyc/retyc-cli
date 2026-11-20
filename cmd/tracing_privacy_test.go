@@ -9,10 +9,11 @@ import (
 
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/telemetry"
-	"github.com/retyc/retyc-cli/internal/telemetry/telemetrytest"
-	"github.com/retyc/retyc-cli/internal/vfs"
+	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/pkg/telemetry"
+	"github.com/retyc/retyc-cli/pkg/telemetry/telemetrytest"
+	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/pkg/vfs/metastore/memstore"
 )
 
 const sentinel = "SENTINEL-do-not-export"
@@ -29,11 +30,12 @@ func TestTracing_NeverExportsNames(t *testing.T) {
 
 	// 1. A tree listing whose path and names carry the sentinel, under the
 	// root span a FUSE operation would open.
-	fs := newTestFS(nil, vfs.Options{List: func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
+	list := func(context.Context, string, string) ([]service.DataroomNodeInfo, error) {
 		return []service.DataroomNodeInfo{{ID: "n1", Name: sentinel + ".pdf", Type: "file"}}, nil
-	}})
+	}
+	tree := vfs.New(nil, vfs.Options{Store: memstore.New(), List: list})
 	ctx, root := telemetry.Tracer().Start(context.Background(), "FUSE lookup")
-	if _, err := fs.tree.ReadDir(ctx, "dr1", "/"+sentinel); err != nil {
+	if _, err := tree.ReadDir(ctx, "dr1", "/"+sentinel); err != nil {
 		t.Error(err)
 	}
 	root.End()

@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/retyc/retyc-cli/internal/ui"
+	"github.com/retyc/retyc-cli/pkg/ui"
 )
 
 var userCmd = &cobra.Command{

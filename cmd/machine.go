@@ -12,10 +12,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/ui"
+	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/pkg/ui"
 )
 
 // maxMachineNameLen bounds --name and --cluster-uid, in characters.

@@ -14,10 +14,10 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/term"
 
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/auth"
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/ui"
+	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/pkg/auth"
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/ui"
 )
 
 // minPassphraseLen is the minimum number of characters for a transfer passphrase.
@@ -79,7 +79,7 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, 
 	// discover that no token exists — which would otherwise block callers
 	// (e.g. MCP tools) for up to the HTTP timeout duration.
 	if persist {
-		if _, err := config.LoadToken(); err != nil {
+		if _, err := auth.Tokens().Load(); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("not authenticated, run `retyc auth login`: %w", auth.ErrNoToken)
 			}
@@ -92,7 +92,7 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, 
 		// In that case persist must be true so that future token refreshes are
 		// written back to disk — otherwise a rotated refresh token is lost and
 		// the user is forced to re-login on the next server start.
-		if _, err := config.LoadToken(); err == nil {
+		if _, err := auth.Tokens().Load(); err == nil {
 			persist = true
 		}
 	}

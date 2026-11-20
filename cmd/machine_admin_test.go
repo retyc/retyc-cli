@@ -13,8 +13,8 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/config"
+	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/pkg/config"
 )
 
 const testEnrollmentID = "01a0fcf4-0000-7000-8000-000000000001"

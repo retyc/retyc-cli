@@ -1,0 +1,511 @@
+// Package auth provides OIDC authentication via the device authorization flow.
+package auth
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/oauth2"
+
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/diag"
+	"github.com/retyc/retyc-cli/pkg/ui"
+)
+
+// ErrNoToken is returned when no token is in the token store (TokenStore).
+var ErrNoToken = errors.New("no stored token")
+
+// ErrTokenStore is added to ErrNoToken when the token store failed to answer
+// (anything but an empty store): the login may still exist. Check it before
+// ErrNoToken.
+var ErrTokenStore = errors.New("token store unavailable")
+
+// ErrNoRefreshToken is returned when the stored token is expired and has no
+// refresh token to attempt a silent renewal.
+var ErrNoRefreshToken = errors.New("token expired and no refresh token available")
+
+// ErrDeviceCodeExpired is returned by PollToken when the device code has expired.
+var ErrDeviceCodeExpired = errors.New("device code expired")
+
+// ErrAccessDenied is returned by PollToken when the user explicitly denied access.
+var ErrAccessDenied = errors.New("access denied by user")
+
+// ErrSlowDown is returned by PollToken when the server requests a slower polling rate.
+var ErrSlowDown = errors.New("slow down: poll less frequently")
+
+// DeviceAuthResponse holds the response from the device authorization endpoint.
+type DeviceAuthResponse struct {
+	DeviceCode              string `json:"device_code"`
+	UserCode                string `json:"user_code"`
+	VerificationURI         string `json:"verification_uri"`
+	VerificationURIComplete string `json:"verification_uri_complete"`
+	ExpiresIn               int    `json:"expires_in"`
+	Interval                int    `json:"interval"`
+}
+
+// TokenResponse holds the token endpoint response.
+type TokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+	Error        string `json:"error"`
+	ErrorDesc    string `json:"error_description"`
+}
+
+// DeviceFlow performs OIDC authentication using the RFC 8628 device authorization grant.
+// It prints the user code and verification URI, then polls until the user authenticates
+// or the code expires.
+//
+// httpClient is used for all requests; pass an insecure client to accept self-signed
+// TLS certificates (e.g. in development environments).
+func DeviceFlow(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client) (*oauth2.Token, error) {
+	// Step 1: request a device code
+	devResp, err := RequestDeviceCode(ctx, cfg, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("requesting device code: %w", err)
+	}
+
+	// Prompt the user to visit the verification URI. Written to stderr so that
+	// stdout stays reserved for command results (e.g. --json output).
+	fmt.Fprintf(diag.Writer(), "\nOpen the following URL in your browser:\n\n  %s\n\n", devResp.VerificationURIComplete)
+	fmt.Fprintf(diag.Writer(), "Enter code: %s\n\n", devResp.UserCode)
+
+	spinner := ui.NewSpinner("Waiting for authentication…")
+	spinner.Start()
+	defer spinner.Stop()
+
+	// Step 2: poll the token endpoint
+	interval := time.Duration(devResp.Interval) * time.Second
+	if interval == 0 {
+		interval = 5 * time.Second
+	}
+	expiresIn := devResp.ExpiresIn
+	if expiresIn == 0 {
+		expiresIn = 300 // default to 5 minutes if the server did not specify
+	}
+	deadline := time.Now().Add(time.Duration(expiresIn) * time.Second)
+
+	// Poll first, then wait: RFC 8628 requires waiting between *subsequent*
+	// requests, so the initial poll can happen immediately. This makes the
+	// response feel instantaneous when the user authenticates right away.
+	for time.Now().Before(deadline) {
+		tok, err := PollToken(ctx, cfg, devResp.DeviceCode, httpClient)
+		if err != nil {
+			if !errors.Is(err, ErrSlowDown) {
+				return nil, err
+			}
+			// RFC 8628 §3.5: slow_down requires increasing the polling interval by 5s.
+			interval += 5 * time.Second
+		}
+		if tok != nil {
+			return tok, nil
+		}
+
+		// authorization_pending or slow_down — wait before next poll
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+
+	return nil, ErrDeviceCodeExpired
+}
+
+// RequestDeviceCode calls the device authorization endpoint.
+func RequestDeviceCode(
+	ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client,
+) (*DeviceAuthResponse, error) {
+	data := url.Values{
+		"client_id": {cfg.ClientID},
+		"scope":     {strings.Join(cfg.Scopes, " ")},
+	}
+
+	resp, err := postForm(ctx, httpClient, cfg.DeviceAuthURL, data)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("device authorization endpoint returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var dar DeviceAuthResponse
+	if err := json.Unmarshal(body, &dar); err != nil {
+		return nil, fmt.Errorf("decoding device auth response: %w", err)
+	}
+
+	return &dar, nil
+}
+
+// postForm is http.Client.PostForm bound to ctx: an interrupted login does not
+// wait for the identity provider to answer.
+func postForm(ctx context.Context, httpClient *http.Client, endpoint string, data url.Values) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	return httpClient.Do(req)
+}
+
+// PollToken exchanges a device code for tokens at the token endpoint.
+// Returns (token, nil) on success, (nil, nil) when authorization is pending,
+// ErrSlowDown when the server requests a reduced polling rate,
+// ErrDeviceCodeExpired when the code has expired, ErrAccessDenied when the
+// user denied access, or a non-nil error for unexpected failures.
+func PollToken(
+	ctx context.Context, cfg config.OIDCConfig, deviceCode string, httpClient *http.Client,
+) (*oauth2.Token, error) {
+	data := url.Values{
+		"client_id":   {cfg.ClientID},
+		"device_code": {deviceCode},
+		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
+	}
+
+	resp, err := postForm(ctx, httpClient, cfg.TokenURL, data)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading token response body: %w", err)
+	}
+
+	// A non-2xx status that carries no recognised error field is unexpected.
+	// Try to decode anyway — RFC 8628 errors (authorization_pending, etc.)
+	// are returned as 4xx with a JSON body; fall through to the switch below.
+	var tr TokenResponse
+	if err := json.Unmarshal(body, &tr); err != nil {
+		return nil, fmt.Errorf("decoding token response (status %d): %w — body: %s", resp.StatusCode, err, string(body))
+	}
+
+	switch tr.Error {
+	case "":
+		return tokenFromResponse(tr), nil
+	case "authorization_pending":
+		return nil, nil
+	case "slow_down":
+		return nil, ErrSlowDown
+	case "expired_token":
+		return nil, ErrDeviceCodeExpired
+	case "access_denied":
+		return nil, ErrAccessDenied
+	default:
+		return nil, fmt.Errorf("token error %s: %s", tr.Error, tr.ErrorDesc)
+	}
+}
+
+// tokenFromResponse converts a TokenResponse into an *oauth2.Token.
+func tokenFromResponse(tr TokenResponse) *oauth2.Token {
+	tok := &oauth2.Token{
+		AccessToken:  tr.AccessToken,
+		TokenType:    tr.TokenType,
+		RefreshToken: tr.RefreshToken,
+	}
+	if tr.ExpiresIn > 0 {
+		tok.Expiry = time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second)
+	}
+
+	return tok
+}
+
+// RefreshError is the refusal of a refresh by the identity provider, other
+// than invalid_grant (which is ErrNoRefreshToken): an HTTP error status, or
+// an OAuth error code in the answer.
+type RefreshError struct {
+	// Status is the HTTP status of the answer.
+	Status int
+	// Code and Description are the OAuth error of the answer, empty when it
+	// carried none (a gateway answering for the provider).
+	Code, Description string
+}
+
+func (e *RefreshError) Error() string {
+	if e.Code == "" {
+		return fmt.Sprintf("refresh error: the token endpoint answered %d", e.Status)
+	}
+
+	return fmt.Sprintf("refresh error %s: %s", e.Code, e.Description)
+}
+
+// transient reports whether the same refresh may succeed later: the provider
+// or a gateway before it is failing or throttling, not refusing the login.
+func (e *RefreshError) transient() bool {
+	switch {
+	case e.Status >= http.StatusInternalServerError,
+		e.Status == http.StatusRequestTimeout, e.Status == http.StatusTooManyRequests,
+		e.Code == "temporarily_unavailable", e.Code == "server_error":
+		return true
+	}
+
+	return false
+}
+
+// IsPermanent reports whether err, the failure to obtain a valid token, will
+// repeat until the user acts: no stored token, no refresh token or one the
+// identity provider no longer accepts, or any other refusal by the provider
+// (a 4xx other than 408 and 429). Everything else may be gone at the next
+// attempt: a network error, a timeout, a 5xx, an answer that cannot be read.
+func IsPermanent(err error) bool {
+	if errors.Is(err, ErrNoToken) || errors.Is(err, ErrNoRefreshToken) || errors.Is(err, ErrMachineRevoked) {
+		return true
+	}
+	var refused *RefreshError
+
+	return errors.As(err, &refused) && !refused.transient()
+}
+
+// Refresh exchanges a refresh token for a new set of tokens.
+// If the server does not return a new refresh token, the original one is
+// preserved so that subsequent refreshes remain possible.
+func Refresh(
+	ctx context.Context, cfg config.OIDCConfig, refreshToken string, httpClient *http.Client,
+) (*oauth2.Token, error) {
+	data := url.Values{
+		"client_id":     {cfg.ClientID},
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading refresh response body: %w", err)
+	}
+
+	var tr TokenResponse
+	decodeErr := json.Unmarshal(body, &tr)
+	if tr.Error == "invalid_grant" {
+		// Refresh token is expired or revoked — caller must re-authenticate.
+		return nil, fmt.Errorf("refresh token invalid or expired (%s): %w", tr.ErrorDesc, ErrNoRefreshToken)
+	}
+	if tr.Error != "" || resp.StatusCode >= http.StatusBadRequest {
+		// The body of an answer that is not JSON (a gateway page) is left out.
+		return nil, &RefreshError{Status: resp.StatusCode, Code: tr.Error, Description: tr.ErrorDesc}
+	}
+	if decodeErr != nil {
+		return nil, fmt.Errorf("decoding refresh response (status %d): %w — body: %s",
+			resp.StatusCode, decodeErr, string(body))
+	}
+
+	tok := tokenFromResponse(tr)
+
+	// Some servers omit the refresh token in the response when it has not been
+	// rotated; carry the original forward so it remains usable.
+	if tok.RefreshToken == "" {
+		tok.RefreshToken = refreshToken
+	}
+
+	return tok, nil
+}
+
+// Revoke terminates the server-side session by calling the OIDC end_session
+// endpoint with the refresh token (Keycloak backchannel logout).
+// Unlike RFC 7009 token revocation, this actually closes the session visible
+// in the identity provider's admin panel.
+func Revoke(ctx context.Context, cfg config.OIDCConfig, refreshToken string, httpClient *http.Client) error {
+	if cfg.EndSessionURL == "" {
+		return errors.New("OIDC end_session endpoint not available")
+	}
+
+	data := url.Values{
+		"client_id":     {cfg.ClientID},
+		"refresh_token": {refreshToken},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.EndSessionURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("end_session endpoint returned %d (could not read body: %w)", resp.StatusCode, readErr)
+		}
+
+		return fmt.Errorf("end_session endpoint returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// RefreshingTokenSource is an oauth2.TokenSource that transparently refreshes
+// the access token when it expires. It is safe for concurrent use.
+// When persist is true, a successfully refreshed token is saved to the token store so
+// that the next invocation of the CLI does not need to re-authenticate.
+type RefreshingTokenSource struct {
+	mu         sync.Mutex
+	tok        *oauth2.Token
+	cfg        config.OIDCConfig
+	httpClient *http.Client
+	persist    bool
+}
+
+// NewRefreshingTokenSource returns a TokenSource that refreshes tok automatically.
+// Set persist to true when the token was loaded from disk (interactive sessions);
+// set it to false for the RETYC_TOKEN env-var path (CI/CD, no disk state).
+func NewRefreshingTokenSource(
+	tok *oauth2.Token,
+	cfg config.OIDCConfig,
+	httpClient *http.Client,
+	persist bool,
+) oauth2.TokenSource {
+	return &RefreshingTokenSource{tok: tok, cfg: cfg, httpClient: httpClient, persist: persist}
+}
+
+// Token returns a valid access token, refreshing it if necessary.
+func (s *RefreshingTokenSource) Token() (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.tok.Valid() {
+		return s.tok, nil
+	}
+	if s.tok.RefreshToken == "" {
+		return nil, ErrNoRefreshToken
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	newTok, err := Refresh(ctx, s.cfg, s.tok.RefreshToken, s.httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("refreshing token: %w", err)
+	}
+
+	if s.persist {
+		if err := Tokens().Save(newTok); err != nil {
+			fmt.Fprintf(diag.Writer(), "warning: saving refreshed token: %v\n", err)
+		}
+	}
+
+	s.tok = newTok
+
+	return newTok, nil
+}
+
+// Expire makes the next call to Token refresh the access token even though
+// it has not reached its expiry: for a caller the API has just answered 401,
+// which is how a login revoked on the server shows before the access token
+// runs out. A source without a refresh token is left as it is: it could only
+// fail from then on.
+func (s *RefreshingTokenSource) Expire() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.tok.RefreshToken == "" {
+		return
+	}
+	expired := *s.tok
+	expired.Expiry = time.Now().Add(-time.Minute)
+	s.tok = &expired
+}
+
+// GetValidToken returns a valid token for the current session.
+//
+// If the RETYC_TOKEN environment variable is set, it is used as an offline
+// refresh token and exchanged for a fresh access token. If the exchange fails
+// with ErrNoRefreshToken (invalid_grant — the env token is expired or revoked),
+// GetValidToken logs a warning (diag output) and falls through to the disk token.
+// This allows users who have both RETYC_TOKEN and a stored disk token (e.g.
+// after logging in via the MCP device flow) to keep working without re-login.
+// Note: on a developer workstation that has both RETYC_TOKEN and a disk token,
+// a revoked offline token will cause API calls to run as the disk identity.
+//
+// When RETYC_TOKEN is empty or not set, the stored token is loaded from the token store (Tokens)
+// and returned immediately if still valid. If expired and a refresh token is
+// available, a silent refresh is attempted and the new token is persisted.
+//
+// Callers should handle ErrNoToken (not authenticated) and ErrNoRefreshToken
+// (expired, must re-authenticate via DeviceFlow) as non-fatal states.
+func GetValidToken(ctx context.Context, cfg config.OIDCConfig, httpClient *http.Client) (*oauth2.Token, error) {
+	// CI/CD path: RETYC_TOKEN holds an offline refresh token.
+	// If it is expired or revoked (invalid_grant → ErrNoRefreshToken), emit a
+	// warning and fall through to the disk token so that interactive MCP users
+	// are not locked out when RETYC_TOKEN is also configured with a stale value.
+	if envToken := config.Token(); envToken != "" {
+		tok, err := Refresh(ctx, cfg, envToken, httpClient)
+		if err != nil {
+			if !errors.Is(err, ErrNoRefreshToken) {
+				return nil, fmt.Errorf("RETYC_TOKEN refresh failed: %w", err)
+			}
+			fmt.Fprintf(diag.Writer(), "warning: RETYC_TOKEN is expired or revoked, falling back to stored disk token\n")
+			// Fall through to the disk token path below.
+		} else {
+			return tok, nil
+		}
+	}
+
+	tok, err := Tokens().Load()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrNoToken
+		}
+
+		// A store that fails (a locked vault, an unreadable file) still reads
+		// as "not logged in" (ErrNoToken, exit code 77: supervisors rely on
+		// it), and carries ErrTokenStore with the cause so that an importer
+		// can tell it from an empty store.
+		return nil, fmt.Errorf("%w: %w: %w", ErrNoToken, ErrTokenStore, err)
+	}
+
+	if tok.Valid() {
+		return tok, nil
+	}
+
+	// Token is expired — attempt a silent refresh.
+	if tok.RefreshToken == "" {
+		return nil, ErrNoRefreshToken
+	}
+
+	newTok, err := Refresh(ctx, cfg, tok.RefreshToken, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("refreshing token: %w", err)
+	}
+
+	if err := Tokens().Save(newTok); err != nil {
+		return nil, fmt.Errorf("saving refreshed token: %w", err)
+	}
+
+	return newTok, nil
+}

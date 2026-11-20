@@ -13,7 +13,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/retyc/retyc-cli/internal/machinekey"
+	"github.com/retyc/retyc-cli/pkg/machinekey"
 )
 
 const testOrgID = "0196a3f2-7c5e-7a10-8b3d-5f2e9c1d4a60"
