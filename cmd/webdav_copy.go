@@ -77,7 +77,7 @@ func (fs *webdavFS) copyNode(ctx context.Context, r *http.Request) (int, error) 
 	srcKind, srcDR, srcSub := parseWebdavPath(r.URL.Path)
 	dstKind, dstDR, dstSub := parseWebdavPath(dst)
 	if srcKind != pathDataroomNode || dstKind != pathDataroomNode || srcSub == "/" || dstSub == "/" {
-		return http.StatusForbidden, errors.New("only files inside a dataroom can be copied")
+		return http.StatusForbidden, errors.New("only files inside a storage space can be copied")
 	}
 	srcID, err := fs.tree.DataroomByName(ctx, srcDR)
 	if err != nil {
@@ -88,7 +88,7 @@ func (fs *webdavFS) copyNode(ctx context.Context, r *http.Request) (int, error) 
 		return http.StatusConflict, err
 	}
 	if srcID != dstID {
-		return http.StatusBadGateway, errors.New("copying between datarooms is not supported")
+		return http.StatusBadGateway, errors.New("copying between storage spaces is not supported")
 	}
 
 	// The destination is checked against the WebDAV locks as the handler
@@ -132,7 +132,7 @@ func copyStatus(err error) (int, error) {
 		// RFC 4918 §9.8.5: a missing intermediate collection is a 409.
 		return http.StatusConflict, fmt.Errorf("destination folder: %w", failed.Err)
 	case vfs.CopySession:
-		return http.StatusInternalServerError, fmt.Errorf("dataroom session: %w", failed.Err)
+		return http.StatusInternalServerError, fmt.Errorf("storage space session: %w", failed.Err)
 	case vfs.CopyDestination:
 		switch {
 		case errors.Is(err, vfs.ErrSameNode):

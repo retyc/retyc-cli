@@ -57,13 +57,13 @@ func TestWebdav_APIRateLimitBecomes429(t *testing.T) {
 		depth  string
 	}{
 		// x/net/webdav answers 405 to a failed RemoveAll.
-		{"delete", "DELETE", "/dataroom/DR/old.txt", ""},
+		{"delete", "DELETE", "/spaces/DR/old.txt", ""},
 		// A name looked up in a folder that has to be listed: 404 otherwise.
-		{"get in unlisted folder", "GET", "/dataroom/DR/sub/report.txt", ""},
-		{"propfind in unlisted folder", "PROPFIND", "/dataroom/DR/sub/report.txt", "0"},
+		{"get in unlisted folder", "GET", "/spaces/DR/sub/report.txt", ""},
+		{"propfind in unlisted folder", "PROPFIND", "/spaces/DR/sub/report.txt", "0"},
 		// x/net/webdav has written the 207 and the folder's own entry by the
 		// time the listing fails: without the hold, an empty folder.
-		{"propfind listing a folder", "PROPFIND", "/dataroom/DR/sub", "1"},
+		{"propfind listing a folder", "PROPFIND", "/spaces/DR/sub", "1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := newStatusFS(t, http.StatusTooManyRequests)
@@ -95,7 +95,7 @@ func TestHandleCopy_APIRateLimitBecomes429(t *testing.T) {
 	fs := newStatusFS(t, http.StatusTooManyRequests)
 	w := httptest.NewRecorder()
 
-	fs.handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", "/dataroom/DR/copy.txt", ""))
+	fs.handleCopy(w, copyRequest(t, "/spaces/DR/doc.txt", "/spaces/DR/copy.txt", ""))
 
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d (%s), want 429", w.Code, w.Body.String())
@@ -112,7 +112,7 @@ func TestWebdav_OtherResponsesAreUntouched(t *testing.T) {
 	h := newWebdavHandler(fs, webdav.NewMemLS(), nil)
 
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/dataroom/DR/old.txt", nil))
+	h.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/spaces/DR/old.txt", nil))
 	if w.Code != http.StatusMethodNotAllowed || w.Body.String() != http.StatusText(http.StatusMethodNotAllowed) {
 		t.Errorf("failed DELETE = %d %q, want the 405 of x/net/webdav", w.Code, w.Body.String())
 	}
@@ -121,7 +121,7 @@ func TestWebdav_OtherResponsesAreUntouched(t *testing.T) {
 	}
 
 	// Served from the cached listing: no API call.
-	r := httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/dataroom/DR/doc.txt", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/spaces/DR/doc.txt", nil)
 	r.Header.Set("Depth", "0")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -172,7 +172,7 @@ func TestRateLimitStatus_HoldsOnlyPropfindDepth1(t *testing.T) {
 				midway = rec.Body.Len()
 				_, _ = w.Write([]byte("<second-entry/>"))
 			}))
-			r := httptest.NewRequestWithContext(t.Context(), tc.method, "/dataroom/DR/sub", nil)
+			r := httptest.NewRequestWithContext(t.Context(), tc.method, "/spaces/DR/sub", nil)
 			if tc.depth != "" {
 				r.Header.Set("Depth", tc.depth)
 			}
@@ -200,7 +200,7 @@ func TestRateLimitStatus_StreamedPropfindKeepsItsStatus(t *testing.T) {
 		noteHandlerError(r, refusal)
 	}))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/dataroom/DR", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/spaces/DR", nil))
 	if rec.Code != http.StatusMultiStatus || rec.Header().Get("Retry-After") != "" {
 		t.Errorf("response = %d, Retry-After %q; want the 207 already sent", rec.Code, rec.Header().Get("Retry-After"))
 	}
@@ -214,7 +214,7 @@ func TestWebdav_PropfindDepth1OtherFailureIsUnchanged(t *testing.T) {
 	var logged error
 	h := newWebdavHandler(fs, webdav.NewMemLS(), func(_ *http.Request, err error) { logged = err })
 
-	r := httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/dataroom/DR/sub", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/spaces/DR/sub", nil)
 	r.Header.Set("Depth", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -226,7 +226,7 @@ func TestWebdav_PropfindDepth1OtherFailureIsUnchanged(t *testing.T) {
 		t.Fatalf("status = %d (%s), want the 207 x/net/webdav had started", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if got := strings.Count(body, "<D:response>"); got != 1 || !strings.Contains(body, "/dataroom/DR/sub") {
+	if got := strings.Count(body, "<D:response>"); got != 1 || !strings.Contains(body, "/spaces/DR/sub") {
 		t.Errorf("%d entries in %q, want the folder alone", got, body)
 	}
 	if got := w.Header().Get("Retry-After"); got != "" {

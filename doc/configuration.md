@@ -57,7 +57,7 @@ RETYC_KEY_PASSPHRASE="correct horse battery staple"
 # /etc/systemd/system/retyc-mount.service
 [Service]
 Environment = RETYC_ENV_FILE=/etc/retyc/env
-ExecStart = /usr/local/bin/retyc fs mount retyc://019d3de3-... /mnt/dataroom
+ExecStart = /usr/local/bin/retyc fs mount retyc://019d3de3-... /mnt/space
 Restart = on-failure
 RestartPreventExitStatus = 77 78
 ```

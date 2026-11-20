@@ -16,7 +16,7 @@ docker run -it --rm \
 Tip: `alias retyc='docker run -it --rm -v retyc-config:/home/retyc/.config/retyc -v "$(pwd)":/data retyc/retyc-cli:latest'`.
 There is no key cache in Docker: the passphrase is asked at each run.
 
-## Mounting a dataroom from the container
+## Mounting a storage space from the container
 
 See [RetycFS: containers](retycfs.md#containers) (root, `/dev/fuse`, `CAP_SYS_ADMIN`).
 

@@ -283,7 +283,7 @@ func TestBackgroundDelete_Failure(t *testing.T) {
 		return strings.Contains(m.logs.text(), "a background delete failed")
 	})
 	logs := m.logs.text()
-	want := "a background delete failed, the file is still in the dataroom: dataroom dr1, node " + node.id + ": EACCES"
+	want := "a background delete failed, the file is still in the storage space: space dr1, node " + node.id + ": EACCES"
 	if logs != want {
 		t.Errorf("log = %q, want %q", logs, want)
 	}
@@ -354,7 +354,7 @@ func TestBackgroundDelete_ShutdownCut(t *testing.T) {
 		t.Errorf("reports = %q, want one per node and no name", logs)
 	}
 	for _, id := range ids {
-		if !strings.Contains(logs, "dataroom dr1, node "+id) {
+		if !strings.Contains(logs, "space dr1, node "+id) {
 			t.Errorf("no report for node %s: %q", id, logs)
 		}
 	}
@@ -371,10 +371,11 @@ func TestLostWritesError_Deletes(t *testing.T) {
 		"1 file being written was not sent before the filesystem was unmounted: its changes are lost": {Files: 1},
 		"3 files being written were not sent before the filesystem was unmounted: " +
 			"their changes are lost": {Files: 3},
-		"1 file removed was not deleted before the filesystem was unmounted: it may still be in the dataroom": {Deletes: 1},
+		"1 file removed was not deleted before the filesystem was unmounted: " +
+			"it may still be in the storage space": {Deletes: 1},
 		"1 file being written was not sent before the filesystem was unmounted: its changes are lost; " +
 			"2 files removed were not deleted before the filesystem was unmounted: " +
-			"they may still be in the dataroom": {Files: 1, Deletes: 2},
+			"they may still be in the storage space": {Files: 1, Deletes: 2},
 	} {
 		if got := e.Error(); got != want {
 			t.Errorf("%+v = %q, want %q", *e, got, want)
@@ -395,7 +396,7 @@ func TestBackgroundDelete_ReadOnly(t *testing.T) {
 			return vfs.Access{Role: "viewer", Writable: true, ReadOnly: true}, nil
 		}
 	})
-	wantErrno(t, "unlink in a dataroom the user cannot write to",
+	wantErrno(t, "unlink in a space the user cannot write to",
 		os.Remove(filepath.Join(viewer.dir, "hello.txt")), syscall.EROFS)
 	if n := viewer.pendingDeletes(); n != 0 || viewer.api.count("delete") != 0 {
 		t.Errorf("%d deletes queued for a viewer", n)

@@ -15,8 +15,8 @@ import (
 // would mask the root hook (CA loading, tracing, concurrency).
 var fsCmd = &cobra.Command{
 	Use:   "fs",
-	Short: "Filesystem access to your datarooms",
-	Long: `Expose your RETYC datarooms as a filesystem, so that file managers and
+	Short: "Filesystem access to your storage spaces",
+	Long: `Expose your RETYC storage spaces as a filesystem, so that file managers and
 ordinary tools can browse, read and write them. Content is encrypted and
 decrypted locally, as with the other commands.`,
 }
@@ -37,7 +37,7 @@ var cacheFlags = [][2]string{
 // a flag that changes nothing is not offered.
 func addCacheFlags(cmd *cobra.Command, maxStale bool) {
 	cmd.Flags().Duration("cache-ttl", config.DefaultCacheTTL,
-		"how long a folder listing, the dataroom list or a name looked up is served from memory")
+		"how long a folder listing, the storage space list or a name looked up is served from memory")
 	if maxStale {
 		cmd.Flags().Duration("cache-max-stale", config.DefaultCacheMaxStale,
 			"how much longer an expired listing is served while it is refreshed in the background (0 disables)")

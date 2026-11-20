@@ -17,9 +17,9 @@ var adminExportCmd = &cobra.Command{
 	Short: "Export the whole organization to a folder (reversibility)",
 	Long: `Export the organization's data into a self-contained folder:
 organization and quota, members with identity details, blacklisted domains,
-and every dataroom (clear-text metadata, activity feed, decrypted content).
+and every storage space (clear-text metadata, activity feed, decrypted content).
 
-Requires the organization API key and the organization private key file. Datarooms
+Requires the organization API key and the organization private key file. Storage spaces
 the organization key cannot open are recorded in the manifest and skipped.
 Transfers are not exported: the admin API exposes no transfer file download.`,
 	Args: cobra.ExactArgs(1),
@@ -55,7 +55,7 @@ Transfers are not exported: the admin API exposes no transfer file download.`,
 // (the full list is in export.json, which the error points at).
 func reportExportResult(m service.AdminExportManifest, outputDir string) error {
 	for _, s := range m.DataroomsSkipped {
-		fmt.Fprintf(os.Stderr, "Skipped dataroom %s (%s): %s\n", s.ID, ui.Escape(s.Title), ui.Escape(s.Reason))
+		fmt.Fprintf(os.Stderr, "Skipped storage space %s (%s): %s\n", s.ID, ui.Escape(s.Title), ui.Escape(s.Reason))
 	}
 	if len(m.Errors) > 0 {
 		if !jsonOutput {
@@ -71,7 +71,7 @@ func reportExportResult(m service.AdminExportManifest, outputDir string) error {
 		// The manifest is the same document written to export.json.
 		return printJSON(m)
 	}
-	fmt.Printf("Export complete: %d member(s), %d blacklisted domain(s), %d/%d dataroom(s) to %s\n",
+	fmt.Printf("Export complete: %d member(s), %d blacklisted domain(s), %d/%d storage space(s) to %s\n",
 		m.Members, m.BlacklistDomains, m.DataroomsExported, m.Datarooms, outputDir)
 
 	return nil

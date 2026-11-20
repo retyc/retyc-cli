@@ -857,7 +857,7 @@ func TestCreate_Chunked_FailureDiscards(t *testing.T) {
 			}
 			// The file is told by its identifiers, never by its name.
 			if logs := fs.logs.list(); len(logs) != 1 || !strings.Contains(logs[0], tc.wantLog) ||
-				!strings.Contains(logs[0], "dataroom dr1, node f-") || strings.Contains(logs[0], "f.bin") {
+				!strings.Contains(logs[0], "space dr1, node f-") || strings.Contains(logs[0], "f.bin") {
 				t.Errorf("logs = %q, want %q by identifiers and without the name", logs, tc.wantLog)
 			}
 			switch listing := cachedListing(fs.FS, "dr1", "/"); {
@@ -1005,9 +1005,9 @@ func TestCreate_Errors(t *testing.T) {
 		noKind  bool  // the error carries no sentinel of the package
 		noCalls bool
 	}{
-		"missing folder":    {path: "/nope/f", size: small, want: ErrNotExist, noCalls: true},
-		"parent is a file":  {path: "/doc.txt/f", size: small, want: ErrNotDir, noCalls: true},
-		"the dataroom root": {path: "/", size: small, want: ErrIsDir, noCalls: true},
+		"missing folder":   {path: "/nope/f", size: small, want: ErrNotExist, noCalls: true},
+		"parent is a file": {path: "/doc.txt/f", size: small, want: ErrNotDir, noCalls: true},
+		"the space root":   {path: "/", size: small, want: ErrIsDir, noCalls: true},
 		"forbidden, single request": {
 			path: "/f", size: small, refuse: "POST ", code: 403, body: `{"detail":"Create not allowed here"}`,
 			want: ErrForbidden,

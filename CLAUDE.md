@@ -73,6 +73,13 @@ scripts/                 # build-mcpb.sh, completions.sh + manpages.sh/genman (p
   1 otherwise. Supervisors (`retyc-k8s-csi`) rely on 77/78: keep those errors wrapped
   with `%w` up to `RunE`.
 - The backend says `share`, the CLI says `transfer`. Do not rename backend routes.
+- The app and the CLI say `space`, the API and the code say `dataroom`. User-facing text
+  (help, messages, logs, docs, MCP tools `space_*`) says "storage space" wherever the
+  word stands alone (titles, descriptions, `Storage space %s created.`), "space" once the
+  context is set (`retyc space ls`, `SPACE ID`, `space dr1, node n-3`); identifiers, API routes,
+  JSON keys, error `kind`s, metrics, telemetry attributes, the xattr, Redis keys and the
+  export layout keep `dataroom`. `dataroom` stays an alias of `space` / `admin space`; the
+  WebDAV root folder is `/spaces` (no `/dataroom` alias).
 - Say "organization key", never "master key".
 
 ## Configuration — the single rule
@@ -188,7 +195,7 @@ Behaviour in `doc/commands.md`. Notes for code:
 - Dataroom paths use `retyc://<id>/path` with globs per component;
   `resolveDataroomSession` is the single entry point to session material.
 - A failed upload discards what it created (`service.DiscardFailedUpload`).
-- `dataroom user add/rm` and `admin dataroom user rm` chain a rekey.
+- `space user add/rm` and `admin space user rm` chain a rekey.
 - Admin commands: organization API (`<api.base_url>/v1`), scopes
   `organization|dataroom|transfer` × `read|write`.
 

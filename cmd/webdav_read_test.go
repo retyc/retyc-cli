@@ -84,7 +84,7 @@ func await(t *testing.T, ch <-chan int, what string) int {
 }
 
 // readPath is the WebDAV path of the file newReadFS serves.
-const readPath = "/dataroom/DR/big.bin"
+const readPath = "/spaces/DR/big.bin"
 
 // cutChunks returns data in chunks of size bytes, the last one shorter or
 // equal.
@@ -97,7 +97,7 @@ func cutChunks(data []byte, size int) [][]byte {
 	return chunks
 }
 
-// newReadFS returns a webdavFS serving data as /dataroom/DR/big.bin, stored
+// newReadFS returns a webdavFS serving data as /spaces/DR/big.bin, stored
 // in chunks of chunkSize bytes, which is also the chunk size its reader
 // assumes. Its listing and session are already cached.
 func newReadFS(t *testing.T, data []byte, chunkSize int) (*webdavFS, *chunkAPI) {

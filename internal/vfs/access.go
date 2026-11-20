@@ -28,7 +28,7 @@ func (a Access) Reason() string {
 	case !a.ReadOnly:
 		return ""
 	case a.Role == api.RoleViewer:
-		return "you are a viewer of this dataroom"
+		return "you are a viewer of this storage space"
 	default:
 		return "the plan of its owner refuses writes"
 	}
@@ -45,7 +45,7 @@ func (a Access) Reason() string {
 // answer refreshed. A dataroom the list does not name has no known role.
 func (fs *FS) Access(ctx context.Context, dataroomID string) (Access, error) {
 	if fs.client == nil {
-		return Access{}, errors.New("no API client to read the dataroom with")
+		return Access{}, errors.New("no API client to read the storage space with")
 	}
 	list, err := fs.Datarooms(ctx)
 	if err != nil {

@@ -41,11 +41,11 @@ const (
 func (fs *FS) Mkdir(ctx context.Context, dataroomID, path string) (Node, error) {
 	sess, err := fs.Session(ctx, dataroomID)
 	if err != nil {
-		return Node{}, fmt.Errorf("dataroom session: %w", err)
+		return Node{}, fmt.Errorf("storage space session: %w", err)
 	}
 	parentPath, dirName := SplitPath(path)
 	if dirName == "" {
-		return Node{}, as(ErrExist, errors.New("the dataroom root already exists"))
+		return Node{}, as(ErrExist, errors.New("the root of the storage space already exists"))
 	}
 	parentID, err := fs.resolveFolderID(ctx, dataroomID, parentPath)
 	if errors.Is(err, os.ErrInvalid) {
@@ -156,11 +156,11 @@ func (fs *FS) parentAfterConflict(
 func (fs *FS) Symlink(ctx context.Context, dataroomID, path, target string) (Node, error) {
 	sess, err := fs.Session(ctx, dataroomID)
 	if err != nil {
-		return Node{}, fmt.Errorf("dataroom session: %w", err)
+		return Node{}, fmt.Errorf("storage space session: %w", err)
 	}
 	parentPath, name := SplitPath(path)
 	if name == "" {
-		return Node{}, as(ErrExist, errors.New("the dataroom root already exists"))
+		return Node{}, as(ErrExist, errors.New("the root of the storage space already exists"))
 	}
 	parentID, err := fs.folderID(ctx, dataroomID, parentPath)
 	if err != nil {
@@ -249,7 +249,7 @@ func idOrRoot(folderID *string) string {
 func (fs *FS) Remove(ctx context.Context, dataroomID, path string, recursive bool) error {
 	parentPath, name := SplitPath(path)
 	if name == "" {
-		return fmt.Errorf("the dataroom root cannot be removed: %w", os.ErrInvalid)
+		return fmt.Errorf("the root of the storage space cannot be removed: %w", os.ErrInvalid)
 	}
 	err := fs.removeListed(ctx, dataroomID, parentPath, name, recursive)
 	if errors.Is(err, api.ErrNotFound) {
@@ -338,7 +338,7 @@ func (fs *FS) Rename(ctx context.Context, dataroomID, oldPath, newPath string, r
 	oldParent, oldName := SplitPath(oldPath)
 	newParent, newName := SplitPath(newPath)
 	if oldName == "" || newName == "" {
-		return fmt.Errorf("the dataroom root cannot be renamed: %w", os.ErrInvalid)
+		return fmt.Errorf("the root of the storage space cannot be renamed: %w", os.ErrInvalid)
 	}
 	dstParentID, err := fs.moveListed(ctx, dataroomID, oldParent, oldName, newParent, newName, replace)
 	if renameRetries(err, replace) {
@@ -476,7 +476,7 @@ func (fs *FS) moveListed(
 	}
 	sess, err := fs.Session(ctx, dataroomID)
 	if err != nil {
-		return dstParentID, fmt.Errorf("dataroom session: %w", err)
+		return dstParentID, fmt.Errorf("storage space session: %w", err)
 	}
 	if replace {
 		err := service.ReplaceDataroomNodeByID(ctx, fs.client, dataroomID, node.ID, dstParentID, dstName, sess)

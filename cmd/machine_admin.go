@@ -156,7 +156,7 @@ seat in the organization.
 Compare the fingerprint with the one printed by ` + "`retyc machine enroll`" + ` on the
 machine before approving; --fingerprint makes the command check it.
 In an organization with no organization key, the command asks again: only
-the members the machine adds to its datarooms can then read them once the
+the members the machine adds to its storage spaces can then read them once the
 machine is lost (--yes accepts it).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -198,7 +198,7 @@ machine is lost (--yes accepts it).`,
 		if errors.Is(err, api.ErrNoOrganizationKeyAck) {
 			// The API wants an explicit acknowledgement: ask, then approve again.
 			fmt.Fprintln(os.Stderr, "Warning: the organization has no organization key: only the members the "+
-				"machine adds to its datarooms can read them once the machine is lost.")
+				"machine adds to its storage spaces can read them once the machine is lost.")
 			ok, cerr := confirm("Approve anyway?", yes)
 			if cerr != nil {
 				return cerr
@@ -257,9 +257,9 @@ var machineDenyCmd = &cobra.Command{
 
 var machineRmCmd = &cobra.Command{
 	Use:   "rm <machine-id>",
-	Short: "Delete a machine account that owns no dataroom (admins)",
+	Short: "Delete a machine account that owns no storage space (admins)",
 	Long: `Delete a machine account: its seat is freed and it must enroll again to
-come back. The API refuses it while the machine owns datarooms, deleted ones
+come back. The API refuses it while the machine owns storage spaces, deleted ones
 not purged yet included; disable it instead to cut its access.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -281,8 +281,8 @@ not purged yet included; disable it instead to cut its access.`,
 		}
 		err = client.DeleteMachine(ctx, args[0])
 		if errors.Is(err, api.ErrConflict) {
-			return fmt.Errorf("deleting machine account: it still owns datarooms (deleted ones not purged yet "+
-				"included): transfer their ownership (`retyc admin dataroom chown`), delete them "+
+			return fmt.Errorf("deleting machine account: it still owns storage spaces (deleted ones not purged yet "+
+				"included): transfer their ownership (`retyc admin space chown`), delete them "+
 				"or disable the machine instead: %w", err)
 		}
 		if err != nil {
