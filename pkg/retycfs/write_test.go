@@ -150,7 +150,7 @@ func TestWrite_CreateAndReadBack(t *testing.T) {
 	m.warm(t)
 
 	// echo > f: nothing at open, one request at close.
-	small := []byte("hello, dataroom\n")
+	small := []byte("hello, space\n")
 	writeFile(t, filepath.Join(m.dir, "new.txt"), small)
 	m.cost(t, "a small file", map[string]int{"create_file": 1})
 	m.wantFile(t, dr, "", "new.txt", small)
@@ -1005,28 +1005,28 @@ func TestWrite_AllDataroomsAndCrossDataroom(t *testing.T) {
 
 	// A dataroom the user may only read.
 	if err := writeMode(filepath.Join(m.dir, "Two", "c.txt"), []byte("x"), 0o644); !errors.Is(err, syscall.EROFS) {
-		t.Errorf("a write in a read-only dataroom = %v, want EROFS", err)
+		t.Errorf("a write in a read-only space = %v, want EROFS", err)
 	}
 	if err := mkdir(filepath.Join(m.dir, "Two", "d")); !errors.Is(err, syscall.EROFS) {
-		t.Errorf("mkdir in a read-only dataroom = %v, want EROFS", err)
+		t.Errorf("mkdir in a read-only space = %v, want EROFS", err)
 	}
 	// Between two datarooms: mv copies and deletes.
 	err := os.Rename(filepath.Join(m.dir, "One", "a.txt"), filepath.Join(m.dir, "Two", "a.txt"))
 	if !errors.Is(err, syscall.EXDEV) {
-		t.Errorf("rename between two datarooms = %v, want EXDEV", err)
+		t.Errorf("rename between two spaces = %v, want EXDEV", err)
 	}
 	if err := writeMode(filepath.Join(m.dir, "new.txt"), nil, 0o644); !errors.Is(err, syscall.EPERM) {
-		t.Errorf("a file where datarooms are listed = %v, want EPERM", err)
+		t.Errorf("a file where spaces are listed = %v, want EPERM", err)
 	}
 	if n := len(two.children[""]); n != 0 {
-		t.Errorf("%d nodes in the read-only dataroom", n)
+		t.Errorf("%d nodes in the read-only space", n)
 	}
 	// Asked when a dataroom is first entered, and remembered.
 	walk(t, m.dir)
 	if n := asked.Load(); n != 2 {
-		t.Errorf("Access asked %d times, want once per dataroom", n)
+		t.Errorf("Access asked %d times, want once per space", n)
 	}
-	if logs := m.logs.text(); !strings.Contains(logs, "dataroom dr2 is read-only: you are a viewer") {
+	if logs := m.logs.text(); !strings.Contains(logs, "space dr2 is read-only: you are a viewer") {
 		t.Errorf("the operator is not told why dr2 is read-only:\n%s", logs)
 	}
 }
@@ -1247,10 +1247,10 @@ func TestToErrno_Writes(t *testing.T) {
 		err  error
 		want syscall.Errno
 	}{
-		"no room in the dataroom": {vfs.ErrStorageExceeded, syscall.ENOSPC},
+		"no room in the space":    {vfs.ErrStorageExceeded, syscall.ENOSPC},
 		"no room for the spool":   {fmt.Errorf("write: %w", vfs.ErrSpoolFull), syscall.ENOSPC},
 		"refused":                 {vfs.ErrForbidden, syscall.EACCES},
-		"dataroom read-only":      {errors.Join(vfs.ErrReadOnly, vfs.ErrForbidden), syscall.EROFS},
+		"space read-only":         {errors.Join(vfs.ErrReadOnly, vfs.ErrForbidden), syscall.EROFS},
 		"401":                     {&api.HTTPError{Status: 401}, syscall.EACCES},
 		"rate limit":              {fmt.Errorf("upload: %w", api.ErrRateLimited), syscall.EIO},
 		"name being deleted":      {fmt.Errorf("create: %w", vfs.ErrNameBeingDeleted), syscall.EBUSY},

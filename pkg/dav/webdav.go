@@ -246,21 +246,22 @@ type webdavPathKind int
 
 const (
 	pathRoot         webdavPathKind = iota // "/"
-	pathDataroomRoot                       // "/dataroom"
-	pathDataroomNode                       // "/dataroom/<name>[/...]"
+	pathDataroomRoot                       // "/spaces"
+	pathDataroomNode                       // "/spaces/<name>[/...]"
 	pathUnknown                            // any other top-level entry
 )
 
-// webdavSectionDataroom is the root folder under which datarooms are exposed.
-// The root is namespaced by section so future element types can live alongside it.
-const webdavSectionDataroom = "dataroom"
+// webdavSectionDataroom is the root folder under which datarooms are exposed
+// ("spaces" is the user-facing name of a dataroom). The root is namespaced by
+// section so future element types can live alongside it.
+const webdavSectionDataroom = "spaces"
 
 // parseWebdavPath classifies a WebDAV path and extracts the dataroom name and sub-path.
 //
 //	"/"                                 → (pathRoot, "", "")
-//	"/dataroom" or "/dataroom/"         → (pathDataroomRoot, "", "")
-//	"/dataroom/My DR"                   → (pathDataroomNode, "My DR", "/")
-//	"/dataroom/My DR/folder/file.txt"   → (pathDataroomNode, "My DR", "/folder/file.txt")
+//	"/spaces" or "/spaces/"             → (pathDataroomRoot, "", "")
+//	"/spaces/My DR"                     → (pathDataroomNode, "My DR", "/")
+//	"/spaces/My DR/folder/file.txt"     → (pathDataroomNode, "My DR", "/folder/file.txt")
 //	"/anything-else"                    → (pathUnknown, "", "")
 func parseWebdavPath(name string) (kind webdavPathKind, drName, subPath string) {
 	name = path.Clean(name)
@@ -464,7 +465,7 @@ func (h *readFileHandle) openPositioned() error {
 func (h *readFileHandle) startStream() error {
 	sess, err := h.wfs.tree.Session(h.ctx, h.drID)
 	if err != nil {
-		return fmt.Errorf("dataroom session: %w", err)
+		return fmt.Errorf("storage space session: %w", err)
 	}
 	// A context of its own: leaving the stream stops its downloads at once,
 	// where closing the pipe alone lets the chunks in flight run to their end.
@@ -911,7 +912,7 @@ func (fs *webdavFS) OpenFile(ctx context.Context, name string, flag int, perm os
 	return fs.openForRead(ctx, drID, parentPath, wfi)
 }
 
-// openRootDir lists the static top-level sections ("dataroom" for now).
+// openRootDir lists the static top-level sections ("spaces" for now).
 func (fs *webdavFS) openRootDir() webdav.File {
 	return &dirHandle{
 		info: &webdavFileInfo{name: "/", isDir: true},
@@ -921,7 +922,7 @@ func (fs *webdavFS) openRootDir() webdav.File {
 	}
 }
 
-// openDataroomRootDir lists all datarooms under the "dataroom" section.
+// openDataroomRootDir lists all datarooms under the "spaces" section.
 func (fs *webdavFS) openDataroomRootDir(ctx context.Context) (webdav.File, error) {
 	datarooms, err := fs.tree.Datarooms(ctx)
 	if err != nil {
@@ -1206,7 +1207,7 @@ func (fs *webdavFS) Rename(ctx context.Context, oldName, newName string) error {
 		return err
 	}
 	if oldID != newID {
-		return fmt.Errorf("moving between datarooms is not supported: %w", os.ErrPermission)
+		return fmt.Errorf("moving between storage spaces is not supported: %w", os.ErrPermission)
 	}
 
 	return webdavErr(fs.tree.Rename(ctx, oldID, oldSub, newSub, false))

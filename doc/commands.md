@@ -38,28 +38,28 @@ retyc --json user quota | jq .used_storage
 | `code`   | API refusals with a code   | The API's `X-Error-Code` header (`STORAGE_EXCEEDED`, ...), for finer cases       |
 | `detail` | API refusals with a detail | The API's wording: informative only, it may change                               |
 
-| `kind`               | Meaning                                                                                                                 |
-|----------------------|-------------------------------------------------------------------------------------------------------------------------|
-| `auth_required`      | No stored token, or the refresh token was rejected (exit code `77`)                                                     |
-| `config`             | Key passphrase missing or wrong, environment file refused (exit code `78`)                                              |
-| `lost_writes`        | `fs mount`: writes that did not reach the API before the unmount (exit code `75`)                                       |
-| `needs_yes`          | A confirmation is needed: pass `--yes`                                                                                  |
-| `rate_limited`       | The API rate limit, after the client's own retries                                                                      |
-| `storage_exceeded`   | A write refused for lack of storage (dataroom reservation or owner's plan): code `STORAGE_EXCEEDED`                     |
-| `plan_exceeded`      | A reservation the owner's plan cannot hold (`dataroom create` / `set --storage-capacity`): code `STORAGE_PLAN_EXCEEDED` |
-| `capacity_too_small` | A reservation below the API's minimum: code `STORAGE_CAPACITY_TOO_SMALL` (a 400; a 422 from an older API)               |
-| `capacity_shrink`    | A reservation made smaller than it is: it can only be enlarged: code `STORAGE_CAPACITY_SHRINK`                          |
-| `unauthenticated`    | The API answered 401                                                                                                    |
-| `forbidden`          | The API answered 403 (a viewer, a dataroom over its plan)                                                               |
-| `not_found` / `gone` | The API answered 404 / 410                                                                                              |
-| `conflict`           | The API answered 409                                                                                                    |
-| `locked`             | The API answered 423                                                                                                    |
-| `cli_too_old`        | The API answered 426: this CLI is older than the minimum it accepts                                                     |
-| `invalid`            | Any other 400 or 422                                                                                                    |
-| `api_error`          | Any other refusal of the API                                                                                            |
-| `enrollment_expired` | `machine enroll`: the request expired unanswered (exit code `1`: run it again)                                          |
-| `enrollment_denied`  | `machine enroll`: an administrator refused the request (exit code `78`)                                                 |
-| `error`              | Anything else (network, local file, argument)                                                                           |
+| `kind`               | Meaning                                                                                                              |
+|----------------------|----------------------------------------------------------------------------------------------------------------------|
+| `auth_required`      | No stored token, or the refresh token was rejected (exit code `77`)                                                  |
+| `config`             | Key passphrase missing or wrong, environment file refused (exit code `78`)                                           |
+| `lost_writes`        | `fs mount`: writes that did not reach the API before the unmount (exit code `75`)                                    |
+| `needs_yes`          | A confirmation is needed: pass `--yes`                                                                               |
+| `rate_limited`       | The API rate limit, after the client's own retries                                                                   |
+| `storage_exceeded`   | A write refused for lack of storage (storage space reservation or owner's plan): code `STORAGE_EXCEEDED`             |
+| `plan_exceeded`      | A reservation the owner's plan cannot hold (`space create` / `set --storage-capacity`): code `STORAGE_PLAN_EXCEEDED` |
+| `capacity_too_small` | A reservation below the API's minimum: code `STORAGE_CAPACITY_TOO_SMALL` (a 400; a 422 from an older API)            |
+| `capacity_shrink`    | A reservation made smaller than it is: it can only be enlarged: code `STORAGE_CAPACITY_SHRINK`                       |
+| `unauthenticated`    | The API answered 401                                                                                                 |
+| `forbidden`          | The API answered 403 (a viewer, a storage space over its plan)                                                       |
+| `not_found` / `gone` | The API answered 404 / 410                                                                                           |
+| `conflict`           | The API answered 409                                                                                                 |
+| `locked`             | The API answered 423                                                                                                 |
+| `cli_too_old`        | The API answered 426: this CLI is older than the minimum it accepts                                                  |
+| `invalid`            | Any other 400 or 422                                                                                                 |
+| `api_error`          | Any other refusal of the API                                                                                         |
+| `enrollment_expired` | `machine enroll`: the request expired unanswered (exit code `1`: run it again)                                       |
+| `enrollment_denied`  | `machine enroll`: an administrator refused the request (exit code `78`)                                              |
+| `error`              | Anything else (network, local file, argument)                                                                        |
 
 A `kind` is never renamed nor given another meaning; new ones may be added, so treat an
 unknown one as `error`.
@@ -109,62 +109,64 @@ Neither opens a network connection. With `--json`, `config path` adds
 | `retyc transfer enable <id>`   | Enable a transfer                                                                             |
 | `retyc transfer disable <id>`  | Disable a transfer                                                                            |
 
-## Dataroom
+## Storage spaces
 
-Datarooms are persistent, end-to-end encrypted shared spaces for files and folders.
-All paths use the `retyc://dataroom-id/path` URI scheme.
+Storage spaces (called datarooms before) are persistent, end-to-end encrypted shared storage for
+files and folders. `retyc dataroom …` and `retyc admin dataroom …` remain aliases of
+`retyc space …` and `retyc admin space …`.
+All paths use the `retyc://space-id/path` URI scheme.
 Glob patterns (`*`, `?`, `[...]`) are supported in remote paths.
 
-| Command                                                                                    | Description                                                   |
-|--------------------------------------------------------------------------------------------|---------------------------------------------------------------|
-| `retyc dataroom ls`                                                                        | List all your datarooms                                       |
-| `retyc dataroom ls retyc://<id>[/path]`                                                    | List nodes at a path (supports globs)                         |
-| `retyc dataroom create --title <title> [--versioning=false] [--storage-capacity SIZE]`     | Create a new dataroom                                         |
-| `retyc dataroom info <id>`                                                                 | Show dataroom details, stats and members                      |
-| `retyc dataroom set <id> [--title T] [--versioning=true\|false] [--storage-capacity SIZE]` | Change title, versioning or storage capacity                  |
-| `retyc dataroom cp <local…> retyc://<id>/<dest>`                                           | Upload files or directories                                   |
-| `retyc dataroom cp retyc://<id>/<path> <local-dir>`                                        | Download a file                                               |
-| `retyc dataroom cp retyc://<id>/<src> retyc://<id>/<dst>`                                  | Copy a file on the server (same dataroom, nothing downloaded) |
-| `retyc dataroom mv retyc://<id>/<src> retyc://<id>/<dst>`                                  | Rename or move a node                                         |
-| `retyc dataroom rm retyc://<id>`                                                           | Delete the entire dataroom                                    |
-| `retyc dataroom rm retyc://<id>/<path>`                                                    | Delete a node (supports globs)                                |
-| `retyc dataroom mkdir retyc://<id>/<path>`                                                 | Create a folder                                               |
-| `retyc dataroom user add <id> <email> [--role viewer\|editor\|admin]`                      | Add a member                                                  |
-| `retyc dataroom user rm <id> <user-id>`                                                    | Remove a member                                               |
-| `retyc dataroom user chown <id> <user-id\|email> [--yes]`                                  | Transfer the ownership to an admin member (you become admin)  |
+| Command                                                                                 | Description                                                        |
+|-----------------------------------------------------------------------------------------|--------------------------------------------------------------------|
+| `retyc space ls`                                                                        | List all your storage spaces                                       |
+| `retyc space ls retyc://<id>[/path]`                                                    | List nodes at a path (supports globs)                              |
+| `retyc space create --title <title> [--versioning=false] [--storage-capacity SIZE]`     | Create a new storage space                                         |
+| `retyc space info <id>`                                                                 | Show storage space details, stats and members                      |
+| `retyc space set <id> [--title T] [--versioning=true\|false] [--storage-capacity SIZE]` | Change title, versioning or storage capacity                       |
+| `retyc space cp <local…> retyc://<id>/<dest>`                                           | Upload files or directories                                        |
+| `retyc space cp retyc://<id>/<path> <local-dir>`                                        | Download a file                                                    |
+| `retyc space cp retyc://<id>/<src> retyc://<id>/<dst>`                                  | Copy a file on the server (same storage space, nothing downloaded) |
+| `retyc space mv retyc://<id>/<src> retyc://<id>/<dst>`                                  | Rename or move a node                                              |
+| `retyc space rm retyc://<id>`                                                           | Delete the entire storage space                                    |
+| `retyc space rm retyc://<id>/<path>`                                                    | Delete a node (supports globs)                                     |
+| `retyc space mkdir retyc://<id>/<path>`                                                 | Create a folder                                                    |
+| `retyc space user add <id> <email> [--role viewer\|editor\|admin]`                      | Add a member                                                       |
+| `retyc space user rm <id> <user-id>`                                                    | Remove a member                                                    |
+| `retyc space user chown <id> <user-id\|email> [--yes]`                                  | Transfer the ownership to an admin member (you become admin)       |
 
 ### Examples
 
 ```sh
-# Create a dataroom (title is required)
-retyc dataroom create --title "Project Alpha"
+# Create a storage space (title is required)
+retyc space create --title "Project Alpha"
 
 # Create one with a 50 GiB reservation and a single version per file
-retyc dataroom create --title "Scans" --storage-capacity 50G --versioning=false
+retyc space create --title "Scans" --storage-capacity 50G --versioning=false
 
 # Rename it, enlarge its reservation (sizes are binary: 100G = 100GiB)
-retyc dataroom set 019d3de3-... --title "Scans 2026" --storage-capacity 100G
+retyc space set 019d3de3-... --title "Scans 2026" --storage-capacity 100G
 
 # Upload a release directory
-retyc dataroom cp ./dist/ retyc://019d3de3-.../releases/
+retyc space cp ./dist/ retyc://019d3de3-.../releases/
 
 # List contents (TYPE is DIR, FILE or LINK; a symlink shows as "name -> target")
-retyc dataroom ls retyc://019d3de3-.../releases/
+retyc space ls retyc://019d3de3-.../releases/
 
 # Download a specific file
-retyc dataroom cp retyc://019d3de3-.../releases/binary ./
+retyc space cp retyc://019d3de3-.../releases/binary ./
 
 # Download all PDFs from a folder
-retyc dataroom cp retyc://019d3de3-.../docs/*.pdf ./local/
+retyc space cp retyc://019d3de3-.../docs/*.pdf ./local/
 
 # Delete all log files
-retyc dataroom rm retyc://019d3de3-.../*.log
+retyc space rm retyc://019d3de3-.../*.log
 
-# Delete the entire dataroom
-retyc dataroom rm retyc://019d3de3-...
+# Delete the entire storage space
+retyc space rm retyc://019d3de3-...
 
 # Add a collaborator
-retyc dataroom user add 019d3de3-... alice@example.com --role editor
+retyc space user add 019d3de3-... alice@example.com --role editor
 ```
 
 ## Admin
@@ -202,19 +204,19 @@ content also require the organization private key file
 | `retyc admin blacklist add <domain>`   | Add an email domain to the blacklist |
 | `retyc admin blacklist rm <domain_id>` | Remove a domain from the blacklist   |
 
-### Datarooms
+### Storage spaces
 
-| Command                                                       | Description                                                                                           |
-|---------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
-| `retyc admin dataroom ls [--user <user_id>]`                  | List the organization's datarooms                                                                     |
-| `retyc admin dataroom info <dataroom_id>`                     | Show a dataroom, its users and their key status                                                       |
-| `retyc admin dataroom activity <dataroom_id>`                 | Show the activity feed of a dataroom                                                                  |
-| `retyc admin dataroom nodes <dataroom_id>`                    | List every node of a dataroom with decrypted names (needs organization key)                           |
-| `retyc admin dataroom download <dataroom_id> [glob] [-o dir]` | Download and decrypt dataroom files with the organization key, recreating the folder tree under `dir` |
-| `retyc admin dataroom chown <dataroom_id> <user_id>`          | Transfer the dataroom ownership to an admin member                                                    |
-| `retyc admin dataroom user rm <dataroom_id> <user_id>`        | Remove a user from a dataroom and rekey it                                                            |
-| `retyc admin dataroom rekey <dataroom_id>`                    | Re-encrypt the dataroom session key for all current members                                           |
-| `retyc admin dataroom rm <dataroom_id>`                       | Delete a dataroom                                                                                     |
+| Command                                                 | Description                                                                                                         |
+|---------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| `retyc admin space ls [--user <user_id>]`               | List the organization's storage spaces                                                                              |
+| `retyc admin space info <space_id>`                     | Show a storage space, its users and their key status                                                                |
+| `retyc admin space activity <space_id>`                 | Show the activity feed of a storage space                                                                           |
+| `retyc admin space nodes <space_id>`                    | List every node of a storage space with decrypted names (needs organization key)                                    |
+| `retyc admin space download <space_id> [glob] [-o dir]` | Download and decrypt the files of a storage space with the organization key, recreating the folder tree under `dir` |
+| `retyc admin space chown <space_id> <user_id>`          | Transfer the ownership of a storage space to an admin member                                                        |
+| `retyc admin space user rm <space_id> <user_id>`        | Remove a user from a storage space and rekey it                                                                     |
+| `retyc admin space rekey <space_id>`                    | Re-encrypt the session key of a storage space for all current members                                               |
+| `retyc admin space rm <space_id>`                       | Delete a storage space                                                                                              |
 
 ### Transfers
 
@@ -236,7 +238,7 @@ content also require the organization private key file
 
 `<output_dir>` must be empty or absent. It receives `export.json` (manifest),
 `organization.json`, `members.json`, `blacklist_domains.json` and one `datarooms/{id}/`
-folder per dataroom (`meta.json`, `messages/`, decrypted `data/`). Datarooms the
+folder per storage space (`meta.json`, `messages/`, decrypted `data/`). Storage spaces the
 organization key cannot open have no `data/` and are listed in the manifest. Transfers are
 not exported.
 
@@ -257,8 +259,8 @@ approves the request (Organization > Machines), after comparing the fingerprint.
 ```
 
 Exit codes: `0` approved, `1` expired (run it again, the keys are kept), `78` denied or
-misconfigured. A machine then works like a user (`retyc dataroom user add` to share its
-datarooms).
+misconfigured. A machine then works like a user (`retyc space user add` to share its
+storage spaces).
 
 ```bash
 # Organization admins, with their own login
@@ -268,7 +270,7 @@ retyc machine deny <enrollment-id> [-y]
 retyc machine ls                             # machine accounts and their status
 retyc machine disable <machine-id> [-y]      # refused at once (exit 77), keys kept
 retyc machine enable <machine-id> [-y]
-retyc machine rm <machine-id> [-y]           # refused while it owns datarooms (chown them first); must enroll again
+retyc machine rm <machine-id> [-y]           # refused while it owns storage spaces (chown them first); must enroll again
 ```
 
 `approve` asks for confirmation unless `--fingerprint` matches. An approved machine takes
@@ -276,8 +278,8 @@ a seat.
 
 ## RetycFS and WebDAV
 
-| Command                                             | Description                                                    |
-|-----------------------------------------------------|----------------------------------------------------------------|
-| `retyc fs mount retyc://<dataroom-id> <mountpoint>` | Mount one dataroom (Linux), see [RetycFS](retycfs.md)          |
-| `retyc fs mount --all <mountpoint>`                 | Mount every dataroom, one folder each                          |
+| Command                                             | Description                                                     |
+|-----------------------------------------------------|-----------------------------------------------------------------|
+| `retyc fs mount retyc://<space-id> <mountpoint>`    | Mount one storage space (Linux), see [RetycFS](retycfs.md)      |
+| `retyc fs mount --all <mountpoint>`                 | Mount every storage space, one folder each                      |
 | `retyc fs webdav serve [--addr host:port] [--auth]` | Local WebDAV server (`127.0.0.1:8888`), see [WebDAV](webdav.md) |

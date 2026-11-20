@@ -15,13 +15,14 @@ import (
 )
 
 var adminDataroomCmd = &cobra.Command{
-	Use:   "dataroom",
-	Short: "Administer the organization's datarooms",
+	Use:     "space",
+	Aliases: []string{"dataroom"},
+	Short:   "Administer the organization's storage spaces",
 }
 
 var adminDataroomLsCmd = &cobra.Command{
 	Use:   "ls",
-	Short: "List the organization's datarooms",
+	Short: "List the organization's storage spaces",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		userID, _ := cmd.Flags().GetString("user")
@@ -44,12 +45,12 @@ var adminDataroomLsCmd = &cobra.Command{
 			return printJSON(newItemsJSON(rooms))
 		}
 		if len(rooms) == 0 {
-			fmt.Println("No datarooms found.")
+			fmt.Println("No storage spaces found.")
 
 			return nil
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "DATAROOM ID\tTITLE\tOWNER\tSTATUS\tCREATED")
+		fmt.Fprintln(w, "SPACE ID\tTITLE\tOWNER\tSTATUS\tCREATED")
 		for _, dr := range rooms {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 				dr.ID, ui.Escape(dr.Title), ui.Escape(dr.OwnerEmail), dr.Status, dr.CreatedAt.Format("2006-01-02"))
@@ -61,8 +62,8 @@ var adminDataroomLsCmd = &cobra.Command{
 }
 
 var adminDataroomInfoCmd = &cobra.Command{
-	Use:   "info <dataroom_id>",
-	Short: "Show a dataroom, its users and their key status",
+	Use:   "info <space_id>",
+	Short: "Show a storage space, its users and their key status",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -144,8 +145,8 @@ var adminDataroomInfoCmd = &cobra.Command{
 }
 
 var adminDataroomActivityCmd = &cobra.Command{
-	Use:   "activity <dataroom_id>",
-	Short: "Show the activity feed of a dataroom",
+	Use:   "activity <space_id>",
+	Short: "Show the activity feed of a storage space",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -224,8 +225,8 @@ var adminDataroomActivityCmd = &cobra.Command{
 }
 
 var adminDataroomNodesCmd = &cobra.Command{
-	Use:   "nodes <dataroom_id>",
-	Short: "List every node of a dataroom with decrypted names",
+	Use:   "nodes <space_id>",
+	Short: "List every node of a storage space with decrypted names",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, client, err := newAdminClient()
@@ -248,7 +249,7 @@ var adminDataroomNodesCmd = &cobra.Command{
 			return printJSON(newItemsJSON(newAdminNodesJSON(nodes)))
 		}
 		if len(nodes) == 0 {
-			fmt.Println("Empty dataroom.")
+			fmt.Println("Empty storage space.")
 
 			return nil
 		}
@@ -268,8 +269,8 @@ var adminDataroomNodesCmd = &cobra.Command{
 }
 
 var adminDataroomDownloadCmd = &cobra.Command{
-	Use:   "download <dataroom_id> [glob]",
-	Short: "Download and decrypt dataroom files with the organization key",
+	Use:   "download <space_id> [glob]",
+	Short: "Download and decrypt the files of a storage space with the organization key",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		outputDir, _ := cmd.Flags().GetString("output")
@@ -318,8 +319,8 @@ var adminDataroomDownloadCmd = &cobra.Command{
 }
 
 var adminDataroomChownCmd = &cobra.Command{
-	Use:   "chown <dataroom_id> <user_id>",
-	Short: "Transfer the dataroom ownership to an admin member",
+	Use:   "chown <space_id> <user_id>",
+	Short: "Transfer the ownership of a storage space to an admin member",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		_, client, err := newAdminClient()
@@ -335,7 +336,7 @@ var adminDataroomChownCmd = &cobra.Command{
 				OwnerID    string `json:"owner_id"`
 			}{args[0], args[1]})
 		}
-		fmt.Printf("Dataroom %s ownership transferred to %s.\n", args[0], args[1])
+		fmt.Printf("Storage space %s ownership transferred to %s.\n", args[0], args[1])
 
 		return nil
 	},
@@ -343,12 +344,12 @@ var adminDataroomChownCmd = &cobra.Command{
 
 var adminDataroomUserCmd = &cobra.Command{
 	Use:   "user",
-	Short: "Manage dataroom users",
+	Short: "Manage the members of a storage space",
 }
 
 var adminDataroomUserRmCmd = &cobra.Command{
-	Use:   "rm <dataroom_id> <user_id>",
-	Short: "Remove a user from a dataroom and rekey it",
+	Use:   "rm <space_id> <user_id>",
+	Short: "Remove a user from a storage space and rekey it",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		yes, _ := cmd.Flags().GetBool("yes")
@@ -360,7 +361,7 @@ var adminDataroomUserRmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		ok, err := confirm(fmt.Sprintf("Remove user %s from dataroom %s and rekey?", args[1], args[0]), yes)
+		ok, err := confirm(fmt.Sprintf("Remove user %s from storage space %s and rekey?", args[1], args[0]), yes)
 		if err != nil {
 			return err
 		}
@@ -391,8 +392,8 @@ var adminDataroomUserRmCmd = &cobra.Command{
 }
 
 var adminDataroomRekeyCmd = &cobra.Command{
-	Use:   "rekey <dataroom_id>",
-	Short: "Re-encrypt the dataroom session key for all current members",
+	Use:   "rekey <space_id>",
+	Short: "Re-encrypt the session key of a storage space for all current members",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, client, err := newAdminClient()
@@ -420,8 +421,8 @@ var adminDataroomRekeyCmd = &cobra.Command{
 }
 
 var adminDataroomRmCmd = &cobra.Command{
-	Use:   "rm <dataroom_id>",
-	Short: "Delete a dataroom",
+	Use:   "rm <space_id>",
+	Short: "Delete a storage space",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		yes, _ := cmd.Flags().GetBool("yes")
@@ -429,7 +430,7 @@ var adminDataroomRmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		ok, err := confirm(fmt.Sprintf("Delete dataroom %s and all its contents?", args[0]), yes)
+		ok, err := confirm(fmt.Sprintf("Delete storage space %s and all its contents?", args[0]), yes)
 		if err != nil {
 			return err
 		}
@@ -444,7 +445,7 @@ var adminDataroomRmCmd = &cobra.Command{
 		if jsonOutput {
 			return printJSON(idStatusJSON{ID: args[0], Status: "deleted"})
 		}
-		fmt.Printf("Dataroom %s deleted.\n", args[0])
+		fmt.Printf("Storage space %s deleted.\n", args[0])
 
 		return nil
 	},

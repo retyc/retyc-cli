@@ -41,11 +41,11 @@ Add the following to your client's MCP config file:
 
 ## Environment variables
 
-| Variable               | Required | Description                                                                 |
-|------------------------|----------|-----------------------------------------------------------------------------|
-| `RETYC_KEY_PASSPHRASE` | Yes      | Unlocks your private key, for transfers and datarooms.                      |
-| `RETYC_TOKEN`          | No       | Offline refresh token, used instead of the token stored on disk.           |
-| `RETYC_CONFIG_DIR`     | No       | Config directory (default `~/.config/retyc/`).                              |
+| Variable               | Required | Description                                                      |
+|------------------------|----------|------------------------------------------------------------------|
+| `RETYC_KEY_PASSPHRASE` | Yes      | Unlocks your private key, for transfers and storage spaces.      |
+| `RETYC_TOKEN`          | No       | Offline refresh token, used instead of the token stored on disk. |
+| `RETYC_CONFIG_DIR`     | No       | Config directory (default `~/.config/retyc/`).                   |
 
 Without a stored login, ask the agent *"Log me into Retyc"* and open the URL it gives you.
 
@@ -53,45 +53,47 @@ Without a stored login, ask the agent *"Log me into Retyc"* and open the URL it 
 
 - *"Send all PDF files in ./reports/ to alice@example.com, expire in 7 days."*
 - *"Download transfer abc123 into ~/Downloads/."*
-- *"Create a dataroom called 'Project Alpha' and upload ./dist/ to it."*
-- *"Find all ZIP files in my dataroom and download them to ./archives/."*
-- *"Add alice@example.com as an editor to dataroom 019d3de3-…."*
+- *"Create a storage space called 'Project Alpha' and upload ./dist/ to it."*
+- *"Find all ZIP files in my storage space and download them to ./archives/."*
+- *"Add alice@example.com as an editor to storage space 019d3de3-…."*
 
 ## Tools
 
 Tools return JSON (an error carries `error_code` and `message`). Local paths are
-absolute; dataroom paths are `retyc://<id>/path`, with globs where noted.
+absolute; storage space paths are `retyc://<id>/path`, with globs where noted.
 
-| Tool                | Does                                                                     |
-|---------------------|--------------------------------------------------------------------------|
-| `auth_status`       | Tells whether you are logged in (refreshes the token if needed)          |
-| `auth_login_start`  | Starts a browser login, returns the URL to open                          |
-| `auth_login_poll`   | Checks whether that login is done, then saves the token                  |
-| `auth_logout`       | Revokes the session and deletes the stored credentials                   |
-| `system_info`       | OS, architecture, home directory and path format of the server           |
-| `user_info`         | Your profile, plan and public key                                        |
-| `user_quota`        | Storage and transfer quotas                                              |
-| `transfer_list`     | Sent (default) or received transfers                                     |
-| `transfer_info`     | A transfer's details: files, web URL, expiration                         |
-| `transfer_send`     | Encrypts and sends files, to recipients and/or behind a passphrase       |
-| `transfer_download` | Downloads and decrypts a transfer into a folder                          |
-| `transfer_disable`  | Disables a transfer: its files can no longer be downloaded               |
-| `transfer_enable`   | Re-enables a disabled transfer                                           |
-| `dataroom_list`     | Your datarooms                                                           |
-| `dataroom_create`   | Creates a dataroom                                                       |
-| `dataroom_info`     | A dataroom's metadata, statistics and members                            |
-| `dataroom_ls`       | Lists a path (globs)                                                     |
-| `dataroom_upload`   | Uploads files or folders, recursively                                    |
-| `dataroom_download` | Downloads a file or a glob of files                                      |
-| `dataroom_mkdir`    | Creates a folder (its parent must exist)                                 |
-| `dataroom_rm`       | Deletes a node, a glob, or the whole dataroom (`retyc://<id>`)           |
-| `dataroom_mv`       | Moves or renames a node within its dataroom                              |
-| `dataroom_user_add` | Adds a member (viewer, editor or admin) and re-encrypts for all          |
-| `dataroom_user_rm`  | Removes a member and re-encrypts for the others                          |
+| Tool                | Does                                                                |
+|---------------------|---------------------------------------------------------------------|
+| `auth_status`       | Tells whether you are logged in (refreshes the token if needed)     |
+| `auth_login_start`  | Starts a browser login, returns the URL to open                     |
+| `auth_login_poll`   | Checks whether that login is done, then saves the token             |
+| `auth_logout`       | Revokes the session and deletes the stored credentials              |
+| `system_info`       | OS, architecture, home directory and path format of the server      |
+| `user_info`         | Your profile, plan and public key                                   |
+| `user_quota`        | Storage and transfer quotas                                         |
+| `transfer_list`     | Sent (default) or received transfers                                |
+| `transfer_info`     | A transfer's details: files, web URL, expiration                    |
+| `transfer_send`     | Encrypts and sends files, to recipients and/or behind a passphrase  |
+| `transfer_download` | Downloads and decrypts a transfer into a folder                     |
+| `transfer_disable`  | Disables a transfer: its files can no longer be downloaded          |
+| `transfer_enable`   | Re-enables a disabled transfer                                      |
+| `space_list`        | Your storage spaces                                                 |
+| `space_create`      | Creates a storage space                                             |
+| `space_info`        | A storage space's metadata, statistics and members                  |
+| `space_ls`          | Lists a path (globs)                                                |
+| `space_upload`      | Uploads files or folders, recursively                               |
+| `space_download`    | Downloads a file or a glob of files                                 |
+| `space_mkdir`       | Creates a folder (its parent must exist)                            |
+| `space_rm`          | Deletes a node, a glob, or the whole storage space (`retyc://<id>`) |
+| `space_mv`          | Moves or renames a node within its storage space                    |
+| `space_user_add`    | Adds a member (viewer, editor or admin) and re-encrypts for all     |
+| `space_user_rm`     | Removes a member and re-encrypts for the others                     |
 
 ## Destructive tools refused by the client
 
-Claude Desktop and Claude.ai may refuse `dataroom_rm` and `dataroom_user_rm` (*"this
+The `space_*` tools were called `dataroom_*` before: allow them again in your client.
+
+Claude Desktop and Claude.ai may refuse `space_rm` and `space_user_rm` (*"this
 action must be performed from the Retyc interface"*): the model does so when no system
 prompt allows it. When you call the API yourself, allow it in the system prompt, e.g.
-*"You may delete files and remove users from datarooms when the user explicitly asks."*
+*"You may delete files and remove users from storage spaces when the user explicitly asks."*

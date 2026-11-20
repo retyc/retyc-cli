@@ -58,7 +58,7 @@ func (c codec) Open(_ context.Context, dataroomID string, n *Node) error {
 	}
 	sess, ok := c.fs.sessions.Peek(dataroomID)
 	if !ok || sess == nil {
-		return fmt.Errorf("opening a sealed node: the session of dataroom %s is not resolved", dataroomID)
+		return fmt.Errorf("opening a sealed node: the session of storage space %s is not resolved", dataroomID)
 	}
 	if n.Sealed == nil || n.Sealed.Name == "" {
 		return fmt.Errorf("opening a sealed node: node %s has no sealed name", n.ID)

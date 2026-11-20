@@ -83,10 +83,10 @@ func (e *LostWritesError) Error() string {
 	switch {
 	case e.Deletes == 1:
 		parts = append(parts,
-			"1 file removed was not deleted before the filesystem was unmounted: it may still be in the dataroom")
+			"1 file removed was not deleted before the filesystem was unmounted: it may still be in the storage space")
 	case e.Deletes > 1:
 		parts = append(parts, fmt.Sprintf("%d files removed were not deleted before the filesystem was unmounted: "+
-			"they may still be in the dataroom", e.Deletes))
+			"they may still be in the storage space", e.Deletes))
 	}
 
 	return strings.Join(parts, "; ")
@@ -307,7 +307,7 @@ func Mount(ctx context.Context, tree *vfs.FS, mountpoint string, opts Options) (
 		return nil, err
 	}
 	if !opts.All && opts.DataroomID == "" {
-		return nil, errors.New("retycfs: no dataroom to mount")
+		return nil, errors.New("retycfs: no storage space to mount")
 	}
 	for _, pattern := range opts.LocalFiles {
 		if _, err := path.Match(pattern, ""); err != nil {

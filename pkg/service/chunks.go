@@ -335,7 +335,7 @@ func DataroomChunkPlainSize(
 	}
 	plain, ok := plainChunkSize(encrypted, envelope)
 	if !ok {
-		return 0, fmt.Errorf("%w: chunk %d is stored in %d bytes, which no chunk encrypted for this dataroom makes",
+		return 0, fmt.Errorf("%w: chunk %d is stored in %d bytes, which no chunk encrypted for this storage space makes",
 			api.ErrNoChunkSize, index, encrypted)
 	}
 

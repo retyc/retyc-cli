@@ -11,7 +11,7 @@ import (
 	"github.com/retyc/retyc-cli/pkg/vfs"
 )
 
-// New is what a program importing the core serves: a PROPFIND of /dataroom
+// New is what a program importing the core serves: a PROPFIND of /spaces
 // lists the datarooms, and every request is reported to LogRequest.
 func TestNewServesDatarooms(t *testing.T) {
 	// The API only answers the quota of the datarooms.
@@ -29,16 +29,16 @@ func TestNewServesDatarooms(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = srv.Close() })
 
-	req := httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/dataroom/", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), "PROPFIND", "/spaces/", http.NoBody)
 	req.Header.Set("Depth", "1")
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMultiStatus {
-		t.Fatalf("PROPFIND /dataroom/ = %d, want 207: %s", rec.Code, rec.Body)
+		t.Fatalf("PROPFIND /spaces/ = %d, want 207: %s", rec.Code, rec.Body)
 	}
 	if !strings.Contains(rec.Body.String(), "Board") {
-		t.Errorf("the listing does not show the dataroom: %s", rec.Body)
+		t.Errorf("the listing does not show the storage space: %s", rec.Body)
 	}
 	if len(logged) != 1 || logged[0] != "PROPFIND" {
 		t.Errorf("LogRequest calls = %v, want [PROPFIND]", logged)

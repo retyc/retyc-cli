@@ -142,7 +142,7 @@ func mountRights(
 	access, err := ask(ctx, target.dataroomID)
 	switch {
 	case err != nil:
-		logf("cannot tell whether dataroom %s is writable, writes are refused until it can be told: %s",
+		logf("cannot tell whether storage space %s is writable, writes are refused until it can be told: %s",
 			target.dataroomID, err)
 
 		return false, "", ask
@@ -260,19 +260,19 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	defer stopObservability(metricsSrv)
 
 	check := mountDataroomCheck(tree, client)
-	source := "all datarooms"
+	source := "all storage spaces"
 	if !target.all {
 		source = "retyc://" + target.dataroomID
 		// A dataroom that does not exist, or that this driver cannot serve,
 		// is refused here rather than at the first ls.
 		switch err := check(initCtx, target.dataroomID); {
 		case errors.Is(err, api.ErrNotFound):
-			return fmt.Errorf("dataroom %s not found, or not shared with you: %w", target.dataroomID, err)
+			return fmt.Errorf("storage space %s not found, or not shared with you: %w", target.dataroomID, err)
 		case errors.Is(err, retycfs.ErrLegacyAPI):
 			return fmt.Errorf("the API at %s predates what `retyc fs mount` needs (lookup by name); "+
 				"`retyc fs webdav serve` still works with it: %w", cfg.API.BaseURL, err)
 		case err != nil:
-			return fmt.Errorf("dataroom %s: %w", target.dataroomID, err)
+			return fmt.Errorf("storage space %s: %w", target.dataroomID, err)
 		}
 	}
 

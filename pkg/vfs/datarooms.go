@@ -78,7 +78,7 @@ func (s *ownDataroomStore) clock() time.Time {
 func (s *ownDataroomStore) currentLocked() (store metastore.MetaStore, report string) {
 	if !s.resume.IsZero() && !s.clock().Before(s.resume) {
 		s.store, s.resume = s.shared, time.Time{}
-		report = "dataroom list cache: back on the configured store"
+		report = "storage space list cache: back on the configured store"
 	}
 
 	return s.store, report
@@ -93,7 +93,8 @@ func (s *ownDataroomStore) failedLocked(err error) string {
 	d := s.opts.ttl() + s.opts.MaxStale
 	s.store, s.resume = memstore.New(), s.clock().Add(d)
 
-	return fmt.Sprintf("dataroom list cache: the store failed and is set aside for an in-memory one for %s: %s", d, err)
+	return fmt.Sprintf("storage space list cache: the store failed and is set aside for an in-memory one "+
+		"for %s: %s", d, err)
 }
 
 // report tells the operator what was noted under mu, once it is released.

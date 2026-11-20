@@ -302,7 +302,7 @@ func (fs *FS) resolveSession(ctx context.Context, dataroomID string) (*service.D
 		return fs.opts.Session(ctx, dataroomID)
 	}
 	if fs.opts.Identity == nil {
-		return nil, errors.New("no identity to resolve the dataroom session with")
+		return nil, errors.New("no identity to resolve the storage space session with")
 	}
 
 	return service.GetDataroomSessionWithIdentity(ctx, fs.client, dataroomID, fs.opts.Identity)
@@ -339,7 +339,7 @@ func (fs *FS) listDatarooms(ctx context.Context) ([]Dataroom, error) {
 		return fs.opts.ListDatarooms(ctx)
 	}
 	if fs.client == nil {
-		return nil, errors.New("no API client to list the datarooms with")
+		return nil, errors.New("no API client to list the storage spaces with")
 	}
 	result, err := service.ListDatarooms(ctx, fs.client)
 	if err != nil {

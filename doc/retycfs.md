@@ -1,13 +1,13 @@
 # RetycFS
 
-`retyc fs mount` mounts your datarooms as a local folder (Linux only; elsewhere use
+`retyc fs mount` mounts your storage spaces as a local folder (Linux only; elsewhere use
 [WebDAV](webdav.md)). Files are encrypted and decrypted locally: the Retyc servers never
 see plaintext.
 
 ```sh
 mkdir -p ~/dr
-retyc fs mount retyc://<dataroom-id> ~/dr      # one dataroom, at the root of ~/dr
-retyc fs mount --all ~/retyc                   # every dataroom, one folder each
+retyc fs mount retyc://<space-id> ~/dr         # one space, at the root of ~/dr
+retyc fs mount --all ~/retyc                   # every space, one folder each
 ```
 
 The command stays in the foreground until unmounted. It needs:
@@ -19,7 +19,7 @@ The command stays in the foreground until unmounted. It needs:
 - `/dev/fuse` and, unless run as root, `fusermount3` (package `fuse3`);
 - an empty directory as mount point.
 
-The mount is read-write; `--read-only` refuses every change, and so does a dataroom you
+The mount is read-write; `--read-only` refuses every change, and so does a storage space you
 may only read. The `.deb` and `.rpm` packages ship example systemd units in
 `/usr/share/doc/retyc/examples/systemd/`: [`system/`](../packaging/systemd/system/retyc-mount.service)
 (server, machine account) and [`user/`](../packaging/systemd/user/retyc-mount.service)
@@ -27,23 +27,23 @@ may only read. The `.deb` and `.rpm` packages ship example systemd units in
 
 ## Features and limits
 
-| Feature                                   |    | Notes                                                                         |
-|-------------------------------------------|:--:|-------------------------------------------------------------------------------|
-| Read and write files, folders, `mv`, `rm` | ✅  | A file is sent as a new version when it is closed ([Writing](#writing))       |
-| Version history                           | ✅  | When the dataroom keeps versions                                              |
-| Server-side copy (`cp` within a dataroom) | ✅  | Nothing downloaded nor uploaded, up to 4 GiB (coreutils 9 and later)          |
-| Symbolic links, file modes, mtimes        | ✅  | Stored encrypted with the file                                                |
-| Free space (`df`)                         | ✅  | The dataroom's storage quota                                                  |
-| Node identifiers as extended attributes   | ✅  | `getfattr -d file`: `user.retyc.node_id`, `version_id`, `dataroom_id`, `mime` |
-| Editor swap and backup files kept local   | ✅  | [Local files](#local-files)                                                   |
-| API locks while a file is written         | ✅  | Optional, [Locks](#locks)                                                     |
-| Removal answered at once                  | ✅  | Optional, [Deleting in the background](#deleting-in-the-background)           |
-| Metadata cache shared between instances   | ✅  | [Redis](#shared-metadata-cache-redis)                                         |
-| Metrics, probes, traces                   | ✅  | [Metrics and probes](#metrics-and-probes)                                     |
-| Partial upload of a change                | ❌  | Changing one byte of a large file downloads and uploads it whole              |
-| Hard links, special files, writing xattrs | ❌  | Refused                                                                       |
-| `chown`, access times, mode of a folder   | ❌  | Accepted and ignored; the owner shown is `--uid` / `--gid`                    |
-| `mv` between two datarooms                | ⚠️ | Copy then delete                                                              |
+| Feature                                        |    | Notes                                                                         |
+|------------------------------------------------|:--:|-------------------------------------------------------------------------------|
+| Read and write files, folders, `mv`, `rm`      | ✅  | A file is sent as a new version when it is closed ([Writing](#writing))       |
+| Version history                                | ✅  | When the storage space keeps versions                                         |
+| Server-side copy (`cp` within a storage space) | ✅  | Nothing downloaded nor uploaded, up to 4 GiB (coreutils 9 and later)          |
+| Symbolic links, file modes, mtimes             | ✅  | Stored encrypted with the file                                                |
+| Free space (`df`)                              | ✅  | The quota of the storage space                                                |
+| Node identifiers as extended attributes        | ✅  | `getfattr -d file`: `user.retyc.node_id`, `version_id`, `dataroom_id`, `mime` |
+| Editor swap and backup files kept local        | ✅  | [Local files](#local-files)                                                   |
+| API locks while a file is written              | ✅  | Optional, [Locks](#locks)                                                     |
+| Removal answered at once                       | ✅  | Optional, [Deleting in the background](#deleting-in-the-background)           |
+| Metadata cache shared between instances        | ✅  | [Redis](#shared-metadata-cache-redis)                                         |
+| Metrics, probes, traces                        | ✅  | [Metrics and probes](#metrics-and-probes)                                     |
+| Partial upload of a change                     | ❌  | Changing one byte of a large file downloads and uploads it whole              |
+| Hard links, special files, writing xattrs      | ❌  | Refused                                                                       |
+| `chown`, access times, mode of a folder        | ❌  | Accepted and ignored; the owner shown is `--uid` / `--gid`                    |
+| `mv` between two storage spaces                | ⚠️ | Copy then delete                                                              |
 
 The mount suits documents, not databases or disk images.
 
@@ -54,7 +54,7 @@ cleartext; size it for the largest files written at once) and sent, encrypted, *
 is closed** or `fsync`ed:
 
 - **the error of the upload is the error of `close`** (`No space left on device` when the
-  dataroom or the spool is full, `Read-only file system` when the owner's plan is
+  storage space or the spool is full, `Read-only file system` when the owner's plan is
   exceeded);
 - a crash loses what was written since the last `close`;
 - uploads go `api.concurrency.upload` at a time (4 by default).
@@ -72,7 +72,7 @@ never makes a request wait for the API.
 
 `--warmup` lists every folder in the background once mounted, so that an application
 scanning its volume at startup is answered from the cache. `--warmup-depth=N` stops at N
-levels (the dataroom root is the first).
+levels (the root of the storage space is the first).
 
 - The mount is ready at once and does not wait for it.
 - Only listings are warmed, never file contents, and they stay fresh for `cache.ttl` only:
@@ -91,7 +91,7 @@ machine, **never sent**, and gone at the unmount. Defaults: `.*.swp`, `.*.swx`, 
 `4913`. Each source replaces the list; `none` empties it.
 
 ```sh
-retyc fs mount --local-file '.*.swp' --local-file '*.tmp' retyc://<dataroom-id> ~/dr
+retyc fs mount --local-file '.*.swp' --local-file '*.tmp' retyc://<space-id> ~/dr
 ```
 
 Office lock files (`.~lock.*#`, `~$*`) are left out on purpose: they tell other people the
@@ -136,7 +136,7 @@ docker run --rm --user 0 \
   -e RETYC_TOKEN -e RETYC_KEY_PASSPHRASE \
   --tmpfs /tmp \
   -v /mnt/dr:/mnt/dr:rshared \
-  retyc/retyc-cli:latest fs mount retyc://<dataroom-id> /mnt/dr \
+  retyc/retyc-cli:latest fs mount retyc://<space-id> /mnt/dr \
     --allow-other --uid 1000 --gid 1000
 ```
 

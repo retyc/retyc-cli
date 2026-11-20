@@ -102,7 +102,7 @@ func rekeyDataroomWithSession(
 ) (*AdminRekeyResult, error) {
 	users, err := client.AdminListDataroomUsers(ctx, dataroomID)
 	if err != nil {
-		return nil, fmt.Errorf("listing dataroom users: %w", err)
+		return nil, fmt.Errorf("listing storage space users: %w", err)
 	}
 
 	holders := make([]rekeyKeyHolder, 0, len(users))

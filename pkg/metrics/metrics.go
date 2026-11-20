@@ -73,7 +73,7 @@ var (
 	// DataroomListRefreshes counts the refreshes of the dataroom list.
 	DataroomListRefreshes = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "retycfs_dataroom_list_refreshes_total",
-		Help: "Refreshes of the dataroom list cache (one API listing each), by result (ok, error).",
+		Help: "Refreshes of the storage space list cache (one API listing each), by result (ok, error).",
 	}, []string{"result"})
 
 	// WarmupFolders counts the folders the listing cache warmup walked.

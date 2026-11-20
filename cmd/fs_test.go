@@ -35,3 +35,19 @@ func TestFSGroup_KeepsRootPreRun(t *testing.T) {
 		}
 	}
 }
+
+// The dataroom commands are named after the user-facing "space"; "dataroom"
+// stays an alias so that existing scripts keep working.
+func TestSpaceCommandsKeepDataroomAlias(t *testing.T) {
+	for _, path := range [][]string{
+		{"space", "ls"},
+		{"dataroom", "ls"},
+		{"admin", "space", "ls"},
+		{"admin", "dataroom", "ls"},
+	} {
+		found, _, err := rootCmd.Find(path)
+		if err != nil || found.Name() != "ls" || found.Parent().Name() != "space" {
+			t.Errorf("Find(%v) = %v, %v; want the ls of a space command", path, found.CommandPath(), err)
+		}
+	}
+}

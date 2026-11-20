@@ -172,7 +172,7 @@ func TestCreateDataroomMachineNoOrganizationKey(t *testing.T) {
 		t.Error("master_public_key sent without a service account")
 	}
 	const want = "warning: the organization has no organization key: only this machine can decrypt the " +
-		"dataroom; add members with `retyc dataroom user add`\n"
+		"storage space; add members with `retyc space user add`\n"
 	if warn != want {
 		t.Errorf("warning = %q, want %q", warn, want)
 	}
@@ -242,7 +242,7 @@ func TestCreateDataroomMachineRetryBudget(t *testing.T) {
 
 func TestAddDataroomUserMachineOtherOrg(t *testing.T) {
 	err := machineAddUserError(&api.HTTPError{Status: 400, Code: api.CodeMachineOtherOrganization})
-	if err == nil || !strings.Contains(err.Error(), "a machine account can only join datarooms of its organization") {
+	if err == nil || !strings.Contains(err.Error(), "a machine account can only join storage spaces of its organization") {
 		t.Fatalf("error = %v", err)
 	}
 	if api.ErrorCode(err) != api.CodeMachineOtherOrganization {

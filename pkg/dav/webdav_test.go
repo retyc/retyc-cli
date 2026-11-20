@@ -68,14 +68,16 @@ func TestParseWebdavPath(t *testing.T) {
 		subPath string
 	}{
 		{"/", pathRoot, "", ""},
-		{"/dataroom", pathDataroomRoot, "", ""},
-		{"/dataroom/", pathDataroomRoot, "", ""},
-		{"/dataroom/My Dataroom", pathDataroomNode, "My Dataroom", "/"},
-		{"/dataroom/My Dataroom/", pathDataroomNode, "My Dataroom", "/"},
-		{"/dataroom/My Dataroom/folder/file.txt", pathDataroomNode, "My Dataroom", "/folder/file.txt"},
+		{"/spaces", pathDataroomRoot, "", ""},
+		{"/spaces/", pathDataroomRoot, "", ""},
+		{"/spaces/My Space", pathDataroomNode, "My Space", "/"},
+		{"/spaces/My Space/", pathDataroomNode, "My Space", "/"},
+		{"/spaces/My Space/folder/file.txt", pathDataroomNode, "My Space", "/folder/file.txt"},
 		{"/other", pathUnknown, "", ""},
 		{"/other/sub/path", pathUnknown, "", ""},
-		{"/datarooms", pathUnknown, "", ""},
+		{"/dataroom", pathUnknown, "", ""},
+		{"/dataroom/My Space/file.txt", pathUnknown, "", ""},
+		{"/space", pathUnknown, "", ""},
 	}
 	for _, c := range cases {
 		kind, drName, subPath := parseWebdavPath(c.in)
@@ -126,7 +128,7 @@ func TestWriteFileHandle_LockSkipsEmptyUpload(t *testing.T) {
 	fs.tree.SeedDatarooms([]vfs.Dataroom{{ID: "dr1", Title: "DR"}})
 
 	// No withIsPut: a LOCK-driven create, which must not upload.
-	h, err := fs.OpenFile(context.Background(), "/dataroom/DR/f.txt", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	h, err := fs.OpenFile(context.Background(), "/spaces/DR/f.txt", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -627,7 +629,7 @@ func TestWebdavFS_StatCarriesModTime(t *testing.T) {
 		},
 	})
 
-	info, err := fs.Stat(context.Background(), "/dataroom/DR/f.txt")
+	info, err := fs.Stat(context.Background(), "/spaces/DR/f.txt")
 	if err != nil {
 		t.Fatalf("Stat() error = %v", err)
 	}
@@ -652,7 +654,7 @@ func TestWebdavFS_OpenFolderCarriesModTime(t *testing.T) {
 		"retyc://dr1/": {nodes: []service.DataroomNodeInfo{folder}, fetchedAt: time.Now()},
 	})
 
-	f, err := fs.OpenFile(context.Background(), "/dataroom/DR/sub", os.O_RDONLY, 0)
+	f, err := fs.OpenFile(context.Background(), "/spaces/DR/sub", os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatalf("OpenFile() error = %v", err)
 	}
@@ -710,7 +712,7 @@ func TestWebdavFS_MutationsUseCachedSession(t *testing.T) {
 	fs.tree.SeedSession("dr1", (&service.DataroomSession{Identity: identity, PublicKey: pub}).AssumeLegacyAPI())
 	ctx := context.Background()
 
-	if err := fs.Mkdir(ctx, "/dataroom/DR/newdir", 0o755); err != nil {
+	if err := fs.Mkdir(ctx, "/spaces/DR/newdir", 0o755); err != nil {
 		t.Fatalf("Mkdir: %v", err)
 	}
 	if id, ok := cachedDirID(fs, "retyc://dr1/", "newdir"); !ok || id != "n-new" {
@@ -718,11 +720,11 @@ func TestWebdavFS_MutationsUseCachedSession(t *testing.T) {
 	}
 	// The pre-warmed listing does not hold "x", which only the API serves.
 	fs.tree.InvalidateListing("dr1", "/")
-	if err := fs.Rename(ctx, "/dataroom/DR/x", "/dataroom/DR/y"); err != nil {
+	if err := fs.Rename(ctx, "/spaces/DR/x", "/spaces/DR/y"); err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
 	// The rename updated the cached listing: the node is now "y".
-	if err := fs.RemoveAll(ctx, "/dataroom/DR/y"); err != nil {
+	if err := fs.RemoveAll(ctx, "/spaces/DR/y"); err != nil {
 		t.Fatalf("RemoveAll: %v", err)
 	}
 	for _, c := range calls {
@@ -743,7 +745,7 @@ func TestWebdavFS_RemoveAllInvalidatesDirectorySubtree(t *testing.T) {
 	fs := newSubtreeTestFS(t)
 	ctx := context.Background()
 
-	if err := fs.RemoveAll(ctx, "/dataroom/DR/x"); err != nil {
+	if err := fs.RemoveAll(ctx, "/spaces/DR/x"); err != nil {
 		t.Fatalf("RemoveAll: %v", err)
 	}
 	for _, uri := range []string{"retyc://dr1/x", "retyc://dr1/x/sub"} {
@@ -763,7 +765,7 @@ func TestWebdavFS_RenameInvalidatesDirectorySubtrees(t *testing.T) {
 	fs := newSubtreeTestFS(t)
 	ctx := context.Background()
 
-	if err := fs.Rename(ctx, "/dataroom/DR/x", "/dataroom/DR/y"); err != nil {
+	if err := fs.Rename(ctx, "/spaces/DR/x", "/spaces/DR/y"); err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
 	gone := []string{"retyc://dr1/x", "retyc://dr1/x/sub", "retyc://dr1/y", "retyc://dr1/y/old"}
@@ -924,7 +926,7 @@ func TestWebdavFS_RemoveAllUsesCachedListing(t *testing.T) {
 		"retyc://dr1/a/b": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
 	})
 
-	if err := fs.RemoveAll(context.Background(), "/dataroom/DR/a/b/doc.txt"); err != nil {
+	if err := fs.RemoveAll(context.Background(), "/spaces/DR/a/b/doc.txt"); err != nil {
 		t.Fatalf("RemoveAll: %v", err)
 	}
 	if calls := log.list(); len(calls) != 1 {
@@ -963,7 +965,7 @@ func TestWebdavFS_RemoveAllRetriesOnStaleListing(t *testing.T) {
 			})
 			pub = identity.Recipient().String()
 
-			if err := fs.RemoveAll(context.Background(), "/dataroom/DR/doc.txt"); err != nil {
+			if err := fs.RemoveAll(context.Background(), "/spaces/DR/doc.txt"); err != nil {
 				t.Fatalf("RemoveAll: %v", err)
 			}
 			want := []string{"DELETE /dataroom/node/f-old", "GET /dataroom/dr1/nodes", "DELETE /dataroom/node/f-new"}
@@ -988,7 +990,7 @@ func TestWebdavFS_RemoveAllMissingNode(t *testing.T) {
 		"retyc://dr1/": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
 	})
 
-	err := fs.RemoveAll(context.Background(), "/dataroom/DR/nope.txt")
+	err := fs.RemoveAll(context.Background(), "/spaces/DR/nope.txt")
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("RemoveAll error = %v, want os.ErrNotExist", err)
 	}
@@ -1049,7 +1051,7 @@ func TestWebdavFS_RenameUsesCachedListings(t *testing.T) {
 		"retyc://dr1/":  {{ID: "d-a", Name: "a", Type: "dir"}, {ID: "d-b", Name: "b", Type: "dir"}},
 	})
 
-	if err := fs.Rename(context.Background(), "/dataroom/DR/a/doc.txt", "/dataroom/DR/b/new.txt"); err != nil {
+	if err := fs.Rename(context.Background(), "/spaces/DR/a/doc.txt", "/spaces/DR/b/new.txt"); err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
 	if calls := log.list(); len(calls) != 1 {
@@ -1097,7 +1099,7 @@ func TestWebdavFS_RenameRetriesOnStaleListing(t *testing.T) {
 			})
 			pub = identity.Recipient().String()
 
-			if err := fs.Rename(context.Background(), "/dataroom/DR/doc.txt", "/dataroom/DR/new.txt"); err != nil {
+			if err := fs.Rename(context.Background(), "/spaces/DR/doc.txt", "/spaces/DR/new.txt"); err != nil {
 				t.Fatalf("Rename: %v", err)
 			}
 			want := []string{"PUT /dataroom/node/f-old", "GET /dataroom/dr1/nodes", "PUT /dataroom/node/f-new"}
@@ -1138,7 +1140,7 @@ func TestWebdavFS_RenameRetriesWhenDestinationWasRecreated(t *testing.T) {
 	})
 	pub = identity.Recipient().String()
 
-	if err := fs.Rename(context.Background(), "/dataroom/DR/doc.txt", "/dataroom/DR/b/doc.txt"); err != nil {
+	if err := fs.Rename(context.Background(), "/spaces/DR/doc.txt", "/spaces/DR/b/doc.txt"); err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
 	want := []string{"PUT f-1 into d-old", "GET listing ", "PUT f-1 into d-new"}
@@ -1169,7 +1171,7 @@ func TestWebdavFS_RenameReturnsGenuineConflict(t *testing.T) {
 	})
 	pub = identity.Recipient().String()
 
-	err := fs.Rename(context.Background(), "/dataroom/DR/doc.txt", "/dataroom/DR/b/doc.txt")
+	err := fs.Rename(context.Background(), "/spaces/DR/doc.txt", "/spaces/DR/b/doc.txt")
 	if !errors.Is(err, api.ErrConflict) {
 		t.Errorf("Rename error = %v, want api.ErrConflict", err)
 	}
@@ -1191,7 +1193,7 @@ func TestWebdavFS_RenameConflictAtRootIsNotRetried(t *testing.T) {
 		"retyc://dr1/": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
 	})
 
-	err := fs.Rename(context.Background(), "/dataroom/DR/doc.txt", "/dataroom/DR/new.txt")
+	err := fs.Rename(context.Background(), "/spaces/DR/doc.txt", "/spaces/DR/new.txt")
 	if !errors.Is(err, api.ErrConflict) {
 		t.Errorf("Rename error = %v, want api.ErrConflict", err)
 	}
@@ -1212,10 +1214,10 @@ func TestWebdavFS_RenameMissingSourceOrInvalidDestination(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	if err := fs.Rename(ctx, "/dataroom/DR/nope.txt", "/dataroom/DR/new.txt"); !errors.Is(err, os.ErrNotExist) {
+	if err := fs.Rename(ctx, "/spaces/DR/nope.txt", "/spaces/DR/new.txt"); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("Rename of a missing source: error = %v, want os.ErrNotExist", err)
 	}
-	if err := fs.Rename(ctx, "/dataroom/DR/doc.txt", "/dataroom/DR/doc.txt/new.txt"); !errors.Is(err, os.ErrInvalid) {
+	if err := fs.Rename(ctx, "/spaces/DR/doc.txt", "/spaces/DR/doc.txt/new.txt"); !errors.Is(err, os.ErrInvalid) {
 		t.Errorf("Rename under a file: error = %v, want os.ErrInvalid", err)
 	}
 }
@@ -1236,7 +1238,7 @@ func TestWebdavFS_FetchNodesUnderAFileIsNotFound(t *testing.T) {
 	if _, err := fs.tree.ReadDir(context.Background(), "dr1", "/doc.txt"); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("listNodes under a file: error = %v, want os.ErrNotExist", err)
 	}
-	if _, err := fs.Stat(context.Background(), "/dataroom/DR/doc.txt/child"); !os.IsNotExist(err) {
+	if _, err := fs.Stat(context.Background(), "/spaces/DR/doc.txt/child"); !os.IsNotExist(err) {
 		t.Errorf("Stat under a file: error = %v, want a bare not-exist error for the WebDAV handler", err)
 	}
 }
@@ -1254,7 +1256,7 @@ func TestWebdavFS_MkdirUnderAFileIsConflict(t *testing.T) {
 		"retyc://dr1/": {{ID: "f-1", Name: "doc.txt", Type: "file"}},
 	})
 
-	if err := fs.Mkdir(context.Background(), "/dataroom/DR/doc.txt/d", 0o755); !errors.Is(err, os.ErrNotExist) {
+	if err := fs.Mkdir(context.Background(), "/spaces/DR/doc.txt/d", 0o755); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("Mkdir under a file: error = %v, want os.ErrNotExist", err)
 	}
 }
@@ -1271,7 +1273,7 @@ func TestWebdavFS_MkdirUnderDeletedParent(t *testing.T) {
 				"retyc://dr1/": {{ID: "d-old", Name: "a", Type: "dir"}},
 			})
 
-			if err := fs.Mkdir(context.Background(), "/dataroom/DR/a/b", 0o755); !errors.Is(err, os.ErrNotExist) {
+			if err := fs.Mkdir(context.Background(), "/spaces/DR/a/b", 0o755); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("Mkdir: error = %v, want os.ErrNotExist", err)
 			}
 			if nodeCacheHas(fs, "retyc://dr1/") {
@@ -1344,7 +1346,7 @@ func TestWebdavFS_MkdirConflictRechecksParent(t *testing.T) {
 			})
 			pub = identity.Recipient().String()
 
-			err := fs.Mkdir(context.Background(), "/dataroom/DR/a/b", 0o755)
+			err := fs.Mkdir(context.Background(), "/spaces/DR/a/b", 0o755)
 			if tc.wantErr == nil && err != nil || tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
 				t.Errorf("Mkdir: error = %v, want %v", err, tc.wantErr)
 			}
@@ -1376,7 +1378,7 @@ func TestWebdavFS_MkdirDropsListingsOfTheOldFolder(t *testing.T) {
 		"retyc://dr1/a/sub": {{ID: "f-ghost", Name: "ghost.txt", Type: "file"}},
 	})
 
-	if err := fs.Mkdir(context.Background(), "/dataroom/DR/a", 0o755); err != nil {
+	if err := fs.Mkdir(context.Background(), "/spaces/DR/a", 0o755); err != nil {
 		t.Fatalf("Mkdir: %v", err)
 	}
 	if nodeCacheHas(fs, "retyc://dr1/a/sub") {
@@ -1450,14 +1452,14 @@ func TestWebdav_MkdirThenWriteUsesOnlyCachedParents(t *testing.T) {
 	fs.tree.SeedSession("dr1", &service.DataroomSession{Identity: identity, PublicKey: identity.Recipient().String()})
 	ctx := context.Background()
 
-	for _, dir := range []string{"/dataroom/Room/a", "/dataroom/Room/a/b"} {
+	for _, dir := range []string{"/spaces/Room/a", "/spaces/Room/a/b"} {
 		if err := fs.Mkdir(ctx, dir, 0o755); err != nil {
 			t.Fatalf("Mkdir(%s): %v", dir, err)
 		}
 	}
 	for _, body := range []string{"", "0123456789"} {
 		putCtx := withContentLength(withIsPut(ctx), int64(len(body)))
-		f, err := fs.OpenFile(putCtx, "/dataroom/Room/a/b/f", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+		f, err := fs.OpenFile(putCtx, "/spaces/Room/a/b/f", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 		if err != nil {
 			t.Fatalf("OpenFile (%d bytes): %v", len(body), err)
 		}
@@ -1519,7 +1521,7 @@ func TestWriteFileHandle_BufferedPutFailureCleansUp(t *testing.T) {
 				"retyc://dr1/": tc.listing,
 			})
 
-			f, err := fs.OpenFile(withIsPut(context.Background()), "/dataroom/DR/doc.txt",
+			f, err := fs.OpenFile(withIsPut(context.Background()), "/spaces/DR/doc.txt",
 				os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 			if err != nil {
 				t.Fatalf("OpenFile: %v", err)
@@ -1562,7 +1564,7 @@ func TestWriteFileHandle_BufferedPutUsesCachedListings(t *testing.T) {
 		"retyc://dr1/a": {{ID: "f-1", Name: "doc.txt", Type: "file", VersionID: "v-1"}},
 	})
 
-	f, err := fs.OpenFile(withIsPut(context.Background()), "/dataroom/DR/a/doc.txt",
+	f, err := fs.OpenFile(withIsPut(context.Background()), "/spaces/DR/a/doc.txt",
 		os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
@@ -1612,7 +1614,7 @@ func TestSmallPut_ETagAndListing(t *testing.T) {
 	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{"retyc://dr1/": {}})
 	ctx := withContentLength(withIsPut(context.Background()), 5)
 
-	f, err := fs.OpenFile(ctx, "/dataroom/DR/doc.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := fs.OpenFile(ctx, "/spaces/DR/doc.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -1647,7 +1649,7 @@ func TestSmallPut_ShortBodyIsNotSent(t *testing.T) {
 	fs, _ := newCachedListingsFS(t, handler, map[string][]service.DataroomNodeInfo{"retyc://dr1/": {}})
 	ctx := withContentLength(withIsPut(context.Background()), 10)
 
-	f, err := fs.OpenFile(ctx, "/dataroom/DR/doc.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := fs.OpenFile(ctx, "/spaces/DR/doc.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -1674,7 +1676,7 @@ func TestSmallPut_DeletedParentDropsListings(t *testing.T) {
 	})
 	ctx := withContentLength(withIsPut(context.Background()), 5)
 
-	f, err := fs.OpenFile(ctx, "/dataroom/DR/a/doc.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := fs.OpenFile(ctx, "/spaces/DR/a/doc.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -1715,7 +1717,7 @@ func TestPut_AboveTheSingleRequestLimitIsStreamed(t *testing.T) {
 	size := int64(service.SmallUploadMaxSize + 1)
 	ctx := withContentLength(withIsPut(context.Background()), size)
 
-	f, err := fs.OpenFile(ctx, "/dataroom/DR/doc.bin", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := fs.OpenFile(ctx, "/spaces/DR/doc.bin", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -1791,7 +1793,7 @@ func TestPut_StreamedSurvivesAClientGoneOnceTheBodyIsComplete(t *testing.T) {
 			defer clientLeaves()
 			ctx := withContentLength(withIsPut(reqCtx), size)
 
-			f, err := fs.OpenFile(ctx, "/dataroom/DR/doc.bin", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+			f, err := fs.OpenFile(ctx, "/spaces/DR/doc.bin", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 			if err != nil {
 				t.Fatalf("OpenFile: %v", err)
 			}
@@ -1856,12 +1858,12 @@ func TestPut_WhereAFailureSurfaces(t *testing.T) {
 			ctx := withContentLength(withIsPut(context.Background()), size)
 			flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 
-			_, err := fs.OpenFile(ctx, "/dataroom/DR/missing/doc.bin", flags, 0o644)
+			_, err := fs.OpenFile(ctx, "/spaces/DR/missing/doc.bin", flags, 0o644)
 			if err == nil || os.IsNotExist(err) || !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("OpenFile under a missing folder = %v, want a wrapped not-exist error (404)", err)
 			}
 
-			f, err := fs.OpenFile(ctx, "/dataroom/DR/doc.bin", flags, 0o644)
+			f, err := fs.OpenFile(ctx, "/spaces/DR/doc.bin", flags, 0o644)
 			if size > service.SmallUploadMaxSize {
 				if !errors.Is(err, vfs.ErrForbidden) {
 					t.Errorf("OpenFile of a refused streamed upload = %v, want the refusal", err)
@@ -1879,5 +1881,16 @@ func TestPut_WhereAFailureSurfaces(t *testing.T) {
 				t.Errorf("Close of a refused upload = %v, want the refusal", err)
 			}
 		})
+	}
+}
+
+// The root lists the "spaces" section only.
+func TestOpenRootDir_ListsSpaces(t *testing.T) {
+	entries, err := (&webdavFS{}).openRootDir().Readdir(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "spaces" || !entries[0].IsDir() {
+		t.Errorf("root entries = %v, want the spaces folder only", entries)
 	}
 }

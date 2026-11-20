@@ -11,20 +11,20 @@
 #
 # Prerequisites: the server is already running and the WebDAV mount is active.
 #
-# - retyc dataroom create --title bench1
+# - retyc space create --title bench1
 # - retyc fs webdav serve --addr 127.0.0.1:8888
-# - sudo mkdir -p /mnt/a && sudo mount -t davfs -o dir_mode=0777,file_mode=0666 http://127.0.0.1:8888/dataroom/bench1 /mnt/a
+# - sudo mkdir -p /mnt/a && sudo mount -t davfs -o dir_mode=0777,file_mode=0666 http://127.0.0.1:8888/spaces/bench1 /mnt/a
 #
 #
 # Usage:
-#   N=30 MOUNT=/mnt/a BASE_URL=http://127.0.0.1:8888/dataroom/bench1 \
+#   N=30 MOUNT=/mnt/a BASE_URL=http://127.0.0.1:8888/spaces/bench1 \
 #   API_URL=https://api.retyc.com scripts/webdav-bench.sh
 #
 # Environment:
 #   N         files per phase (default 30)
 #   SRC       source file, created as 4KB of random data if missing
 #   MOUNT     WebDAV mount point for phase 2
-#   BASE_URL  same dataroom over HTTP, for phase 1
+#   BASE_URL  same storage space over HTTP, for phase 1
 #   API_URL   REST API, to measure its latency; read from config.yaml if unset
 #   OUT       output directory (default /tmp/retyc-bench-<timestamp>)
 set -uo pipefail
@@ -32,7 +32,7 @@ set -uo pipefail
 N=${N:-30}
 SRC=${SRC:-/tmp/4k}
 MOUNT=${MOUNT:-/mnt/a}
-BASE_URL=${BASE_URL:-http://127.0.0.1:8888/dataroom/bench1}
+BASE_URL=${BASE_URL:-http://127.0.0.1:8888/spaces/bench1}
 OUT=${OUT:-/tmp/retyc-bench-$(date +%Y%m%d-%H%M%S)}
 TAG=b$(date +%H%M%S)
 
@@ -94,7 +94,7 @@ else
     echo "  dev  -> https://api.triplesfer.traefik.me     prod -> https://api.retyc.com"
     echo "  rerun with API_URL=<url> to measure the API latency itself"
 fi
-# Only a cold dataroom cache makes this a proxy for one API round-trip; a warm
+# Only a cold storage space cache makes this a proxy for one API round-trip; a warm
 # one answers locally in well under a millisecond.
 curl -s -o /dev/null -w "    webdav server round-trip : %{time_total}s\n" -X OPTIONS "$BASE_URL/" || true
 

@@ -118,7 +118,7 @@ func TestProppatchExecutable_SetsTheMode(t *testing.T) {
 			a := &chmodAPI{}
 			fs := newChmodFS(t, a, tc.stored)
 
-			rec := davRequest(t, fs, "PROPPATCH", "/dataroom/DR/run.sh", strings.Replace(proppatchExecutable, "%s", tc.value, 1))
+			rec := davRequest(t, fs, "PROPPATCH", "/spaces/DR/run.sh", strings.Replace(proppatchExecutable, "%s", tc.value, 1))
 			if rec.Code != http.StatusMultiStatus || !strings.Contains(rec.Body.String(), "200 OK") {
 				t.Fatalf("PROPPATCH = %d %s, want 207 with 200 on the property", rec.Code, rec.Body)
 			}
@@ -128,7 +128,7 @@ func TestProppatchExecutable_SetsTheMode(t *testing.T) {
 			}
 
 			want := "<executable xmlns=\"http://apache.org/dav/props/\">" + tc.value + "</executable>"
-			rec = davRequest(t, fs, "PROPFIND", "/dataroom/DR/run.sh", propfindExecutable)
+			rec = davRequest(t, fs, "PROPFIND", "/spaces/DR/run.sh", propfindExecutable)
 			if !strings.Contains(rec.Body.String(), want) {
 				t.Errorf("PROPFIND after the chmod = %s, want %s", rec.Body, want)
 			}
@@ -144,7 +144,7 @@ func TestProppatchExecutable_UnchangedModeSkipsTheAPI(t *testing.T) {
 	a := &chmodAPI{}
 	fs := newChmodFS(t, a, "0755")
 
-	rec := davRequest(t, fs, "PROPPATCH", "/dataroom/DR/run.sh", strings.Replace(proppatchExecutable, "%s", "T", 1))
+	rec := davRequest(t, fs, "PROPPATCH", "/spaces/DR/run.sh", strings.Replace(proppatchExecutable, "%s", "T", 1))
 	if rec.Code != http.StatusMultiStatus || !strings.Contains(rec.Body.String(), "200 OK") {
 		t.Fatalf("PROPPATCH = %d %s, want 207 with 200 on the property", rec.Code, rec.Body)
 	}
@@ -165,11 +165,11 @@ func TestProppatchExecutable_ReportsRefusals(t *testing.T) {
 		a := &chmodAPI{status: tc.status}
 		fs := newChmodFS(t, a, "0644")
 
-		rec := davRequest(t, fs, "PROPPATCH", "/dataroom/DR/run.sh", strings.Replace(proppatchExecutable, "%s", "T", 1))
+		rec := davRequest(t, fs, "PROPPATCH", "/spaces/DR/run.sh", strings.Replace(proppatchExecutable, "%s", "T", 1))
 		if !strings.Contains(rec.Body.String(), tc.want) {
 			t.Errorf("API %d: PROPPATCH = %d %s, want %s on the property", tc.status, rec.Code, rec.Body, tc.want)
 		}
-		rec = davRequest(t, fs, "PROPFIND", "/dataroom/DR/run.sh", propfindExecutable)
+		rec = davRequest(t, fs, "PROPFIND", "/spaces/DR/run.sh", propfindExecutable)
 		if !strings.Contains(rec.Body.String(), ">F</executable>") {
 			t.Errorf("API %d: PROPFIND = %s, want the file still not executable", tc.status, rec.Body)
 		}
@@ -184,7 +184,7 @@ func TestProppatch_OtherPropertiesAreRefused(t *testing.T) {
 		`<D:propertyupdate xmlns:D="DAV:" xmlns:A="http://apache.org/dav/props/" xmlns:Z="urn:x">` +
 		`<D:set><D:prop><A:executable>T</A:executable><Z:color>red</Z:color></D:prop></D:set></D:propertyupdate>`
 
-	rec := davRequest(t, fs, "PROPPATCH", "/dataroom/DR/run.sh", body)
+	rec := davRequest(t, fs, "PROPPATCH", "/spaces/DR/run.sh", body)
 	got := rec.Body.String()
 	if !strings.Contains(got, "403 Forbidden") || !strings.Contains(got, "424 Failed Dependency") {
 		t.Errorf("PROPPATCH = %d %s, want 403 on color and 424 on executable", rec.Code, got)
