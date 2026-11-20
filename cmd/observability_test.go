@@ -1,22 +1,18 @@
 package cmd
 
 import (
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
-	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/internal/metrics"
-	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/vfs"
+	"github.com/retyc/retyc-cli/pkg/metrics"
+	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/pkg/vfs"
 )
 
 func getObservability(t *testing.T, h http.Handler, path string) (int, string) {
@@ -146,48 +142,11 @@ func TestObservability_MetricsExposesCustomMetrics(t *testing.T) {
 	}
 }
 
-func counterDelta(t *testing.T, c prometheus.Counter, before float64) float64 {
-	t.Helper()
-
-	return testutil.ToFloat64(c) - before
-}
-
-type failingTokenSource struct{}
-
-func (failingTokenSource) Token() (*oauth2.Token, error) { return nil, errors.New("refresh expired") }
-
-func TestCheckToken_ObservesResultAndExpiry(t *testing.T) {
-	okCounter := metrics.TokenRefreshes.WithLabelValues("ok")
-	errCounter := metrics.TokenRefreshes.WithLabelValues("error")
-	okBefore, errBefore := testutil.ToFloat64(okCounter), testutil.ToFloat64(errCounter)
-
-	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "t", Expiry: time.Now().Add(10 * time.Minute)})
-	if err := checkToken(src); err != nil {
-		t.Fatal(err)
-	}
-	if got := counterDelta(t, okCounter, okBefore); got != 1 {
-		t.Errorf("ok delta = %v, want 1", got)
-	}
-	if got := testutil.ToFloat64(metrics.TokenExpiry); got < 500 || got > 600 {
-		t.Errorf("token_expiry_seconds = %v, want about 600", got)
-	}
-
-	if err := checkToken(failingTokenSource{}); err == nil {
-		t.Fatal("expected the token error to propagate")
-	}
-	if got := counterDelta(t, errCounter, errBefore); got != 1 {
-		t.Errorf("error delta = %v, want 1", got)
-	}
-	if got := testutil.ToFloat64(metrics.TokenExpiry); got != 0 {
-		t.Errorf("token_expiry_seconds after failure = %v, want 0", got)
-	}
-}
-
 func TestObservability_SessionsCachedGauge(t *testing.T) {
-	fs := newTestFS(nil, vfs.Options{})
-	fs.tree.SeedSession("dr1", &service.DataroomSession{})
+	tree := vfs.New(nil, vfs.Options{})
+	tree.SeedSession("dr1", &service.DataroomSession{})
 	h := mustObservability(t, newServeHealth(), observabilityOptions{
-		extra: []prometheus.Collector{sessionsCachedGauge(fs.tree)},
+		extra: []prometheus.Collector{sessionsCachedGauge(tree)},
 	})
 	_, body := getObservability(t, h, "/metrics")
 	if !strings.Contains(body, "retycfs_sessions_cached 1") {
@@ -264,9 +223,9 @@ func TestObservability_ConstLabelCollisionIsAnError(t *testing.T) {
 	}
 }
 
-// The metrics of the FUSE driver and those internal/vfs observes for both
+// The metrics of the FUSE driver and those pkg/vfs observes for both
 // front ends are on /metrics of either command: they are registered with the
-// rest of internal/metrics.
+// rest of pkg/metrics.
 func TestObservability_ExposesMountMetrics(t *testing.T) {
 	metrics.Ops.WithLabelValues("lookup", "ok").Inc()
 	metrics.OpDuration.WithLabelValues("lookup").Observe(0.001)

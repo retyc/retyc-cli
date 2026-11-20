@@ -17,8 +17,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/retyc/retyc-cli/internal/metrics"
-	"github.com/retyc/retyc-cli/internal/vfs"
+	"github.com/retyc/retyc-cli/pkg/metrics"
+	"github.com/retyc/retyc-cli/pkg/vfs"
 )
 
 // The observability listener of `fs mount`: Prometheus exposition and health
@@ -63,7 +63,7 @@ type observabilityOptions struct {
 //	/healthz  liveness: 200 as long as the process answers
 //	/readyz   readiness: 200 while the mount serves (see serveHealth), 503 otherwise
 //
-// The options decide what /metrics carries besides internal/metrics. A
+// The options decide what /metrics carries besides pkg/metrics. A
 // constant label whose name collides with a metric label (method, route,
 // status, ...) is reported here, before the listener binds.
 func newObservabilityHandler(health *serveHealth, opts observabilityOptions) (http.Handler, error) {

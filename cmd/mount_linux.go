@@ -15,13 +15,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/retycfs"
-	"github.com/retyc/retyc-cli/internal/service"
-	"github.com/retyc/retyc-cli/internal/telemetry"
-	"github.com/retyc/retyc-cli/internal/ui"
-	"github.com/retyc/retyc-cli/internal/vfs"
+	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/retycfs"
+	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/pkg/telemetry"
+	"github.com/retyc/retyc-cli/pkg/ui"
+	"github.com/retyc/retyc-cli/pkg/vfs"
 )
 
 // fuseDevice is what a FUSE mount is made through.
@@ -335,7 +335,7 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	}()
 
 	authErrCh := make(chan error, 1)
-	go watch.run(ctx, func(err error) {
+	go watch.Run(ctx, func(err error) {
 		authErrCh <- err
 	})
 

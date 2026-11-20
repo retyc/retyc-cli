@@ -14,10 +14,10 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/term"
 
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/auth"
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/ui"
+	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/pkg/auth"
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/ui"
 )
 
 // minPassphraseLen is the minimum number of characters for a transfer passphrase.

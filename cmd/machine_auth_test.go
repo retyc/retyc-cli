@@ -12,14 +12,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"golang.org/x/oauth2"
-
-	"github.com/retyc/retyc-cli/internal/api"
-	"github.com/retyc/retyc-cli/internal/auth"
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/machinekey"
+	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/pkg/auth"
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/machinekey"
 )
 
 // setupMachine isolates the configuration and points the machine mode at a
@@ -215,108 +212,6 @@ func TestDebugRedactsMachineSecrets(t *testing.T) {
 	}
 }
 
-type okTokenSource struct{ checks atomic.Int32 }
-
-func (s *okTokenSource) Token() (*oauth2.Token, error) {
-	s.checks.Add(1)
-
-	return &oauth2.Token{AccessToken: "t", Expiry: time.Now().Add(time.Hour)}, nil
-}
-
-func (s *okTokenSource) Expire() {}
-
-// TestAuthWatchMachineRepeated401 drives the clock of the watch: a burst of
-// 401s reuses the token refreshed for the first one and is counted once, so
-// only refusals spread over several authRefreshInterval stop the mount.
-func TestAuthWatchMachineRepeated401(t *testing.T) {
-	start := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
-	setup := func(t *testing.T) (*okTokenSource, *authWatch, *atomic.Int64, chan error) {
-		t.Helper()
-		src := &okTokenSource{}
-		watch := newAuthWatch(src)
-		watch.machine = true
-		watch.interval = time.Hour // no tick: only asked checks
-		watch.logf = func(string, ...any) {}
-		var offset atomic.Int64
-		watch.now = func() time.Time { return start.Add(time.Duration(offset.Load())) }
-		ctx, cancel := context.WithCancel(context.Background())
-		t.Cleanup(cancel)
-		failed := make(chan error, 1)
-		go watch.run(ctx, func(err error) { failed <- err })
-
-		return src, watch, &offset, failed
-	}
-	// check asks for a check and waits until the source was asked a token.
-	check := func(t *testing.T, src *okTokenSource, watch *authWatch) {
-		t.Helper()
-		want := src.checks.Load() + 1
-		watch.checkNow()
-		deadline := time.Now().Add(5 * time.Second)
-		for src.checks.Load() < want {
-			if time.Now().After(deadline) {
-				t.Fatal("the check was not made")
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}
-	noFail := func(t *testing.T, failed chan error) {
-		t.Helper()
-		select {
-		case err := <-failed:
-			t.Fatalf("onFail(%v)", err)
-		default:
-		}
-	}
-
-	t.Run("burst within the refresh interval", func(t *testing.T) {
-		src, watch, offset, failed := setup(t)
-		for range 10 * machineRefusedChecks {
-			check(t, src, watch)
-			offset.Add(int64(time.Second))
-		}
-		noFail(t, failed)
-	})
-
-	t.Run("refusals spread over the refresh intervals", func(t *testing.T) {
-		src, watch, offset, failed := setup(t)
-		for i := range machineRefusedChecks {
-			noFail(t, failed)
-			check(t, src, watch)
-			if i < machineRefusedChecks-1 {
-				check(t, src, watch) // same token: not counted
-			}
-			offset.Add(int64(authRefreshInterval))
-		}
-		select {
-		case err := <-failed:
-			if !errors.Is(err, auth.ErrMachineRevoked) {
-				t.Errorf("onFail(%v), want ErrMachineRevoked", err)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("onFail was not called")
-		}
-	})
-}
-
-func TestAuthWatchNotMachineIgnoresRepeated401(t *testing.T) {
-	src := &okTokenSource{}
-	watch := newAuthWatch(src)
-	watch.machine = false
-	watch.interval = time.Hour
-	ctx := t.Context()
-	failed := make(chan error, 1)
-	go watch.run(ctx, func(err error) { failed <- err })
-	for range machineRefusedChecks + 1 {
-		watch.checkNow()
-		time.Sleep(10 * time.Millisecond)
-	}
-	select {
-	case err := <-failed:
-		t.Fatalf("onFail outside machine mode: %v", err)
-	default:
-	}
-}
-
 func TestRequireIdentitySourceMachineNoPassphrase(t *testing.T) {
 	setupMachine(t, "https://idp.example/token")
 	t.Setenv(config.EnvKeyPassphraseName, "")
@@ -379,41 +274,6 @@ func stubIdentitySources(t *testing.T, terminal, cached bool) {
 	keyringHas = func() bool { return cached }
 }
 
-// The transport of `fs webdav serve` asks the watch for a check on a 401, as
-// the one of `fs mount` does, and on nothing else.
-func TestWebdavTransportWatchingAsksOnA401(t *testing.T) {
-	var unauthorized atomic.Bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if unauthorized.Load() {
-			w.WriteHeader(http.StatusUnauthorized)
-
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
-	}))
-	defer srv.Close()
-
-	watch := newAuthWatch(&okTokenSource{})
-	client := api.New(srv.URL, "retyc-test/1.0", watch.src, false, false,
-		webdavTransportWatching(watch), api.WithRetry(time.Millisecond, 1))
-	ctx := context.Background()
-
-	if _, err := client.ListDatarooms(ctx, 1, 10); err != nil {
-		t.Fatal(err)
-	}
-	if len(watch.asked) != 0 {
-		t.Fatal("a request that succeeded asked for a check")
-	}
-	unauthorized.Store(true)
-	if _, err := client.ListDatarooms(ctx, 1, 10); err == nil {
-		t.Fatal("ListDatarooms succeeded on a 401")
-	}
-	if len(watch.asked) != 1 {
-		t.Fatal("a 401 did not ask for a check")
-	}
-}
-
 func TestAuthLostAdvice(t *testing.T) {
 	isolateConfig(t)
 	if got := authLostAdvice("mount again"); !strings.Contains(got, "retyc auth login") {
@@ -423,40 +283,5 @@ func TestAuthLostAdvice(t *testing.T) {
 	got := authLostAdvice("mount again")
 	if !strings.Contains(got, "retyc machine enable") || strings.Contains(got, "auth login") {
 		t.Errorf("machine advice = %q, want retyc machine enable", got)
-	}
-}
-
-// errRoundTripper answers with a fixed error.
-type errRoundTripper struct{ err error }
-
-func (e errRoundTripper) RoundTrip(*http.Request) (*http.Response, error) { return nil, e.err }
-
-// A transport error that is permanent (machine account refused) asks for a
-// check at once; a transient one does not.
-func TestAuthWatchTransportPermanentErrorAsksCheck(t *testing.T) {
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.invalid/", http.NoBody)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		name string
-		err  error
-		want int
-	}{
-		{"machine revoked", fmt.Errorf("token: %w", auth.ErrMachineRevoked), 1},
-		{"no token", auth.ErrNoToken, 1},
-		{"transient", errors.New("connection reset"), 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			watch := newAuthWatch(&okTokenSource{})
-			rt := watch.roundTripper(errRoundTripper{tt.err})
-			if _, err := rt.RoundTrip(req); !errors.Is(err, tt.err) { //nolint:bodyclose // no response
-				t.Fatalf("err = %v", err)
-			}
-			if len(watch.asked) != tt.want {
-				t.Errorf("asked = %d, want %d", len(watch.asked), tt.want)
-			}
-		})
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/retyc/retyc-cli/internal/service"
+	"github.com/retyc/retyc-cli/pkg/service"
 )
 
 // Under --json the documented contract is: result on stdout OR {"error":...}

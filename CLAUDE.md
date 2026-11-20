@@ -17,17 +17,22 @@ cmd/                     # cobra commands, flag/viper binding, output; thin adap
   auth.go transfer.go dataroom.go admin*.go config.go version.go
   mcp*.go                #   mcp serve (stdio) + manifest for the MCPB bundle
   fs.go                  #   `fs` group: parent of `webdav serve` and `mount`
-  webdav*.go             #   WebDAV adapter over internal/vfs
+  webdav.go              #   `fs webdav serve` command over pkg/dav
   mount*.go              #   fs mount (mount_linux.go: runMount / serveMount)
   serve_common.go metastore.go observability.go   # shared by webdav serve and fs mount
-internal/
+pkg/                     # the core, importable by another module (desktop client); no
+                         #   stability promise (v0). Nothing in pkg/ imports cmd or cobra
   api/                   # REST client: transport.go (only http.Transport), retry.go (429),
                          #   errorcodes.go, one file per API area
-  auth/                  # OIDC device flow, refresh, GetValidToken
+  auth/                  # OIDC device flow, refresh, GetValidToken, TokenStore,
+                         #   Watch (login keepalive of the long-running servers)
   config/                # viper defaults, Config structs, env.go (env-only settings), envfile.go
   crypto/                # AGE helpers (PQ only)
+  dav/                   # WebDAV adapter over pkg/vfs (dav.New), no cobra/viper/config
+  diag/                  # where the core writes warnings, progress, --debug (stderr default)
   keyring/               # Linux session keyring cache of the decrypted identity
-  service/               # business logic shared by commands and MCP (sessions, uploads, …)
+  service/               # business logic shared by commands and MCP (sessions, uploads, …),
+                         #   IdentityCache (keyring by default)
   vfs/                   # file-tree service shared by WebDAV and FUSE (caches, mutations, I/O)
     metastore/           #   MetaStore interface; memstore/ (default), redisstore/ (shared)
   retycfs/               # FUSE driver (linux build tag), go-fuse v2 `fs` API
@@ -75,6 +80,28 @@ scripts/                 # build-mcpb.sh, completions.sh + manpages.sh/genman (p
 - The backend says `share`, the CLI says `transfer`. Do not rename backend routes.
 - Say "organization key", never "master key".
 
+## Importable core (`pkg/`)
+
+`pkg/` is imported by the desktop client (another module); the CLI's behaviour must
+not depend on it being imported, nor the reverse.
+
+- No package of `pkg/` imports `cmd` or cobra. `pkg/dav`, like `vfs`, imports neither
+  viper, pflag nor `pkg/config` (`pkg/dav/deps_test.go`).
+- No implicit environment: the API URL, the token store and the settings come from
+  the caller. `config.Dir()`, `config.SetDefaults()` and the build defaults
+  (`paths_dev.go` / `paths_prod.go`) are for `cmd` only; nothing else in `pkg/` reads
+  the config dir or the CWD.
+- The core never writes to `os.Stderr`: warnings, progress and the `--debug` trace go
+  through `diag.Writer()` / `diag.Printf` (stderr unless an importer calls
+  `diag.SetOutput`); `vfs` keeps `Options.Logf`.
+- Login token: read and written through `auth.Tokens()` only (`auth.TokenStore`). There
+  is no store by default: `cmd/root.go` sets `config.TokenFile{}` (token.json) in
+  `init()`; the tests of `auth` and `service` do the same (`tokenstore_cli_test.go`).
+- Decrypted identity: `service.SetIdentityCache` (`IdentityCache`); default
+  `service.KeyringCache` (Linux session keyring).
+- Builds without cgo for linux, windows and darwin (amd64/arm64). Cross-check with
+  `GOOS=windows GOARCH=amd64 go vet ./...` (and darwin) when touching platform code.
+
 ## Configuration — the single rule
 
 `config.SetDefaults()` owns the binding. Every viper key `a.b` is settable from
@@ -86,13 +113,13 @@ file > default.
   `Config`, a row in `doc/configuration.md`. Flags are bound to their key in a
   `resolve…` function called from `RunE`, never in `init()`.
 - Secrets and pre-viper settings are **not** viper keys: they live in
-  `internal/config/env.go` (`RETYC_TOKEN`, `RETYC_KEY_PASSPHRASE`,
+  `pkg/config/env.go` (`RETYC_TOKEN`, `RETYC_KEY_PASSPHRASE`,
   `RETYC_WEBDAV_PASSWORD`, `RETYC_CONFIG_DIR`, `RETYC_ENV_FILE`), read through its
   accessors only. A new one needs its `Env…Name` constant there and a doc row.
 - Enforced by tests: `TestRetycEnvReadOnlyHere` (no `os.Getenv("RETYC_…")` outside
-  `internal/config`), `TestEnvVarsDocumented` (every key and env var in
+  `pkg/config`), `TestEnvVarsDocumented` (every key and env var in
   `doc/configuration.md`).
-- `OTEL_*` / `TRACEPARENT` / `TRACESTATE` are read only in `internal/telemetry/env.go`.
+- `OTEL_*` / `TRACEPARENT` / `TRACESTATE` are read only in `pkg/telemetry/env.go`.
 - Tests touching viper isolate themselves: `resetViper` (config), `isolateConfig` (cmd).
 - `config.Load` validates ranges and refuses removed keys (`removedKeys`, e.g. the
   former `webdav.cache.*`).
@@ -106,7 +133,7 @@ file > default.
 stdout = results only, stderr = everything else (prompts, progress, warnings).
 
 - Branch `if jsonOutput { return printJSON(v) }` where human formatting starts.
-- Reuse tagged `api.*` structs; **never add `json` tags to `internal/service` result
+- Reuse tagged `api.*` structs; **never add `json` tags to `pkg/service` result
   structs** (the MCP server marshals them as they are): add a view type in
   `cmd/output.go`.
 - Prompts go through `confirm()` (with `--json` and no `--yes`: `errJSONNeedsYes`).
@@ -116,7 +143,7 @@ stdout = results only, stderr = everything else (prompts, progress, warnings).
 
 ## HTTP
 
-- `api.BaseTransport(insecure)` (`internal/api/transport.go`) is the **only** place an
+- `api.BaseTransport(insecure)` (`pkg/api/transport.go`) is the **only** place an
   `http.Transport` is built (proxy from env, `SSL_CERT_FILE` / `SSL_CERT_DIR` added to
   the system pool, TLS ≥ 1.2). The OIDC client (`newHTTPClient`) and `api.New` both use
   it. HTTP/2 only, one multiplexed connection: concurrency settings bound backend load.
@@ -125,11 +152,11 @@ stdout = results only, stderr = everything else (prompts, progress, warnings).
   run it instead of the root's).
 - `--debug` prints every request and response body to stderr; proxy credentials are
   redacted.
-- Rate limit (`internal/api/retry.go`): 429 is replayed (ingress limit, safe for every
+- Rate limit (`pkg/api/retry.go`): 429 is replayed (ingress limit, safe for every
   method) with a per-client `throttleGate`, bounded by `api.retry.max_wait` /
   `max_attempts`, then `*api.RateLimitError`. Request bodies must be rebuildable
   (`bytes.Reader`, `strings.Reader`…), never a stream. Tests never sleep (`fakeClock`).
-  `webdav serve` answers 429 + `Retry-After` (`cmd/webdav_ratelimit.go`), which
+  `webdav serve` answers 429 + `Retry-After` (`pkg/dav/webdav_ratelimit.go`), which
   requires API errors to stay wrapped through `vfs`.
 - Errors: `api.HTTPError{Status, Body, Code}`. **Branch on `api.ErrorCode(err)`** (the
   `X-Error-Code` header, constants in `errorcodes.go`); read `detail` only as the
@@ -139,7 +166,8 @@ stdout = results only, stderr = everything else (prompts, progress, warnings).
 ## Auth
 
 `auth.GetValidToken` is the single entry point (stored token → refresh → `ErrNoToken` /
-`ErrNoRefreshToken`). Token in `<configDir>/token.json`, mode 0600. OIDC settings are
+`ErrNoRefreshToken`). Token through `auth.Tokens()`; the CLI store is `<configDir>/token.json`,
+mode 0600 (`config.TokenFile`). OIDC settings are
 fetched at runtime (`api.FetchOIDCConfig`), not defaults. Admin commands use an
 organization API key as a static bearer token.
 
@@ -192,14 +220,14 @@ Behaviour in `doc/commands.md`. Notes for code:
 - Admin commands: organization API (`<api.base_url>/v1`), scopes
   `organization|dataroom|transfer` × `read|write`.
 
-## internal/vfs
+## pkg/vfs
 
 Service layer behind `webdav serve` and `fs mount`, addressed by dataroom ID and
 absolute path. Package comments and `doc/webdav.md` / `doc/retycfs.md` describe the
 behaviour; the rules:
 
 - **Dependency rule** (`TestDependencyRule`, `deps_test.go`): no `net/http`,
-  `x/net/webdav`, go-fuse, cobra, viper, `internal/config` nor `cmd` imported by
+  `x/net/webdav`, go-fuse, cobra, viper, `pkg/config` nor `cmd` imported by
   `vfs` or its sub-packages. Settings arrive as plain values in `vfs.Options`; `vfs`
   never reads `service.Concurrency()`. `vfs.Default*` constants mirror `config`
   defaults (`TestVFSDefault…MatchesConfig`).
@@ -207,7 +235,7 @@ behaviour; the rules:
 - **Errors**: sentinels of `errors.go` are *added* to the original error (`kindError`),
   never substituted, so `errors.Is` still reaches API errors, auth sentinels and
   `ErrRateLimited` (which never gets a sentinel). `ErrNotExist` / `ErrExist` are the
-  `os` ones; `cmd` flattens them for x/net/webdav (`webdavErr`).
+  `os` ones; `dav` flattens them for x/net/webdav (`webdavErr`).
 - **Locking**: the API is never called under `FS.mu`; store reads/writes are (a
   generation check and its write are one step). Sealed nodes are decrypted outside the
   mutex. `Options.Logf` is never called under `FS.mu` (`FS.unlock`).
@@ -239,13 +267,15 @@ behaviour; the rules:
 
 ## WebDAV (`retyc fs webdav serve`)
 
-`cmd/webdav*.go` parses WebDAV, calls `vfs`, maps errors to statuses. Only the command
-path carries `fs`: keys stay `webdav.*` / `cache.*`, env `RETYC_WEBDAV_*`. Tests build
-handlers with `newWebdavHandler`, never a bare `webdav.Handler`. Symlinks are hidden
+`pkg/dav` parses WebDAV, calls `vfs`, maps errors to statuses; `dav.New` is the handler
+(mux, lock mirror, COPY), `cmd/webdav.go` only the cobra command (flags, Basic auth,
+listen, drain, `auth.Watch`). Only the command path carries `fs`: keys stay
+`webdav.*` / `cache.*`, env `RETYC_WEBDAV_*`. Tests build handlers with
+`newWebdavHandler`, never a bare `webdav.Handler`. Symlinks are hidden
 (`HideSymlinks`). `COPY`, `LOCK` mirroring and the executable property are custom
-(`webdav_copy.go`, `webdav_locks.go`, `webdav_chmod.go`).
+(`pkg/dav/webdav_copy.go`, `webdav_locks.go`, `webdav_chmod.go`).
 
-## FUSE driver (`retyc fs mount`, `internal/retycfs`)
+## FUSE driver (`retyc fs mount`, `pkg/retycfs`)
 
 Linux only: every file but `doc.go` has `//go:build linux`; `cmd/mount_other.go`
 answers "Linux only". Imports `vfs`, go-fuse, and `api` / `auth` for sentinels only.
@@ -273,11 +303,11 @@ User doc: `doc/retycfs.md`. Rules:
 probes or traces. Shared code (`vfs`, `service`, `api`) still observes and opens
 spans: unregistered collectors and the no-op tracer cost nothing elsewhere.
 
-- Metrics (`internal/metrics`): one prefix, `retycfs_`. Declare in `metrics.go`, add
+- Metrics (`pkg/metrics`): one prefix, `retycfs_`. Declare in `metrics.go`, add
   to `all`, observe at the event, document in `doc/retycfs.md`. Labels stay bounded
   (routes through `metrics.NormalizeRoute`, never an ID or path). Registered only by
   the observability listener of the mount (`--metrics-addr`, `cmd/observability.go`).
-- Tracing (`internal/telemetry`): `telemetry.Init` is called by `runMount` only; off
+- Tracing (`pkg/telemetry`): `telemetry.Init` is called by `runMount` only; off
   unless an OTLP endpoint is set. Attribute keys live in `attrs.go`, never spelled at
   call sites. One root span per FUSE operation that reaches the API
   (`StartUsedRoot`).

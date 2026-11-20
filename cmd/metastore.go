@@ -6,10 +6,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/retyc/retyc-cli/internal/config"
-	"github.com/retyc/retyc-cli/internal/vfs"
-	"github.com/retyc/retyc-cli/internal/vfs/metastore"
-	"github.com/retyc/retyc-cli/internal/vfs/metastore/redisstore"
+	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/pkg/vfs/metastore"
+	"github.com/retyc/retyc-cli/pkg/vfs/metastore/redisstore"
 )
 
 // newMetaStore returns the store of cache.store for the tree of an fs front
