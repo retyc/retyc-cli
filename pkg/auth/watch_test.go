@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/pkg/diag"
 	"github.com/retyc/retyc-cli/pkg/metrics"
 )
 
@@ -224,5 +226,38 @@ func TestCheckToken_ObservesResultAndExpiry(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(metrics.TokenExpiry); got != 0 {
 		t.Errorf("token_expiry_seconds after failure = %v, want 0", got)
+	}
+}
+
+// chanWriter hands each write to the test.
+type chanWriter chan string
+
+func (c chanWriter) Write(p []byte) (int, error) {
+	c <- string(p)
+
+	return len(p), nil
+}
+
+// TestAuthWatchZeroIntervalNilLogf: a Watch whose exported fields an importer
+// zeroed runs with the defaults (TokenKeepaliveInterval, diag output) rather
+// than panicking.
+func TestAuthWatchZeroIntervalNilLogf(t *testing.T) {
+	lines := make(chanWriter, 4)
+	diag.SetOutput(lines)
+	t.Cleanup(func() { diag.SetOutput(nil) })
+
+	watch := NewWatch(failingTokenSource{}, false)
+	watch.Interval = 0
+	watch.Logf = nil
+	go watch.Run(t.Context(), func(err error) { t.Errorf("onFail(%v) on a transient failure", err) })
+	watch.CheckNow()
+
+	select {
+	case line := <-lines:
+		if !strings.Contains(line, "tried again every "+TokenKeepaliveInterval.String()) {
+			t.Errorf("logged %q, want the default interval", line)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing logged to the diag output")
 	}
 }

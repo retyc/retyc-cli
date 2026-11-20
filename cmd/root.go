@@ -183,6 +183,9 @@ func init() {
 	// The CLI keeps the login in <configDir>/token.json; the core has no token
 	// store of its own (see auth.SetTokenStore).
 	auth.SetTokenStore(config.TokenFile{})
+	// The CLI logs in from RETYC_TOKEN or a machine account when the
+	// environment says so; the core ignores these variables by default.
+	config.SetEnvLogin(true)
 
 	// The environment file comes first: its variables must be in the
 	// environment before viper, or anything else, reads a RETYC_ variable.

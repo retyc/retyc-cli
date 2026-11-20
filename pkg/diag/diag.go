@@ -15,15 +15,36 @@ import (
 
 var (
 	mu  sync.RWMutex
-	out io.Writer
+	out *lockedWriter
 )
 
+// lockedWriter serializes the writes to a writer given to SetOutput: the core
+// writes from many goroutines, and a writer such as a bytes.Buffer or a log
+// file is not safe for concurrent use.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.w.Write(p)
+}
+
 // SetOutput sends the messages of the core to w from now on; nil restores
-// the default, stderr. Use io.Discard to drop them.
+// the default, stderr. Use io.Discard to drop them. Writes to w are
+// serialized: w need not be safe for concurrent use.
 func SetOutput(w io.Writer) {
 	mu.Lock()
 	defer mu.Unlock()
-	out = w
+	if w == nil {
+		out = nil
+
+		return
+	}
+	out = &lockedWriter{w: w}
 }
 
 // Writer returns the current output. The default is read from os.Stderr at
@@ -36,6 +57,15 @@ func Writer() io.Writer {
 	}
 
 	return out
+}
+
+// IsStderr reports whether the output is the process's stderr: the default,
+// or os.Stderr given to SetOutput.
+func IsStderr() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	return out == nil || out.w == io.Writer(os.Stderr)
 }
 
 // Printf formats according to format and writes the result to Writer.

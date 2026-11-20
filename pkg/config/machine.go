@@ -57,7 +57,12 @@ type Machine struct {
 }
 
 // MachineMode reports whether the environment designates a machine account.
+// It is always false while SetEnvLogin is off.
 func MachineMode() bool {
+	if !envLogin.Load() {
+		return false
+	}
+
 	return fromEnv(EnvMachineDirName) != "" || fromEnv(EnvClientIDName) != ""
 }
 

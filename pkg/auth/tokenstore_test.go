@@ -88,3 +88,36 @@ func TestGetValidTokenInjectedStore(t *testing.T) {
 		t.Errorf("token = %q, stored refresh = %q, want fresh and r2", tok.AccessToken, store.tok.RefreshToken)
 	}
 }
+
+// failingTokenStore cannot be read: a locked vault, an I/O error.
+type failingTokenStore struct{ memTokenStore }
+
+var errVaultLocked = errors.New("vault locked")
+
+func (*failingTokenStore) Load() (*oauth2.Token, error) { return nil, errVaultLocked }
+
+// A store that fails still reads as "not logged in", and says why.
+func TestGetValidTokenFailingStore(t *testing.T) {
+	t.Setenv(config.EnvTokenName, "")
+	useTokenStore(t, &failingTokenStore{})
+
+	_, err := GetValidToken(context.Background(), config.OIDCConfig{}, http.DefaultClient)
+	// Still ErrNoToken (exit code 77), with ErrTokenStore and the cause.
+	if !errors.Is(err, ErrNoToken) || !errors.Is(err, ErrTokenStore) || !errors.Is(err, errVaultLocked) {
+		t.Errorf("GetValidToken() error = %v, want ErrNoToken + ErrTokenStore + the store's error", err)
+	}
+}
+
+// Without config.SetEnvLogin(true), RETYC_TOKEN is ignored: an importer with
+// an empty store is not logged in, and no refresh is attempted.
+func TestGetValidTokenIgnoresEnvWithoutOptIn(t *testing.T) {
+	t.Setenv(config.EnvTokenName, "offline-token")
+	config.SetEnvLogin(false)
+	t.Cleanup(func() { config.SetEnvLogin(true) })
+	useTokenStore(t, &memTokenStore{})
+
+	_, err := GetValidToken(context.Background(), config.OIDCConfig{}, http.DefaultClient)
+	if !errors.Is(err, ErrNoToken) {
+		t.Errorf("GetValidToken() error = %v, want ErrNoToken (RETYC_TOKEN must be ignored)", err)
+	}
+}

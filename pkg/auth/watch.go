@@ -37,7 +37,8 @@ const authRefreshInterval = 30 * time.Second
 type Watch struct {
 	src oauth2.TokenSource
 	// Interval is how often the login is checked when nothing asks for a
-	// check (TokenKeepaliveInterval). Set it before Run.
+	// check (TokenKeepaliveInterval, also when not positive). Set it before
+	// Run.
 	Interval time.Duration
 	// asked holds at most one check asked for and not made yet.
 	asked chan struct{}
@@ -47,8 +48,8 @@ type Watch struct {
 	// failing tells that the last check failed without the login being lost.
 	// Only run reads it.
 	failing bool
-	// Logf reports those failures, and their end; diag output by default.
-	// Set it before Run.
+	// Logf reports those failures, and their end; diag output by default,
+	// also when nil. Set it before Run.
 	Logf func(format string, args ...any)
 	// machine is set for a machine account, whose revocation shows as a
 	// token that keeps being obtained yet keeps being refused.
@@ -67,9 +68,12 @@ func NewWatch(src oauth2.TokenSource, machine bool) *Watch {
 	return &Watch{
 		src: src, Interval: TokenKeepaliveInterval, asked: make(chan struct{}, 1), now: time.Now,
 		machine: machine,
-		Logf:    func(format string, args ...any) { diag.Printf(format+"\n", args...) },
+		Logf:    diagLogf,
 	}
 }
+
+// diagLogf is the default Logf of a Watch: a line on the diag output.
+func diagLogf(format string, args ...any) { diag.Printf(format+"\n", args...) }
 
 // distrust makes the next check refresh the access token, when the source
 // can be told to and none was forced for authRefreshInterval. It tells
@@ -100,7 +104,17 @@ func (w *Watch) distrust() bool {
 // check is made again at the next tick, or the next time one is asked for.
 // It is reported once, as is its end, not at every tick it lasts.
 func (w *Watch) Run(ctx context.Context, onFail func(error)) {
-	ticker := time.NewTicker(w.Interval)
+	// Interval and Logf are exported: an unset or zero value falls back to
+	// the defaults of NewWatch rather than panicking.
+	interval := w.Interval
+	if interval <= 0 {
+		interval = TokenKeepaliveInterval
+	}
+	logf := w.Logf
+	if logf == nil {
+		logf = diagLogf
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	// refused counts the checks asked for after a 401 that obtained a fresh
 	// token, the old one having been expired by distrust (machine mode only):
@@ -138,7 +152,7 @@ func (w *Watch) Run(ctx context.Context, onFail func(error)) {
 		case err == nil:
 			if w.failing {
 				w.failing = false
-				w.Logf("The login is checked again: the access token is valid.")
+				logf("The login is checked again: the access token is valid.")
 			}
 		case IsPermanent(err):
 			onFail(err)
@@ -146,7 +160,7 @@ func (w *Watch) Run(ctx context.Context, onFail func(error)) {
 			return
 		case !w.failing:
 			w.failing = true
-			w.Logf("Warning: the login could not be checked, which is tried again every %s: %v", w.Interval, err)
+			logf("Warning: the login could not be checked, which is tried again every %s: %v", interval, err)
 		}
 	}
 }

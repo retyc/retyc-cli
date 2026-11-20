@@ -90,7 +90,11 @@ not depend on it being imported, nor the reverse.
 - No implicit environment: the API URL, the token store and the settings come from
   the caller. `config.Dir()`, `config.SetDefaults()` and the build defaults
   (`paths_dev.go` / `paths_prod.go`) are for `cmd` only; nothing else in `pkg/` reads
-  the config dir or the CWD.
+  the config dir or the CWD. Logging in from the environment (`RETYC_TOKEN`, machine
+  account: `config.Token()`, `config.MachineMode()`, `config.LoadMachine()`) is off
+  until `config.SetEnvLogin(true)`, which `cmd/root.go` calls in `init()`; the tests of
+  `config`, `auth` and `service` opt in the same way (`envlogin_test.go`,
+  `tokenstore_cli_test.go`).
 - The core never writes to `os.Stderr`: warnings, progress and the `--debug` trace go
   through `diag.Writer()` / `diag.Printf` (stderr unless an importer calls
   `diag.SetOutput`); `vfs` keeps `Options.Logf`.

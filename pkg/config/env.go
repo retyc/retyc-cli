@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync/atomic"
 )
 
 // Environment variables that are deliberately not viper keys.
@@ -62,8 +63,25 @@ func envFilePath() string {
 	return os.Getenv(EnvFileName)
 }
 
-// Token returns the offline refresh token from RETYC_TOKEN, or "" when unset.
+// envLogin is set by SetEnvLogin.
+var envLogin atomic.Bool
+
+// SetEnvLogin lets the environment choose the login: RETYC_TOKEN (Token) and
+// the machine account variables (MachineMode, LoadMachine). It is off by
+// default, so that a program importing the core never logs in, nor enters
+// machine mode, because of variables it did not set; the CLI turns it on in
+// cmd's init().
+func SetEnvLogin(enabled bool) {
+	envLogin.Store(enabled)
+}
+
+// Token returns the offline refresh token from RETYC_TOKEN, or "" when unset
+// or when SetEnvLogin is off.
 func Token() string {
+	if !envLogin.Load() {
+		return ""
+	}
+
 	return fromEnv(EnvTokenName)
 }
 

@@ -3,7 +3,6 @@ package ui
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"sync"
 	"time"
@@ -16,7 +15,7 @@ import (
 // stderrIsTerminal reports whether stderr is a terminal the core writes to
 // (see diag.SetOutput); a variable for tests.
 var stderrIsTerminal = func() bool {
-	return diag.Writer() == io.Writer(os.Stderr) && term.IsTerminal(int(os.Stderr.Fd()))
+	return diag.IsStderr() && term.IsTerminal(int(os.Stderr.Fd()))
 }
 
 var frames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -27,7 +26,7 @@ const (
 	clearLine = "\r\033[K"
 )
 
-// Spinner displays an animated dot indicator on stderr while a blocking
+// Spinner displays an animated dot indicator on stderr (the diag output) while a blocking
 // operation is running. If a label is provided, it is shown to the right of
 // the rotating frame; otherwise only the frame is displayed.
 //
@@ -76,6 +75,8 @@ func (s *Spinner) Start() {
 	stop := s.stop
 	done := s.done
 	s.mu.Unlock()
+	// The frames go to the output of the core (diag), which is stderr here.
+	out := diag.Writer()
 
 	go func() {
 		defer close(done)
@@ -85,7 +86,7 @@ func (s *Spinner) Start() {
 		for {
 			select {
 			case <-stop:
-				fmt.Fprint(os.Stderr, clearLine+ansiReset)
+				fmt.Fprint(out, clearLine+ansiReset)
 
 				return
 			case <-ticker.C:
@@ -94,9 +95,9 @@ func (s *Spinner) Start() {
 				label := s.label
 				s.mu.Unlock()
 				if label != "" {
-					fmt.Fprintf(os.Stderr, "%s%s%s %s%s", clearLine, spinColor, frame, label, ansiReset)
+					fmt.Fprintf(out, "%s%s%s %s%s", clearLine, spinColor, frame, label, ansiReset)
 				} else {
-					fmt.Fprintf(os.Stderr, "%s%s%s%s", clearLine, spinColor, frame, ansiReset)
+					fmt.Fprintf(out, "%s%s%s%s", clearLine, spinColor, frame, ansiReset)
 				}
 				i++
 			}

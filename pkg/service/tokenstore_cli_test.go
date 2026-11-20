@@ -5,5 +5,9 @@ import (
 	"github.com/retyc/retyc-cli/pkg/config"
 )
 
-// The tests run with the token store of the CLI, as cmd sets it.
-func init() { auth.SetTokenStore(config.TokenFile{}) }
+// The tests run with the token store and the environment login of the CLI,
+// as cmd sets them.
+func init() {
+	auth.SetTokenStore(config.TokenFile{})
+	config.SetEnvLogin(true)
+}

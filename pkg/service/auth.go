@@ -353,6 +353,9 @@ type LoginStartResult struct {
 // LoginStart initiates an OIDC device flow login. If a valid token is already
 // in the token store (auth.Tokens), it returns AlreadyAuthenticated=true without starting a new flow.
 func LoginStart(ctx context.Context, baseURL string, httpClient *http.Client) (*LoginStartResult, error) {
+	// A store that fails reads as "no token" here: the login that follows
+	// rewrites it (an unreadable token.json heals itself). An importer whose
+	// store can be locked checks it before calling LoginStart.
 	if tok, err := auth.Tokens().Load(); err == nil && tok.Valid() {
 		return &LoginStartResult{AlreadyAuthenticated: true, ExpiresAt: tok.Expiry}, nil
 	}

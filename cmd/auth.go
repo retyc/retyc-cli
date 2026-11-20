@@ -89,7 +89,7 @@ var authLoginCmd = &cobra.Command{
 			return nil
 		}
 
-		if err := config.SaveToken(token); err != nil {
+		if err := auth.Tokens().Save(token); err != nil {
 			return fmt.Errorf("saving token: %w", err)
 		}
 
@@ -164,7 +164,7 @@ var authStatusCmd = &cobra.Command{
 		// Skipped when RETYC_TOKEN is set (no local credentials in that mode).
 		var stored *oauth2.Token
 		if envToken == "" {
-			stored, err = config.LoadToken()
+			stored, err = auth.Tokens().Load()
 			if err != nil {
 				return notAuthenticated("no_token", "Not authenticated. Run `retyc auth login`.")
 			}

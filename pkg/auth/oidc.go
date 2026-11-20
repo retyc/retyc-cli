@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,11 @@ import (
 
 // ErrNoToken is returned when no token is in the token store (TokenStore).
 var ErrNoToken = errors.New("no stored token")
+
+// ErrTokenStore is added to ErrNoToken when the token store failed to answer
+// (anything but an empty store): the login may still exist. Check it before
+// ErrNoToken.
+var ErrTokenStore = errors.New("token store unavailable")
 
 // ErrNoRefreshToken is returned when the stored token is expired and has no
 // refresh token to attempt a silent renewal.
@@ -472,7 +478,15 @@ func GetValidToken(ctx context.Context, cfg config.OIDCConfig, httpClient *http.
 
 	tok, err := Tokens().Load()
 	if err != nil {
-		return nil, ErrNoToken
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrNoToken
+		}
+
+		// A store that fails (a locked vault, an unreadable file) still reads
+		// as "not logged in" (ErrNoToken, exit code 77: supervisors rely on
+		// it), and carries ErrTokenStore with the cause so that an importer
+		// can tell it from an empty store.
+		return nil, fmt.Errorf("%w: %w: %w", ErrNoToken, ErrTokenStore, err)
 	}
 
 	if tok.Valid() {
