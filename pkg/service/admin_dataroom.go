@@ -30,7 +30,7 @@ func ResolveAdminDataroomSession(
 ) (*DataroomSession, error) {
 	dr, err := client.AdminGetDataroom(ctx, dataroomID)
 	if err != nil {
-		return nil, fmt.Errorf("fetching dataroom: %w", err)
+		return nil, fmt.Errorf("fetching storage space: %w", err)
 	}
 
 	sessionPrivKey, err := crypto.DecryptToString(dr.SessionPrivateKeyEnc, orgKey)

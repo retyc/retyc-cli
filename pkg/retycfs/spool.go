@@ -574,7 +574,7 @@ func (sp *openSpool) settleMode(ctx context.Context, final bool) {
 	if final {
 		// Neither the error nor the path: both may hold a name.
 		sp.drv.logf("the mode of a file could not be stored, its node keeps the one it had: "+
-			"dataroom %s, node %s, inode %d, mode %04o: %s",
+			"space %s, node %s, inode %d, mode %04o: %s",
 			sp.dataroomID, id, sp.ino, mode, errnoName(toErrno(err)))
 	}
 }
@@ -714,7 +714,7 @@ func (sp *openSpool) retire() {
 		// Neither the error nor the path: both may hold a name. The file is
 		// told by its node, or by the folder it was created in when it was
 		// never stored, and by the size of what is lost.
-		sp.drv.logf("the last flush of a file failed, its changes are lost: dataroom %s, %s, inode %d, %d bytes: %s",
+		sp.drv.logf("the last flush of a file failed, its changes are lost: space %s, %s, inode %d, %d bytes: %s",
 			sp.dataroomID, lostFile(node, exists, at), sp.ino, size, reason)
 	}
 	if !exists && !unlinked && at.known() {
@@ -808,7 +808,7 @@ func (d *driver) closeSpools() (closed <-chan struct{}) {
 			}
 			if node, _ := sp.spool.Node(); returned && err == nil && dirty && open && !sp.local.Load() {
 				// No path: it may hold a name.
-				d.logf("a file was sent as it was at shutdown, the file was still open: dataroom %s, node %q, inode %d",
+				d.logf("a file was sent as it was at shutdown, the file was still open: space %s, node %q, inode %d",
 					sp.dataroomID, node.ID, sp.ino)
 			}
 			sp.st.mu.Lock()

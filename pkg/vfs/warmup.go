@@ -220,11 +220,11 @@ func (w *warmWalk) failed(dataroomID string, err error) {
 	w.stats.Errors++
 	w.mu.Unlock()
 	if dataroomID == "" {
-		w.fs.logf("warmup: the dataroom list could not be read: %s", err)
+		w.fs.logf("warmup: the storage space list could not be read: %s", err)
 
 		return
 	}
-	w.fs.logf("warmup: a folder of dataroom %s could not be listed, skipped: %s", dataroomID, err)
+	w.fs.logf("warmup: a folder of storage space %s could not be listed, skipped: %s", dataroomID, err)
 }
 
 // warmListing returns the listing of a folder no older than the TTL, as

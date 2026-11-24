@@ -88,7 +88,7 @@ func TestWebdavFS_StatLooksTheNameUp(t *testing.T) {
 	ctx := context.Background()
 
 	for range 2 {
-		info, err := fs.Stat(ctx, "/dataroom/DR/doc.txt")
+		info, err := fs.Stat(ctx, "/spaces/DR/doc.txt")
 		if err != nil {
 			t.Fatalf("Stat of a file: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestWebdavFS_StatLooksTheNameUp(t *testing.T) {
 			t.Errorf("content type = %q, want the MIME type of the node", ct)
 		}
 		for _, name := range []string{"link", "nothing"} {
-			if _, err := fs.Stat(ctx, "/dataroom/DR/"+name); !os.IsNotExist(err) {
+			if _, err := fs.Stat(ctx, "/spaces/DR/"+name); !os.IsNotExist(err) {
 				t.Errorf("Stat(%s) = %v, want a bare not-exist error", name, err)
 			}
 		}

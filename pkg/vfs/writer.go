@@ -109,14 +109,14 @@ func (fs *FS) upload(ctx context.Context, dataroomID, path string, c content) (n
 	}()
 	parentPath, name := SplitPath(path)
 	if name == "" {
-		return Node{}, false, as(ErrIsDir, errors.New("the dataroom root is not a file"))
+		return Node{}, false, as(ErrIsDir, errors.New("the root of the storage space is not a file"))
 	}
 	if c.size < 0 {
 		return Node{}, false, fmt.Errorf("negative size %d: %w", c.size, os.ErrInvalid)
 	}
 	sess, err := fs.Session(ctx, dataroomID)
 	if err != nil {
-		return Node{}, false, fmt.Errorf("dataroom session: %w", err)
+		return Node{}, false, fmt.Errorf("storage space session: %w", err)
 	}
 	parentID, err := fs.folderID(ctx, dataroomID, parentPath)
 	if err != nil {
@@ -329,12 +329,12 @@ func (fs *FS) discardUpload(dataroomID string, init service.StreamUploadInit) {
 	err := service.DiscardFailedUpload(fs.client, init.NodeID, init.VersionID, init.NewNode)
 	switch {
 	case err == nil && init.NewNode:
-		fs.logf("cleaned up orphaned node: dataroom %s, node %s", dataroomID, init.NodeID)
+		fs.logf("cleaned up orphaned node: space %s, node %s", dataroomID, init.NodeID)
 	case err == nil:
-		fs.logf("discarded the failed version: dataroom %s, node %s, version %s",
+		fs.logf("discarded the failed version: space %s, node %s, version %s",
 			dataroomID, init.NodeID, init.VersionID)
 	default:
-		fs.logf("a failed upload could not be cleaned up: dataroom %s, node %s, version %s: %s",
+		fs.logf("a failed upload could not be cleaned up: space %s, node %s, version %s: %s",
 			dataroomID, init.NodeID, init.VersionID, err)
 	}
 }
@@ -349,7 +349,7 @@ func (fs *FS) undoUpload(dataroomID, path string, node Node, created bool, prior
 	parentPath, _ := SplitPath(path)
 	if created || node.ID != prior {
 		if err := service.DiscardFailedUpload(fs.client, node.ID, node.VersionID, created); err != nil {
-			fs.logf("a file unlinked while it was sent could not be removed: dataroom %s, node %s, version %s: %s",
+			fs.logf("a file unlinked while it was sent could not be removed: space %s, node %s, version %s: %s",
 				dataroomID, node.ID, node.VersionID, err)
 		}
 	}
@@ -642,7 +642,7 @@ func (s *spool) accountLocked() {
 // cannot be created for lack of room.
 func (fs *FS) OpenSpool(ctx context.Context, dataroomID, path string, existing *Node, truncate bool) (Spool, error) {
 	if _, name := SplitPath(path); name == "" {
-		return nil, as(ErrIsDir, errors.New("the dataroom root is not a file"))
+		return nil, as(ErrIsDir, errors.New("the root of the storage space is not a file"))
 	}
 	s := &spool{fs: fs, dataroomID: dataroomID, flushing: make(chan struct{}, 1), path: cleanPath(path)}
 	switch {

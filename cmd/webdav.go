@@ -54,10 +54,10 @@ var webdavCmd = &cobra.Command{
 
 var webdavServeCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start a local WebDAV server exposing your datarooms",
-	Long: `Start a local WebDAV server on localhost that exposes all your RETYC datarooms.
+	Short: "Start a local WebDAV server exposing your storage spaces",
+	Long: `Start a local WebDAV server on localhost that exposes all your RETYC storage spaces.
 
-Datarooms are exposed under the /dataroom folder; other element types may be
+Storage spaces are exposed under the /spaces folder; other element types may be
 added at the root in the future.
 
 Key passphrase: prompted on the terminal unless the key is in the keyring cache;
@@ -70,7 +70,7 @@ printed at startup when the variable is unset.
 Example:
   RETYC_KEY_PASSPHRASE=your-passphrase retyc fs webdav serve --addr 127.0.0.1:8888 --auth
   # Then mount http://localhost:8888 in your WebDAV client
-  # Datarooms appear under /dataroom`,
+  # Storage spaces appear under /spaces`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		initCtx := cmd.Context()
 
@@ -159,7 +159,7 @@ Example:
 			rootHandler = dav.BasicAuth(rootHandler, dav.AuthUser, password)
 		} else if !dav.IsLoopbackAddr(addr) {
 			fmt.Fprintf(os.Stderr,
-				"WARNING: binding to %s without authentication exposes all dataroom contents "+
+				"WARNING: binding to %s without authentication exposes the contents of all storage spaces "+
 					"in cleartext to the network; consider --auth\n", addr)
 		}
 		srv := &http.Server{

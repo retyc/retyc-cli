@@ -42,11 +42,11 @@ func (r *RetycURI) IsRoot() bool { return r.Path == "/" }
 func ParseRetycURI(s string) (*RetycURI, error) {
 	const prefix = "retyc://"
 	if !strings.HasPrefix(s, prefix) {
-		return nil, fmt.Errorf("%q is not a retyc URI (expected retyc://dataroom-id/path)", s)
+		return nil, fmt.Errorf("%q is not a retyc URI (expected retyc://space-id/path)", s)
 	}
 	rest := strings.TrimPrefix(s, prefix)
 	if rest == "" {
-		return nil, fmt.Errorf("missing dataroom ID in %q", s)
+		return nil, fmt.Errorf("missing storage space ID in %q", s)
 	}
 	idx := strings.IndexByte(rest, '/')
 	var drID, nodePath string
@@ -58,7 +58,7 @@ func ParseRetycURI(s string) (*RetycURI, error) {
 		nodePath = rest[idx:]
 	}
 	if drID == "" {
-		return nil, fmt.Errorf("missing dataroom ID in %q", s)
+		return nil, fmt.Errorf("missing storage space ID in %q", s)
 	}
 
 	return &RetycURI{DataroomID: drID, Path: nodePath}, nil
@@ -234,7 +234,7 @@ func resolveDataroomSessionUncached(
 	kr := <-keyCh
 
 	if dr.err != nil {
-		return nil, fmt.Errorf("fetching dataroom: %w", dr.err)
+		return nil, fmt.Errorf("fetching storage space: %w", dr.err)
 	}
 	if kr.err != nil {
 		return nil, fmt.Errorf("fetching encryption key: %w", kr.err)
@@ -256,7 +256,7 @@ func resolveDataroomSessionUncached(
 func buildDataroomSession(dr *api.Dataroom, userIdentity *age.HybridIdentity) (*dataroomSession, error) {
 	sessionPrivKey, err := crypto.DecryptToString(dr.SessionPrivateKeyEnc, userIdentity)
 	if err != nil {
-		return nil, fmt.Errorf("decrypting dataroom session key: %w", err)
+		return nil, fmt.Errorf("decrypting the session key of the storage space: %w", err)
 	}
 
 	sessionIdentity, err := crypto.ParseIdentity(sessionPrivKey)
@@ -293,7 +293,7 @@ func GetDataroomSessionWithIdentity(
 ) (*DataroomSession, error) {
 	dr, err := client.GetDataroom(ctx, dataroomID)
 	if err != nil {
-		return nil, fmt.Errorf("fetching dataroom: %w", err)
+		return nil, fmt.Errorf("fetching storage space: %w", err)
 	}
 
 	return buildDataroomSession(dr, userIdentity)
@@ -1482,7 +1482,7 @@ func ListDatarooms(ctx context.Context, client *api.Client) (*ListDataroomsResul
 		},
 		func(_ context.Context, items []api.Dataroom) []api.Dataroom { return items })
 	if err != nil {
-		return nil, fmt.Errorf("listing datarooms: %w", err)
+		return nil, fmt.Errorf("listing storage spaces: %w", err)
 	}
 	items := slices.Concat(pages...)
 
@@ -1524,16 +1524,16 @@ func CreateDataroom(
 		if err == nil {
 			if machine && orgKey == "" {
 				fmt.Fprintln(diag.Writer(), "warning: the organization has no organization key: only this machine "+
-					"can decrypt the dataroom; add members with `retyc dataroom user add`")
+					"can decrypt the storage space; add members with `retyc space user add`")
 			}
 
 			return &CreateDataroomResult{ID: dr.ID, Title: dr.Title}, nil
 		}
 		if api.ErrorCode(err) != api.CodeMasterKeyMismatch {
-			return nil, fmt.Errorf("creating dataroom: %w", err)
+			return nil, fmt.Errorf("creating storage space: %w", err)
 		}
 		if attempt >= createAttempts {
-			return nil, fmt.Errorf("creating dataroom: the organization key changed during the creation, retry: %w", err)
+			return nil, fmt.Errorf("creating storage space: the organization key changed during the creation, retry: %w", err)
 		}
 		if orgKey, err = organizationKey(ctx, client, machine); err != nil {
 			return nil, err
@@ -1592,7 +1592,7 @@ func organizationKey(ctx context.Context, client *api.Client, machine bool) (str
 			return "", nil //nolint:nilerr // interrupted: the creation fails on the same context
 		}
 		fmt.Fprintf(diag.Writer(),
-			"warning: could not read the organization key (%v); the dataroom is created without it\n", err)
+			"warning: could not read the organization key (%v); the storage space is created without it\n", err)
 
 		return "", nil
 	}
@@ -1618,7 +1618,7 @@ func UpdateDataroom(
 ) (*api.Dataroom, error) {
 	dr, err := client.UpdateDataroom(ctx, dataroomID, u)
 	if err != nil {
-		return nil, fmt.Errorf("updating dataroom: %w", err)
+		return nil, fmt.Errorf("updating storage space: %w", err)
 	}
 
 	return dr, nil
@@ -1652,7 +1652,7 @@ func GetDataroomInfo(ctx context.Context, client *api.Client, dataroomID string)
 	users := <-usersCh
 
 	if dr.err != nil {
-		return nil, fmt.Errorf("fetching dataroom: %w", dr.err)
+		return nil, fmt.Errorf("fetching storage space: %w", dr.err)
 	}
 	if stats.err != nil {
 		return nil, fmt.Errorf("fetching stats: %w", stats.err)
@@ -1979,7 +1979,7 @@ func DeleteDataroomNode(
 
 	if parsed.Path == "/" {
 		if err := client.DeleteDataroom(ctx, parsed.DataroomID); err != nil {
-			return 0, fmt.Errorf("deleting dataroom: %w", err)
+			return 0, fmt.Errorf("deleting storage space: %w", err)
 		}
 
 		return 1, nil
@@ -2053,7 +2053,7 @@ func MoveDataroomNode(
 		return fmt.Errorf("destination: %w", err)
 	}
 	if src.DataroomID != dst.DataroomID {
-		return errors.New("source and destination must be in the same dataroom")
+		return errors.New("source and destination must be in the same storage space")
 	}
 
 	sess, err := resolveDataroomSession(ctx, cfg, client, src.DataroomID, reader)
@@ -2172,7 +2172,7 @@ func AddDataroomUser(
 // message for the refusal of a machine account joining another organization.
 func machineAddUserError(err error) error {
 	if api.ErrorCode(err) == api.CodeMachineOtherOrganization {
-		return fmt.Errorf("adding user: a machine account can only join datarooms of its organization: %w", err)
+		return fmt.Errorf("adding user: a machine account can only join storage spaces of its organization: %w", err)
 	}
 
 	return fmt.Errorf("adding user: %w", err)
@@ -2214,15 +2214,15 @@ func ResolveNewDataroomOwner(
 		}
 	}
 	if target == nil {
-		return api.DataroomUser{}, fmt.Errorf("%s is not a member of dataroom %s", user, dataroomID)
+		return api.DataroomUser{}, fmt.Errorf("%s is not a member of storage space %s", user, dataroomID)
 	}
 	switch target.Role {
 	case "owner":
-		return api.DataroomUser{}, fmt.Errorf("%s already owns dataroom %s", user, dataroomID)
+		return api.DataroomUser{}, fmt.Errorf("%s already owns storage space %s", user, dataroomID)
 	case "admin":
 	default:
 		return api.DataroomUser{}, fmt.Errorf(
-			"%s is %s of the dataroom: only an admin can become owner (remove and re-add them with --role admin)",
+			"%s is %s of the storage space: only an admin can become owner (remove and re-add them with --role admin)",
 			user, target.Role)
 	}
 
@@ -2235,7 +2235,7 @@ func ResolveNewDataroomOwner(
 func TransferDataroomOwnership(ctx context.Context, client *api.Client, dataroomID, userID string) error {
 	err := client.TransferDataroomOwnership(ctx, dataroomID, userID)
 	if api.ErrorCode(err) == api.CodeRoleForbidden {
-		return fmt.Errorf("only the owner of the dataroom can transfer it: %w", err)
+		return fmt.Errorf("only the owner of the storage space can transfer it: %w", err)
 	}
 	if err != nil {
 		return fmt.Errorf("transferring ownership: %w", err)
@@ -2281,7 +2281,7 @@ func rekeyDataroom(ctx context.Context, client *api.Client, dataroomID, sessionP
 					"their access may persist until you re-run this command\n")
 		}
 
-		return fmt.Errorf("rekeying dataroom: %w", err)
+		return fmt.Errorf("rekeying storage space: %w", err)
 	}
 
 	return nil

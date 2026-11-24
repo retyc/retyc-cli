@@ -27,7 +27,7 @@ func TestServeUntilDrained_WaitsForRequestsAndLocks(t *testing.T) {
 	fs := newLot2FS(t, fake)
 	handler, mirror := newLockedHandler(fs)
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, lockRequest(t, "/dataroom/DR/locked.txt", ""))
+	handler.ServeHTTP(w, lockRequest(t, "/spaces/DR/locked.txt", ""))
 	if mirror.held() != 1 {
 		t.Fatalf("held = %d, want the lock taken", mirror.held())
 	}
@@ -137,7 +137,7 @@ func TestLockMirror_ReleasesALockGrantedLapsed(t *testing.T) {
 	fs := newLot2FS(t, fake)
 	handler, mirror := newLockedHandler(fs)
 
-	r := lockRequest(t, "/dataroom/DR/locked.txt", "")
+	r := lockRequest(t, "/spaces/DR/locked.txt", "")
 	r.Header.Set("Timeout", "Second-0")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
@@ -190,7 +190,7 @@ func TestHandleCopy_DestinationLookupFailure(t *testing.T) {
 			&vfs.Listing{Nodes: root, FetchedAt: time.Now()})
 
 		w := httptest.NewRecorder()
-		fs.handleCopy(w, copyRequest(t, "/dataroom/DR/doc.txt", "/dataroom/DR/sub/copy.txt", ""))
+		fs.handleCopy(w, copyRequest(t, "/spaces/DR/doc.txt", "/spaces/DR/sub/copy.txt", ""))
 		if w.Code != status {
 			t.Errorf("%d: COPY status = %d (%s)", status, w.Code, strings.TrimSpace(w.Body.String()))
 		}

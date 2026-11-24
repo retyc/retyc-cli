@@ -242,8 +242,8 @@ func TestMachineRmOwnsDatarooms(t *testing.T) {
 	srv := newMachineAdminServer(t, &machineAdminServer{deleteConflict: true})
 
 	_, err := runMachineAdmin(t, srv.URL, "rm", "01a12b08-bccf-76bd-b768-df26b8c4d777", "--yes")
-	if !errors.Is(err, api.ErrConflict) || !strings.Contains(err.Error(), "still owns datarooms") ||
-		!strings.Contains(err.Error(), "retyc admin dataroom chown") {
-		t.Fatalf("error = %v, want the owns-datarooms hint", err)
+	if !errors.Is(err, api.ErrConflict) || !strings.Contains(err.Error(), "still owns storage spaces") ||
+		!strings.Contains(err.Error(), "retyc admin space chown") {
+		t.Fatalf("error = %v, want the owns-spaces hint", err)
 	}
 }

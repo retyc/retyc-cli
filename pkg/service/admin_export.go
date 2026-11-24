@@ -187,7 +187,7 @@ func exportDataroom(
 	dr *api.AdminDataroom, dir string, progress ProgressFn,
 ) (exported bool, reason string, err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return false, "", fmt.Errorf("creating dataroom directory: %w", err)
+		return false, "", fmt.Errorf("creating storage space directory: %w", err)
 	}
 
 	users, err := client.AdminListDataroomUsers(ctx, dr.ID)
@@ -292,20 +292,20 @@ func AdminExportAll(
 		return fmt.Sprintf("/dataroom?page=%d&size=100", page)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("listing datarooms: %w", err)
+		return nil, fmt.Errorf("listing storage spaces: %w", err)
 	}
 	manifest.Datarooms = len(datarooms)
 
 	for i := range datarooms {
 		dr := &datarooms[i]
-		logf("Dataroom %s (%s)…", dr.Title, dr.ID)
+		logf("Storage space %s (%s)…", dr.Title, dr.ID)
 		dir := filepath.Join(params.OutputDir, "datarooms", dr.ID)
 		exported, reason, err := exportDataroom(ctx, client, orgKey, dr, dir, progress)
 		switch {
 		case err != nil:
 			// Record and keep going: a partial reversibility export beats an
 			// aborted one, and the manifest keeps the failure visible.
-			manifest.Errors = append(manifest.Errors, fmt.Sprintf("dataroom %s (%s): %v", dr.ID, dr.Title, err))
+			manifest.Errors = append(manifest.Errors, fmt.Sprintf("storage space %s (%s): %v", dr.ID, dr.Title, err))
 			logf("  ERROR: %v", err)
 		case exported:
 			manifest.DataroomsExported++

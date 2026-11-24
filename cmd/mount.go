@@ -40,21 +40,21 @@ func parseMountArgs(all bool, args []string) (mountTarget, error) {
 			return mountTarget{}, errors.New("with --all, expected one argument: the mount point")
 		}
 		if strings.HasPrefix(args[0], "retyc://") {
-			return mountTarget{}, errors.New("--all mounts every dataroom: give the mount point only")
+			return mountTarget{}, errors.New("--all mounts every storage space: give the mount point only")
 		}
 
 		return mountTarget{all: true, mountpoint: args[0]}, nil
 	}
 	if len(args) != 2 {
 		return mountTarget{}, errors.New(
-			"expected a dataroom and a mount point (retyc://<dataroom-id> <mountpoint>), or --all <mountpoint>")
+			"expected a storage space and a mount point (retyc://<space-id> <mountpoint>), or --all <mountpoint>")
 	}
 	uri, err := service.ParseRetycURI(args[0])
 	if err != nil {
 		return mountTarget{}, err
 	}
 	if strings.Trim(uri.Path, "/") != "" {
-		return mountTarget{}, fmt.Errorf("%q names a folder: only a whole dataroom can be mounted (retyc://%s)",
+		return mountTarget{}, fmt.Errorf("%q names a folder: only a whole storage space can be mounted (retyc://%s)",
 			args[0], uri.DataroomID)
 	}
 
@@ -62,15 +62,15 @@ func parseMountArgs(all bool, args []string) (mountTarget, error) {
 }
 
 var fsMountCmd = &cobra.Command{
-	Use:   "mount {retyc://<dataroom-id> | --all} <mountpoint>",
-	Short: "Mount your datarooms as a filesystem (Linux)",
-	Long: `Mount a dataroom, or all of them, as a local folder (RetycFS). Files are decrypted
+	Use:   "mount {retyc://<space-id> | --all} <mountpoint>",
+	Short: "Mount your storage spaces as a filesystem (Linux)",
+	Long: `Mount a storage space, or all of them, as a local folder (RetycFS). Files are decrypted
 locally as they are read. A file being written is kept in a temporary file
 (mode 0600, removed when the file is closed) and sent, encrypted, as a new
 version when it is closed or fsync'ed.
 
-  retyc fs mount retyc://<dataroom-id> <mountpoint>   the dataroom is the root
-  retyc fs mount --all <mountpoint>                   one folder per dataroom
+  retyc fs mount retyc://<space-id> <mountpoint>   the space is the root
+  retyc fs mount --all <mountpoint>                one folder per space
 
 The swap and backup files of an editor (.name.swp, name~: see --local-file)
 are kept on this machine for as long as the mount lasts and never sent: no
@@ -111,7 +111,7 @@ operations as they happen (by inode number, never by name).
 
 Example:
   mkdir -p ~/dr
-  RETYC_KEY_PASSPHRASE=your-passphrase retyc fs mount retyc://<dataroom-id> ~/dr`,
+  RETYC_KEY_PASSPHRASE=your-passphrase retyc fs mount retyc://<space-id> ~/dr`,
 	// Arguments are checked in RunE, where both forms are told apart.
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -273,7 +273,7 @@ func checkSpoolDir(dir string) (string, error) {
 // addMountFlags declares the flags of `fs mount` on cmd.
 func addMountFlags(cmd *cobra.Command) {
 	flags := cmd.Flags()
-	flags.Bool("all", false, "mount every dataroom, one folder each")
+	flags.Bool("all", false, "mount every storage space, one folder each")
 	flags.Bool("read-only", false, "mount read-only: every change is refused")
 	addCacheFlags(cmd, false)
 	flags.Duration("entry-ttl", 0, "how long the kernel keeps a name without asking again (0: half of --cache-ttl)")
@@ -304,7 +304,7 @@ func addMountFlags(cmd *cobra.Command) {
 			strings.Join(config.DefaultMountLocalFiles(), " ")+")")
 	flags.Bool("warmup", false,
 		"list the whole tree in the background once mounted, to fill the listing cache")
-	flags.Int("warmup-depth", 0, "levels of folders the warmup lists in each dataroom (0: all)")
+	flags.Int("warmup-depth", 0, "levels of folders the warmup lists in each space (0: all)")
 	flags.Bool("unsafe-write", false,
 		"let the API acknowledge uploads before they are stored (faster; a failed background store is not reported)")
 	flags.String("metrics-addr", "",

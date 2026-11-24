@@ -1,4 +1,4 @@
-# Example systemd user unit: mounts your datarooms in ~/Retyc while you are
+# Example systemd user unit: mounts your storage spaces in ~/Retyc while you are
 # logged in, with your own account. On a server, with a machine account, see
 # ../system/retyc-mount.service.
 #
@@ -21,7 +21,7 @@
 # Reference: https://github.com/retyc/retyc-cli/blob/master/doc/retycfs.md
 
 [Unit]
-Description=RETYC dataroom mount
+Description=RETYC storage space mount
 Documentation=https://github.com/retyc/retyc-cli/blob/master/doc/retycfs.md
 
 [Service]
@@ -30,8 +30,8 @@ Environment=RETYC_ENV_FILE=%h/.config/retyc/env
 # Clears what a killed mount left behind ("transport endpoint is not
 # connected"), which the start would refuse; "-": nothing to clear is fine.
 ExecStartPre=-/usr/bin/fusermount3 -u -z %h/Retyc
-# Every dataroom, one folder each; or a single one at the root of the mount
-# point: retyc://<dataroom-id> %h/Retyc
+# Every storage space, one folder each; or a single one at the root of the mount
+# point: retyc://<space-id> %h/Retyc
 ExecStart=/usr/bin/retyc fs mount --all %h/Retyc
 # SIGTERM unmounts once pending uploads are sent (--drain-timeout, 5 min):
 # give it longer before the SIGKILL.

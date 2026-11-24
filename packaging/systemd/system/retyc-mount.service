@@ -1,4 +1,4 @@
-# Example systemd unit: a server mounts datarooms at boot with a machine
+# Example systemd unit: a server mounts storage spaces at boot with a machine
 # account. No login nor passphrase: the machine authenticates with the keys of
 # its enrollment. On a workstation, with your own account, see
 # ../user/retyc-mount.service.
@@ -25,7 +25,7 @@
 # Reference: https://github.com/retyc/retyc-cli/blob/master/doc/retycfs.md
 
 [Unit]
-Description=RETYC dataroom mount (machine account)
+Description=RETYC storage space mount (machine account)
 Documentation=https://github.com/retyc/retyc-cli/blob/master/doc/retycfs.md
 Wants=network-online.target
 After=network-online.target
@@ -38,8 +38,8 @@ Environment=RETYC_MACHINE_DIR=/var/lib/retyc/machine
 # Clears what a killed mount left behind ("transport endpoint is not
 # connected"), which the start would refuse; "-": nothing to clear is fine.
 ExecStartPre=-/usr/bin/fusermount3 -u -z /srv/retyc
-# Every dataroom of the machine, one folder each; or a single one at the
-# root of the mount point: retyc://<dataroom-id> /srv/retyc
+# Every storage space of the machine, one folder each; or a single one at the
+# root of the mount point: retyc://<space-id> /srv/retyc
 ExecStart=/usr/bin/retyc fs mount --all /srv/retyc
 # SIGTERM unmounts once pending uploads are sent (--drain-timeout, 5 min):
 # give it longer before the SIGKILL.

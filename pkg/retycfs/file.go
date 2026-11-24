@@ -246,7 +246,7 @@ func (n *fileNode) lockForWrite(ctx context.Context, st *inodeState) (bool, erro
 		case errors.Is(err, api.ErrLocked), ctx.Err() != nil:
 			return false, err
 		default:
-			n.drv.logf("the API lock of a file could not be taken, it is opened without it: dataroom %s, node %q, inode %d: %s",
+			n.drv.logf("the API lock of a file could not be taken, it is opened without it: space %s, node %q, inode %d: %s",
 				n.dataroomID, node.ID, n.ino, errnoName(toErrno(err)))
 		}
 	}

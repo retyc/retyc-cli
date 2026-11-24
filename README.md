@@ -8,8 +8,8 @@
 
 # Retyc CLI
 
-> Official command-line interface for [Retyc](https://retyc.com) - send transfers and manage datarooms directly from
-> your terminal. With **[RetycFS](doc/retycfs.md)**, mount your datarooms as a local folder on Linux. Also runs as a
+> Official command-line interface for [Retyc](https://retyc.com) - send transfers and manage storage spaces directly from
+> your terminal. With **[RetycFS](doc/retycfs.md)**, mount your storage spaces as a local folder on Linux. Also runs as a
 > local **[MCP server](doc/mcp.md)**: connect your AI agent and control Retyc in plain language.
 
 <img src=".media/demo_0.0.2.gif" width="500" alt="Retyc CLI demo" />
@@ -21,7 +21,7 @@
 [Retyc](https://retyc.com) is a European sovereign file storage platform with end-to-end post-quantum encryption. Data
 stays in Europe, GDPR-compliant by design.
 
-`retyc-cli` lets you integrate Retyc transfers and datarooms into your scripts, pipelines, and workflows - no browser
+`retyc-cli` lets you integrate Retyc transfers and storage spaces into your scripts, pipelines, and workflows - no browser
 required.
 
 ---
@@ -115,7 +115,7 @@ retyc transfer download <transfer-id>
 `retyc-cli` runs as a [Model Context Protocol](https://modelcontextprotocol.io) server — connect it to your AI agent and
 control Retyc in plain language:
 
-> *"Create a dataroom called 'Release v2', upload ./dist/, and add alice@example.com as editor."*
+> *"Create a storage space called 'Release v2', upload ./dist/, and add alice@example.com as editor."*
 > *"Send all PDFs in ./reports/ to bob@example.com, expire in 7 days."*
 > *"List my latest transfers and download the most recent one into ~/Downloads/."*
 
@@ -125,13 +125,13 @@ Full integration guide (Claude Desktop, Cursor, Windsurf, example prompts): [doc
 
 ## RetycFS, the Retyc file system
 
-RetycFS mounts your datarooms as a local folder on Linux. Any program can open, edit
+RetycFS mounts your storage spaces as a local folder on Linux. Any program can open, edit
 and save the files in it: `ls`, `cp`, a file manager, an editor, a script.
 
 ```sh
 mkdir -p ~/retyc
-retyc fs mount retyc://<dataroom-id> ~/retyc   # one dataroom, the root of ~/retyc
-retyc fs mount --all ~/retyc                   # or every dataroom, one folder each
+retyc fs mount retyc://<space-id> ~/retyc      # one space, the root of ~/retyc
+retyc fs mount --all ~/retyc                   # or every space, one folder each
 ```
 
 Full guide: [doc/retycfs.md](doc/retycfs.md)
@@ -140,15 +140,15 @@ Full guide: [doc/retycfs.md](doc/retycfs.md)
 
 ## Documentation
 
-| Topic                                        | Link                                         |
-|----------------------------------------------|----------------------------------------------|
-| Full commands reference                      | [doc/commands.md](doc/commands.md)           |
-| RetycFS (mount datarooms as a folder, Linux) | [doc/retycfs.md](doc/retycfs.md)             |
-| MCP server + tools reference                 | [doc/mcp.md](doc/mcp.md)                     |
-| Docker usage                                 | [doc/docker.md](doc/docker.md)               |
-| Claude Desktop bundle (MCPB)                 | [doc/mcpb.md](doc/mcpb.md)                   |
-| CI / CD integration                          | [doc/ci-cd.md](doc/ci-cd.md)                 |
-| Configuration & env vars                     | [doc/configuration.md](doc/configuration.md) |
+| Topic                                             | Link                                         |
+|---------------------------------------------------|----------------------------------------------|
+| Full commands reference                           | [doc/commands.md](doc/commands.md)           |
+| RetycFS (mount storage spaces as a folder, Linux) | [doc/retycfs.md](doc/retycfs.md)             |
+| MCP server + tools reference                      | [doc/mcp.md](doc/mcp.md)                     |
+| Docker usage                                      | [doc/docker.md](doc/docker.md)               |
+| Claude Desktop bundle (MCPB)                      | [doc/mcpb.md](doc/mcpb.md)                   |
+| CI / CD integration                               | [doc/ci-cd.md](doc/ci-cd.md)                 |
+| Configuration & env vars                          | [doc/configuration.md](doc/configuration.md) |
 
 ---
 

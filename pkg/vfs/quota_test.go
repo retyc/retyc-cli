@@ -93,7 +93,7 @@ func TestQuota_Unavailable(t *testing.T) {
 			t.Error("Quota reported counters from a failed fetch")
 		}
 	}
-	if got := logs.list(); len(got) != 1 || !strings.HasPrefix(got[0], "dataroom quota: ") {
+	if got := logs.list(); len(got) != 1 || !strings.HasPrefix(got[0], "storage space quota: ") {
 		t.Errorf("logged %v, want the failure once for the TTL", got)
 	}
 	if got := len(fake.list()); got != 1 {
@@ -101,7 +101,7 @@ func TestQuota_Unavailable(t *testing.T) {
 	}
 	// Another dataroom is another window.
 	if _, _, ok := fs.Quota(context.Background(), "dr2"); ok || len(logs.list()) != 2 {
-		t.Errorf("a second dataroom: logged %v, want its own failure", logs.list())
+		t.Errorf("a second space: logged %v, want its own failure", logs.list())
 	}
 	// Once the TTL is over the API is asked again, and the failure told again.
 	time.Sleep(60 * time.Millisecond)

@@ -1,12 +1,12 @@
 # WebDAV Server
 
-`retyc fs webdav serve` exposes your datarooms as a network drive for Finder, Windows
+`retyc fs webdav serve` exposes your storage spaces as a network drive for Finder, Windows
 Explorer, a file manager or any WebDAV client. Files are encrypted and decrypted locally:
 the Retyc servers never see plaintext. On Linux, [RetycFS](retycfs.md) mounts them
 directly.
 
 ```sh
-retyc fs webdav serve            # http://127.0.0.1:8888, datarooms under /dataroom
+retyc fs webdav serve            # http://127.0.0.1:8888, storage spaces under /spaces
 ```
 
 It needs a login (`retyc auth login`) and the key passphrase: prompted, taken from the
@@ -35,32 +35,34 @@ Durations need a unit (`90s`, `2m`).
 
 ```
 /
-└── dataroom/
-    ├── Project Alpha/        ← one folder per dataroom (its title)
+└── spaces/
+    ├── Project Alpha/        ← one folder per storage space (its title)
     │   └── report.pdf
     └── Project Alpha (2)/    ← same title: numeric suffix, stable across refreshes
 ```
 
+The folder was called `/dataroom` before: point existing mounts at `/spaces`.
+
 ## Supported operations
 
-| Action             | WebDAV method     | Notes                                                       |
-|--------------------|-------------------|-------------------------------------------------------------|
-| List / browse      | `PROPFIND`        | Names, sizes and MIME types decrypted on the fly            |
-| Read / download    | `GET`             | Streamed, range requests supported                          |
-| Upload / overwrite | `PUT`             | An existing name gets a new **version**                     |
-| Create folder      | `MKCOL`           |                                                             |
-| Delete             | `DELETE`          | A file, or a folder and its contents                        |
-| Rename / move      | `MOVE`            | Within the **same** dataroom only                           |
-| Copy               | `COPY`            | Files only, same dataroom, done by the server               |
-| Lock / unlock      | `LOCK` / `UNLOCK` | Mirrored onto the dataroom                                  |
-| Change permissions | `PROPPATCH`       | Execute bits only (`chmod +x`)                              |
-| Quota              | `PROPFIND`        | `quota-used-bytes` / `quota-available-bytes` (RFC 4331)     |
+| Action             | WebDAV method     | Notes                                                   |
+|--------------------|-------------------|---------------------------------------------------------|
+| List / browse      | `PROPFIND`        | Names, sizes and MIME types decrypted on the fly        |
+| Read / download    | `GET`             | Streamed, range requests supported                      |
+| Upload / overwrite | `PUT`             | An existing name gets a new **version**                 |
+| Create folder      | `MKCOL`           |                                                         |
+| Delete             | `DELETE`          | A file, or a folder and its contents                    |
+| Rename / move      | `MOVE`            | Within the **same** storage space only                  |
+| Copy               | `COPY`            | Files only, same storage space, done by the server      |
+| Lock / unlock      | `LOCK` / `UNLOCK` | Mirrored onto the storage space                         |
+| Change permissions | `PROPPATCH`       | Execute bits only (`chmod +x`)                          |
+| Quota              | `PROPFIND`        | `quota-used-bytes` / `quota-available-bytes` (RFC 4331) |
 
 - **Copy** duplicates the last version on the server, nothing downloaded. An existing
   destination is deleted first, unless `Overwrite: F`. Folders answer `501`.
 - **Permissions**: only the `executable` property (davfs2's) is writable; it adds or
   removes the execute bits. Everything else answers `403`.
-- **Locks** on a file are advisory locks in the dataroom: a file locked elsewhere answers
+- **Locks** on a file are advisory locks in the storage space: a file locked elsewhere answers
   `423`; clients that do not lock can still write. Locks on folders stay local.
 - **Symbolic links are hidden** (WebDAV has none); a `PUT` on one answers `409`.
 - File names containing `/` are left out of listings, with a warning.

@@ -261,10 +261,10 @@ func TestShutdown_DrainCutShort_ChunkedUploadNamesNothing(t *testing.T) {
 
 	logs := m.logs.text()
 	// What vfs reports is recorded too: the node the upload created is gone.
-	if !strings.Contains(logs, "cleaned up orphaned node: dataroom dr1, node ") {
+	if !strings.Contains(logs, "cleaned up orphaned node: space dr1, node ") {
 		t.Errorf("logs = %q, want the cleanup of the node reported by the tree", logs)
 	}
-	want := fmt.Sprintf("its changes are lost: dataroom dr1, no node (never stored), parent %s, inode ", parent)
+	want := fmt.Sprintf("its changes are lost: space dr1, no node (never stored), parent %s, inode ", parent)
 	if strings.Count(logs, "its changes are lost") != 1 || !strings.Contains(logs, want) ||
 		!strings.Contains(logs, fmt.Sprintf(", %d bytes: not sent before the end of the shutdown drain", len(data))) {
 		t.Errorf("logs = %q, want one loss with %q and the size", logs, want)
