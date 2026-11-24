@@ -741,8 +741,10 @@ func registerDataroomTools(srv *server.MCPServer) {
 			if err != nil {
 				return toolErr(err)
 			}
+			printWarnings(result.Warnings)
 
-			return mcp.NewToolResultText(toJSON(result)), nil
+			// The tool's answer keeps its shape: the warnings went to stderr.
+			return mcp.NewToolResultText(toJSON(struct{ ID, Title string }{result.ID, result.Title})), nil
 		},
 	)
 

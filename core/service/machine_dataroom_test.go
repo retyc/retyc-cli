@@ -78,9 +78,9 @@ func (s *createServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// create runs CreateDataroom against s with cfg and returns what it wrote as
-// warnings.
-func (s *createServer) create(t *testing.T, cfg *config.Config) (string, error) {
+// create runs CreateDataroom against s with cfg and returns the warnings of
+// its result. Nothing must be written on diag.
+func (s *createServer) create(t *testing.T, cfg *config.Config) ([]string, error) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(s.handler))
 	t.Cleanup(srv.Close)
@@ -90,9 +90,15 @@ func (s *createServer) create(t *testing.T, cfg *config.Config) (string, error) 
 	var buf bytes.Buffer
 	diag.SetOutput(&buf)
 	t.Cleanup(func() { diag.SetOutput(nil) })
-	_, err := CreateDataroom(context.Background(), cfg, client, "T", api.DataroomOptions{}, nil)
+	res, err := CreateDataroom(context.Background(), cfg, client, "T", api.DataroomOptions{}, nil)
+	if buf.Len() != 0 {
+		t.Errorf("CreateDataroom wrote on diag: %q", buf.String())
+	}
+	if err != nil {
+		return nil, err
+	}
 
-	return buf.String(), err
+	return res.Warnings, nil
 }
 
 // machineCfg is the configuration of the machine account of s.
@@ -133,8 +139,8 @@ func TestCreateDataroomMachineRecipients(t *testing.T) {
 	assertOpens(t, body, machine, "machine")
 	assertOpens(t, body, org, "organization")
 	assertCannotOpen(t, body, other)
-	if warn != "" {
-		t.Errorf("warning = %q, want none", warn)
+	if len(warn) != 0 {
+		t.Errorf("warnings = %q, want none", warn)
 	}
 }
 
@@ -165,10 +171,10 @@ func TestCreateDataroomMachineNoOrganizationKey(t *testing.T) {
 	if _, ok := s.creates[0]["master_public_key"]; ok {
 		t.Error("master_public_key sent without a service account")
 	}
-	const want = "warning: the organization has no organization key: only this machine can decrypt the " +
-		"storage space; add members with `retyc space user add`\n"
-	if warn != want {
-		t.Errorf("warning = %q, want %q", warn, want)
+	const want = "the organization has no organization key: only this machine can decrypt the " +
+		"storage space; add members with `retyc space user add`"
+	if len(warn) != 1 || warn[0] != want {
+		t.Errorf("warnings = %q, want [%q]", warn, want)
 	}
 }
 
@@ -181,9 +187,11 @@ func TestCreateDataroomUserUnreadableOrgKeyContinues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
 	}
-	// The unreadable key is reported (diag output), the machine warning is not.
-	if len(s.creates) != 1 || strings.Contains(warn, "only this machine") {
-		t.Errorf("POST /dataroom calls = %d, warning = %q, want 1 and no machine warning", len(s.creates), warn)
+	// The unreadable key is reported in the result, the machine warning is not.
+	if len(s.creates) != 1 || len(warn) != 1 ||
+		!strings.HasPrefix(warn[0], "could not read the organization key (") ||
+		!strings.HasSuffix(warn[0], "); the storage space is created without it") {
+		t.Errorf("POST /dataroom calls = %d, warnings = %q, want 1 and the unreadable key warning", len(s.creates), warn)
 	}
 }
 

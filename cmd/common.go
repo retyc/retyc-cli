@@ -17,6 +17,7 @@ import (
 	"github.com/retyc/retyc-cli/core/api"
 	"github.com/retyc/retyc-cli/core/auth"
 	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/diag"
 	"github.com/retyc/retyc-cli/core/ui"
 	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
@@ -156,6 +157,14 @@ func resetMachineTokenSource() {
 	machineSource.mu.Lock()
 	defer machineSource.mu.Unlock()
 	machineSource.id, machineSource.src = nil, nil
+}
+
+// printWarnings writes each warning a service result carries to stderr, as
+// "warning: <text>" (through diag, like the core's own warnings).
+func printWarnings(warnings []string) {
+	for _, w := range warnings {
+		fmt.Fprintln(diag.Writer(), "warning: "+w)
+	}
 }
 
 // newAPIClient loads config, obtains a valid token, and returns both the config

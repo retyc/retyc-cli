@@ -88,6 +88,9 @@ type ListDataroomsResult struct {
 type CreateDataroomResult struct {
 	ID    string
 	Title string
+	// Warnings are the messages for the user that did not fail the
+	// creation, without a "warning:" prefix. Empty most of the time.
+	Warnings []string
 }
 
 // DataroomInfoResult holds the full metadata of a dataroom.

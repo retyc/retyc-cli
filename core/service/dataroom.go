@@ -1500,7 +1500,9 @@ const createAttempts = 2
 // organization has an active one, as the web app does, so that the
 // organization can recover the dataroom. A key that changed between its read
 // and the creation (409 MASTER_KEY_MISMATCH) is read again and the creation
-// retried once with fresh session material.
+// retried once with fresh session material. What deserves the user's
+// attention without failing the creation (no organization key, a key that
+// could not be read) is returned in Warnings, never written.
 func CreateDataroom(
 	ctx context.Context, cfg *config.Config, client *api.Client, title string, opts api.DataroomOptions,
 	reader PassphraseReader,
@@ -1514,7 +1516,7 @@ func CreateDataroom(
 		return nil, errNoActiveKey(machine)
 	}
 
-	orgKey, err := organizationKey(ctx, client, machine)
+	orgKey, warning, err := organizationKey(ctx, client, machine)
 	if err != nil {
 		return nil, err
 	}
@@ -1522,12 +1524,16 @@ func CreateDataroom(
 	for attempt := 1; ; attempt++ {
 		dr, err := createDataroom(ctx, client, title, userKey.PublicKey, orgKey, opts)
 		if err == nil {
+			res := &CreateDataroomResult{ID: dr.ID, Title: dr.Title}
+			if warning != "" {
+				res.Warnings = append(res.Warnings, warning)
+			}
 			if machine && orgKey == "" {
-				fmt.Fprintln(diag.Writer(), "warning: the organization has no organization key: only this machine "+
+				res.Warnings = append(res.Warnings, "the organization has no organization key: only this machine "+
 					"can decrypt the storage space; add members with `retyc space user add`")
 			}
 
-			return &CreateDataroomResult{ID: dr.ID, Title: dr.Title}, nil
+			return res, nil
 		}
 		if api.ErrorCode(err) != api.CodeMasterKeyMismatch {
 			return nil, fmt.Errorf("creating storage space: %w", err)
@@ -1535,7 +1541,7 @@ func CreateDataroom(
 		if attempt >= createAttempts {
 			return nil, fmt.Errorf("creating storage space: the organization key changed during the creation, retry: %w", err)
 		}
-		if orgKey, err = organizationKey(ctx, client, machine); err != nil {
+		if orgKey, warning, err = organizationKey(ctx, client, machine); err != nil {
 			return nil, err
 		}
 	}
@@ -1578,26 +1584,25 @@ func createDataroom(
 
 // organizationKey returns the organization key to add to a new dataroom, ""
 // when there is none. For a user, a failed read is not fatal, as in the web
-// app: the dataroom is then created without the organization key, with a
-// warning. A machine account fails instead: its datarooms must stay
+// app: the dataroom is then created without the organization key, and warning
+// says so. A machine account fails instead: its datarooms must stay
 // recoverable by the organization, and an organization with no service
 // account (nil, a 404) is the only "no key" it accepts.
-func organizationKey(ctx context.Context, client *api.Client, machine bool) (string, error) {
+func organizationKey(ctx context.Context, client *api.Client, machine bool) (key, warning string, err error) {
 	sa, err := client.GetOrganizationServiceAccount(ctx)
 	if err != nil {
 		if machine {
-			return "", fmt.Errorf("reading the organization key: %w", err)
+			return "", "", fmt.Errorf("reading the organization key: %w", err)
 		}
 		if ctx.Err() != nil {
-			return "", nil //nolint:nilerr // interrupted: the creation fails on the same context
+			return "", "", nil //nolint:nilerr // interrupted: the creation fails on the same context
 		}
-		fmt.Fprintf(diag.Writer(),
-			"warning: could not read the organization key (%v); the storage space is created without it\n", err)
 
-		return "", nil
+		return "", fmt.Sprintf("could not read the organization key (%v); the storage space is created without it",
+			err), nil
 	}
 
-	return sa.OrganizationKey(), nil
+	return sa.OrganizationKey(), "", nil
 }
 
 // errNoActiveKey is the error of an account with no active encryption key.

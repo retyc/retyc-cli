@@ -141,6 +141,7 @@ var dataroomCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		printWarnings(result.Warnings)
 
 		if jsonOutput {
 			return printJSON(dataroomCreateJSON{ID: result.ID, Title: result.Title})
