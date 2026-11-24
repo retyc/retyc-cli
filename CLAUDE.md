@@ -157,7 +157,7 @@ stdout = results only, stderr = everything else (prompts, progress, warnings).
 - `api.BaseTransport(insecure)` (`pkg/api/transport.go`) is the **only** place an
   `http.Transport` is built (proxy from env, `SSL_CERT_FILE` / `SSL_CERT_DIR` added to
   the system pool, TLS ≥ 1.2). The OIDC client (`newHTTPClient`) and `api.New` both use
-  it. HTTP/2 only, one multiplexed connection: concurrency settings bound backend load.
+  it; an importer may replace it with `api.WithBaseTransport`. HTTP/2 only, one multiplexed connection: concurrency settings bound backend load.
 - `InitTLSRoots()` runs in `rootCmd.PersistentPreRunE`, skipped by `annotationOffline`
   commands. **Never add a `PersistentPreRun(E)` to a subcommand or group** (cobra would
   run it instead of the root's).

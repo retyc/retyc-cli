@@ -56,6 +56,7 @@ type Client struct {
 type Option func(*clientOptions)
 
 type clientOptions struct {
+	baseTransport       http.RoundTripper
 	wrapTransport       func(http.RoundTripper) http.RoundTripper
 	unsafeWrite         bool
 	missingChunkRetries []time.Duration
@@ -82,6 +83,17 @@ func WithMissingChunkRetries(delays ...time.Duration) Option {
 	return func(o *clientOptions) { o.missingChunkRetries = delays }
 }
 
+// WithBaseTransport replaces BaseTransport(insecure) as the lowest layer of
+// the client, the one that opens connections, for an importer whose own
+// network settings (CA, bind address, proxy, timeouts…) must apply to the API
+// calls. Every layer above it is unchanged: token, User-Agent, WrapTransport
+// and the 429 retry. The caller is responsible for the HTTP/2, TLS, proxy and
+// timeout settings of rt; New neither inspects nor alters it, and its insecure
+// argument then has no effect. A nil rt keeps BaseTransport.
+func WithBaseTransport(rt http.RoundTripper) Option {
+	return func(o *clientOptions) { o.baseTransport = rt }
+}
+
 // WrapTransport wraps the RoundTripper that sends a request, so wrap sees
 // every attempt exactly as sent (token and User-Agent attached), a request
 // replayed after a 429 included: the retry transport sits outside it. Used to
@@ -95,7 +107,8 @@ func WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) Option {
 // A nil tokSource makes an anonymous client that sends no Authorization header.
 // userAgent is sent as the User-Agent header on all requests.
 // When insecure is true, TLS certificate verification is skipped, which allows
-// connecting to servers using self-signed certificates.
+// connecting to servers using self-signed certificates (ignored with
+// WithBaseTransport).
 // When debug is true, raw API responses are printed to stderr.
 func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debug bool, opts ...Option) *Client {
 	o := clientOptions{
@@ -107,23 +120,14 @@ func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debu
 		opt(&o)
 	}
 
-	// BaseTransport carries the proxy settings from the environment and the
-	// root CAs loaded by InitTLSRoots; only the timeouts are specific here.
-	base := BaseTransport(insecure)
-	base.TLSHandshakeTimeout = 15 * time.Second
-	// ResponseHeaderTimeout guards against a server that accepts the
-	// connection but never sends headers back. It does NOT limit how
-	// long the request body (i.e. a large upload) may take to send,
-	// so large chunks are not artificially timed out.
-	base.ResponseHeaderTimeout = 60 * time.Second
-	// IdleConnTimeout closes connections that are idle for too long,
-	// protecting against a server that stops sending the response body
-	// mid-transfer (e.g. stalled downloads).
-	base.IdleConnTimeout = 90 * time.Second
+	base := o.baseTransport
+	if base == nil {
+		base = defaultBaseTransport(insecure)
+	}
 
 	// A nil tokSource is an anonymous client (machine enrollment): no
 	// Authorization header at all.
-	var inner http.RoundTripper = base
+	inner := base
 	if tokSource != nil {
 		inner = &oauth2.Transport{Source: tokSource, Base: base}
 	}
@@ -153,6 +157,26 @@ func New(baseURL, userAgent string, tokSource oauth2.TokenSource, insecure, debu
 			Transport: retry,
 		},
 	}
+}
+
+// defaultBaseTransport is the lowest layer of a client built without
+// WithBaseTransport: BaseTransport carries the proxy settings from the
+// environment and the root CAs loaded by InitTLSRoots; only the timeouts are
+// specific here.
+func defaultBaseTransport(insecure bool) *http.Transport {
+	base := BaseTransport(insecure)
+	base.TLSHandshakeTimeout = 15 * time.Second
+	// ResponseHeaderTimeout guards against a server that accepts the
+	// connection but never sends headers back. It does NOT limit how
+	// long the request body (i.e. a large upload) may take to send,
+	// so large chunks are not artificially timed out.
+	base.ResponseHeaderTimeout = 60 * time.Second
+	// IdleConnTimeout closes connections that are idle for too long,
+	// protecting against a server that stops sending the response body
+	// mid-transfer (e.g. stalled downloads).
+	base.IdleConnTimeout = 90 * time.Second
+
+	return base
 }
 
 // Get performs an authenticated GET request and decodes the JSON response into dst.
