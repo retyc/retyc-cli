@@ -15,7 +15,7 @@ const defaultAccessLogSize = 4096
 
 // accessRecord is one operation of the access log. It holds numbers only: an
 // operation is named by its inode, never by a name or a path, which are what
-// the platform encrypts (the rule of the traces, see pkg/telemetry).
+// the platform encrypts (the rule of the traces, see core/telemetry).
 type accessRecord struct {
 	at       time.Time
 	op       string

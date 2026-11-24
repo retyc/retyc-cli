@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/core/api"
 )
 
 // copySource is the file the copies of these tests are made from: a mode and

@@ -17,11 +17,12 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/auth"
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/telemetry"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/auth"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/telemetry"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 var authCmd = &cobra.Command{
@@ -48,7 +49,7 @@ var authLoginCmd = &cobra.Command{
 		if err := refuseInMachineMode(); err != nil {
 			return err
 		}
-		cfg, err := config.Load()
+		cfg, err := cliconfig.Load()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}
@@ -110,7 +111,7 @@ var authLogoutCmd = &cobra.Command{
 			return err
 		}
 		var baseURL string
-		if cfg, err := config.Load(); err != nil {
+		if cfg, err := cliconfig.Load(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: loading config: %v\n", err)
 		} else {
 			baseURL = cfg.API.BaseURL
@@ -137,7 +138,7 @@ var authStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show current authentication status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, err := cliconfig.Load()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}

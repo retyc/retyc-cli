@@ -14,18 +14,19 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/ui"
+	"github.com/retyc/retyc-cli/core/vfs"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 	"github.com/retyc/retyc-cli/pkg/dav"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/ui"
-	"github.com/retyc/retyc-cli/pkg/vfs"
 )
 
 // `retyc fs webdav serve`: the cobra command over the WebDAV adapter of
 // package dav.
 
-// bindUnsafeWrite binds --unsafe-write to api.unsafe_write, which config.Load
+// bindUnsafeWrite binds --unsafe-write to api.unsafe_write, which cliconfig.Load
 // then reads: call it before. Like the other flags, bound in RunE, never in
 // init().
 func bindUnsafeWrite(flags *pflag.FlagSet) {
@@ -83,7 +84,7 @@ Example:
 
 		bindUnsafeWrite(cmd.Flags())
 		resolveCacheFlags(cmd.Flags())
-		cfg, err := config.Load()
+		cfg, err := cliconfig.Load()
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}

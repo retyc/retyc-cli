@@ -12,12 +12,12 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/crypto"
-	"github.com/retyc/retyc-cli/pkg/crypto/cryptotest"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/crypto"
+	"github.com/retyc/retyc-cli/core/crypto/cryptotest"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // newStartupTestServer serves the two endpoints hit at webdav serve startup:
@@ -128,7 +128,7 @@ func TestWebdavStartupCheck_APIUnreachable(t *testing.T) {
 
 // — vfs defaults ——————————————————————————————————————————————————————————————
 
-// vfs cannot import pkg/config: its fallback TTL is a copy of the
+// vfs cannot import core/config: its fallback TTL is a copy of the
 // configuration default, and the two must not drift apart.
 func TestVFSDefaultCacheTTLMatchesConfig(t *testing.T) {
 	if vfs.DefaultCacheTTL != config.DefaultCacheTTL {

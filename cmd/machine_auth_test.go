@@ -13,10 +13,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/auth"
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/machinekey"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/auth"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/machinekey"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 // setupMachine isolates the configuration and points the machine mode at a
@@ -48,7 +49,7 @@ func setupMachine(t *testing.T, tokenURL string) {
 	t.Setenv(config.EnvTokenEndpointName, tokenURL)
 	t.Setenv(config.EnvClientKeyFileName, clientKey)
 	t.Setenv(config.EnvAgeKeyFileName, ageKey)
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 }
 
 func TestMustGetTokenMachineNoDiskFallback(t *testing.T) {

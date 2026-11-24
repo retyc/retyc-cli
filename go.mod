@@ -11,6 +11,7 @@ require (
 	github.com/mark3labs/mcp-go v1.5.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
+	github.com/retyc/retyc-cli/core v0.0.0-00010101000000-000000000000
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.1.0
@@ -72,3 +73,5 @@ require (
 	google.golang.org/grpc v1.85.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
+
+replace github.com/retyc/retyc-cli/core => ./core

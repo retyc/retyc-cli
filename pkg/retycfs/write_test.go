@@ -23,9 +23,9 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"golang.org/x/sys/unix"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // The tests create their files with the default mode: under another umask

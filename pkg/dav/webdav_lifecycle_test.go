@@ -14,8 +14,8 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // Shutting the server down while a request is in flight: the lifecycle does

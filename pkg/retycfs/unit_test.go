@@ -17,10 +17,10 @@ import (
 	gofuse "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/auth"
-	"github.com/retyc/retyc-cli/pkg/vfs"
-	"github.com/retyc/retyc-cli/pkg/vfs/metastore"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/auth"
+	"github.com/retyc/retyc-cli/core/vfs"
+	"github.com/retyc/retyc-cli/core/vfs/metastore"
 )
 
 // — Inode table —————————————————————————————————————————————————————————————

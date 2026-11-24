@@ -15,9 +15,10 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/crypto"
-	"github.com/retyc/retyc-cli/pkg/machinekey"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/crypto"
+	"github.com/retyc/retyc-cli/core/machinekey"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 // statusFixture is a fake token endpoint plus a fake API for auth status.
@@ -101,7 +102,7 @@ func setupMachineStatus(t *testing.T, ageMatches bool) *statusFixture {
 	}
 	t.Setenv(config.EnvMachineDirName, dir)
 	t.Setenv("RETYC_API_BASE_URL", f.srv.URL)
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 
 	return f
 }
@@ -178,7 +179,7 @@ func TestAuthStatusMachineIncomplete(t *testing.T) {
 
 func TestAuthStatusHumanUnchanged(t *testing.T) {
 	isolateConfig(t)
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 	cfgDir := t.TempDir()
 	t.Setenv(config.EnvConfigDirName, cfgDir)
 	got, out, err := runAuthStatus(t)

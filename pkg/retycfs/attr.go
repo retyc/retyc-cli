@@ -8,7 +8,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // The modes presented when the API stores none for a node, unless the mount

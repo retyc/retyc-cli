@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // New is what a program importing the core serves: a PROPFIND of /spaces

@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 // Version is set at build time via -ldflags.
@@ -17,9 +17,9 @@ var versionCmd = &cobra.Command{
 	Short:       "Print the version number",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if jsonOutput {
-			return printJSON(versionJSON{Version: Version, BuildMode: config.BuildMode})
+			return printJSON(versionJSON{Version: Version, BuildMode: cliconfig.BuildMode})
 		}
-		fmt.Printf("retyc %s (%s build)\n", Version, config.BuildMode)
+		fmt.Printf("retyc %s (%s build)\n", Version, cliconfig.BuildMode)
 
 		return nil
 	},

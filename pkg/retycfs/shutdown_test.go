@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/core/service"
 )
 
 // A mount point that cannot be detached is the error of the shutdown, and the

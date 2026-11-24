@@ -14,10 +14,11 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/term"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/auth"
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/ui"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/auth"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/ui"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 // minPassphraseLen is the minimum number of characters for a transfer passphrase.
@@ -151,7 +152,7 @@ func resetMachineTokenSource() {
 // newAPIClient loads config, obtains a valid token, and returns both the config
 // and an authenticated API client ready to use.
 func newAPIClient(ctx context.Context) (*config.Config, *api.Client, error) {
-	cfg, err := config.Load()
+	cfg, err := cliconfig.Load()
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}

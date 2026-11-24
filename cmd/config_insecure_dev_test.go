@@ -5,7 +5,7 @@ package cmd
 import (
 	"testing"
 
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 // `config show` promises flag > env > config > default, but viper cannot see
@@ -13,7 +13,7 @@ import (
 // setInsecureFromConfig has already merged.
 func TestConfigEntries_InsecureReflectsFlag(t *testing.T) {
 	isolateConfig(t)
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 	prev := insecure
 	t.Cleanup(func() { insecure = prev })
 	insecure = true // what -k leaves behind after initConfig

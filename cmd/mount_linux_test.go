@@ -22,12 +22,12 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/auth"
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/auth"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/vfs"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 	"github.com/retyc/retyc-cli/pkg/retycfs"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/vfs"
 )
 
 func TestCheckMountpoint(t *testing.T) {
@@ -307,7 +307,7 @@ func TestRunMount_NeedsThePassphrase(t *testing.T) {
 		t.Skipf("FUSE unavailable: %v", err)
 	}
 	isolateConfig(t)
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 	stubIdentitySources(t, false, false)
 	t.Setenv("RETYC_KEY_PASSPHRASE", "")
 	err := runMount(commandWithContext(), mountTarget{dataroomID: "dr-1", mountpoint: t.TempDir()})

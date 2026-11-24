@@ -14,7 +14,8 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 func TestParseMountArgs(t *testing.T) {
@@ -109,7 +110,7 @@ func TestCommandTree_MountUnderFS(t *testing.T) {
 // flag bound to a key that does not exist, fails here.
 func TestMountFlags_OnePerKey(t *testing.T) {
 	isolateConfig(t)
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 	bound := make(map[string]bool)
 	for _, f := range mountFlags {
 		bound[f[1]] = true
@@ -289,7 +290,7 @@ func TestResolveMountFlags(t *testing.T) {
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}
-			config.SetDefaults()
+			cliconfig.SetDefaults()
 			cmd := &cobra.Command{Use: "mount"}
 			addMountFlags(cmd)
 			for k, v := range tc.flags {
@@ -299,7 +300,7 @@ func TestResolveMountFlags(t *testing.T) {
 			}
 			resolveMountFlags(cmd.Flags())
 			var got mountSettings
-			cfg, err := config.Load()
+			cfg, err := cliconfig.Load()
 			if err == nil {
 				got, err = newMountSettings(cfg)
 			}
@@ -399,7 +400,7 @@ func TestMountFlags_UnsafeWrite(t *testing.T) {
 			if tc.env != "" {
 				t.Setenv("RETYC_API_UNSAFE_WRITE", tc.env)
 			}
-			config.SetDefaults()
+			cliconfig.SetDefaults()
 			cmd := &cobra.Command{Use: "mount"}
 			addMountFlags(cmd)
 			if tc.flag != "" {
@@ -408,7 +409,7 @@ func TestMountFlags_UnsafeWrite(t *testing.T) {
 				}
 			}
 			resolveMountFlags(cmd.Flags())
-			cfg, err := config.Load()
+			cfg, err := cliconfig.Load()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -423,7 +424,7 @@ func TestMountFlags_UnsafeWrite(t *testing.T) {
 func TestMountSettings_LocalFileFlagRepeats(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv("RETYC_MOUNT_LOCAL_FILES", "*.env")
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 	cmd := &cobra.Command{Use: "mount"}
 	addMountFlags(cmd)
 	for _, pattern := range []string{"*.tmp", "[a-c]*~"} {
@@ -432,7 +433,7 @@ func TestMountSettings_LocalFileFlagRepeats(t *testing.T) {
 		}
 	}
 	resolveMountFlags(cmd.Flags())
-	cfg, err := config.Load()
+	cfg, err := cliconfig.Load()
 	if err != nil {
 		t.Fatal(err)
 	}

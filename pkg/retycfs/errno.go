@@ -8,9 +8,9 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/auth"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/auth"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // ErrLegacyAPI is what Options.CheckDataroom returns for a dataroom served by
@@ -28,7 +28,7 @@ const (
 	statusForbidden    = 403
 )
 
-// toErrno maps an error of pkg/vfs, or one of the API that crossed it,
+// toErrno maps an error of core/vfs, or one of the API that crossed it,
 // to the errno a system call returns. It is the only place that does.
 //
 // The order matters where an error matches several sentinels:

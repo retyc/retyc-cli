@@ -13,10 +13,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/auth"
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/auth"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
+	"github.com/retyc/retyc-cli/pkg/prommetrics"
 )
 
 var (
@@ -182,10 +184,15 @@ func run(ctx context.Context, args []string) error {
 func init() {
 	// The CLI keeps the login in <configDir>/token.json; the core has no token
 	// store of its own (see auth.SetTokenStore).
-	auth.SetTokenStore(config.TokenFile{})
+	auth.SetTokenStore(cliconfig.TokenFile{})
 	// The CLI logs in from RETYC_TOKEN or a machine account when the
 	// environment says so; the core ignores these variables by default.
 	config.SetEnvLogin(true)
+	// The core observes into core/metrics, a no-op until something is
+	// installed: the Prometheus collectors are, from the start of every
+	// command, and only `fs mount --metrics-addr` registers them
+	// (cmd/observability.go).
+	prommetrics.Install()
 
 	// The environment file comes first: its variables must be in the
 	// environment before viper, or anything else, reads a RETYC_ variable.
@@ -194,7 +201,7 @@ func init() {
 	// Build the default config path hint from the active build mode so the
 	// help text always reflects the real default location.
 	defaultCfgHint := "auto"
-	if dir, err := config.Dir(); err == nil {
+	if dir, err := cliconfig.Dir(); err == nil {
 		defaultCfgHint = dir + "/config.yaml"
 	}
 
@@ -218,10 +225,10 @@ func cliUserAgent() string {
 // (api.concurrency.*) to it, once, before the command runs.
 //
 // A configuration that does not load is left for the command to report through
-// its own config.Load; some commands deliberately tolerate it (auth logout), so
+// its own cliconfig.Load; some commands deliberately tolerate it (auth logout), so
 // failing here would break them. The service then keeps its defaults.
 func applyServiceConfig() {
-	cfg, err := config.Load()
+	cfg, err := cliconfig.Load()
 	if err != nil {
 		return
 	}
@@ -249,12 +256,12 @@ func loadEnvFile() {
 
 // initConfig reads the configuration file and environment variables.
 func initConfig() {
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {
-		dir, err := config.Dir()
+		dir, err := cliconfig.Dir()
 		if err != nil {
 			// Flags are already parsed here (cobra.OnInitialize), so --json is honoured.
 			printError(fmt.Errorf("could not determine config directory: %w", err))

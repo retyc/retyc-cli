@@ -17,8 +17,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/retyc/retyc-cli/pkg/metrics"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/vfs"
+	"github.com/retyc/retyc-cli/pkg/prommetrics"
 )
 
 // The observability listener of `fs mount`: Prometheus exposition and health
@@ -63,7 +63,7 @@ type observabilityOptions struct {
 //	/healthz  liveness: 200 as long as the process answers
 //	/readyz   readiness: 200 while the mount serves (see serveHealth), 503 otherwise
 //
-// The options decide what /metrics carries besides pkg/metrics. A
+// The options decide what /metrics carries besides pkg/prommetrics. A
 // constant label whose name collides with a metric label (method, route,
 // status, ...) is reported here, before the listener binds.
 func newObservabilityHandler(health *serveHealth, opts observabilityOptions) (http.Handler, error) {
@@ -72,13 +72,13 @@ func newObservabilityHandler(health *serveHealth, opts observabilityOptions) (ht
 	if len(opts.labels) > 0 {
 		registerer = prometheus.WrapRegistererWith(opts.labels, reg)
 	}
-	cs := make([]prometheus.Collector, 0, 3+len(metrics.All())+len(opts.extra))
+	cs := make([]prometheus.Collector, 0, 3+len(prommetrics.All())+len(opts.extra))
 	cs = append(cs,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		newBuildInfoCollector(),
 	)
-	cs = append(cs, metrics.All()...)
+	cs = append(cs, prommetrics.All()...)
 	cs = append(cs, opts.extra...)
 	for _, c := range cs {
 		if err := registerer.Register(c); err != nil {

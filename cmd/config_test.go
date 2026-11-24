@@ -8,7 +8,8 @@ import (
 
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 // isolateConfig resets the configuration state that initConfig and
@@ -44,7 +45,7 @@ func TestConfigEntries_MasksSecrets(t *testing.T) {
 	t.Setenv("RETYC_ADMIN_API_KEY", "ryc_supersecret")
 	t.Setenv("RETYC_API_BASE_URL", "https://api.env.example")
 	t.Setenv("RETYC_CACHE_REDIS_URL", "rediss://user:supersecret@redis.example:6380/1")
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 
 	entries := configEntries()
 
@@ -84,7 +85,7 @@ func TestConfigEntries_MasksSecrets(t *testing.T) {
 
 func TestConfigEntries_UnsetSecretIsEmpty(t *testing.T) {
 	isolateConfig(t)
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 
 	for _, e := range configEntries() {
 		if e.Key == "admin.api_key" && e.Value != "" {
@@ -95,7 +96,7 @@ func TestConfigEntries_UnsetSecretIsEmpty(t *testing.T) {
 
 func TestConfigEntries_Sorted(t *testing.T) {
 	isolateConfig(t)
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 
 	entries := configEntries()
 	for i := 1; i < len(entries); i++ {
@@ -192,7 +193,7 @@ func TestEffectiveValue_JoinsYAMLLists(t *testing.T) {
 func TestEffectiveValue_JoinsLists(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv("RETYC_MOUNT_METRICS_LABELS", "identity=abc pod=x")
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 	if got := effectiveValue("mount.metrics.labels"); got != "identity=abc pod=x" {
 		t.Errorf("effectiveValue = %q, want %q", got, "identity=abc pod=x")
 	}

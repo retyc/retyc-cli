@@ -10,9 +10,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/retyc/retyc-cli/pkg/metrics"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/metrics"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 func getObservability(t *testing.T, h http.Handler, path string) (int, string) {
@@ -223,9 +223,9 @@ func TestObservability_ConstLabelCollisionIsAnError(t *testing.T) {
 	}
 }
 
-// The metrics of the FUSE driver and those pkg/vfs observes for both
+// The metrics of the FUSE driver and those core/vfs observes for both
 // front ends are on /metrics of either command: they are registered with the
-// rest of pkg/metrics.
+// rest of core/metrics.
 func TestObservability_ExposesMountMetrics(t *testing.T) {
 	metrics.Ops.WithLabelValues("lookup", "ok").Inc()
 	metrics.OpDuration.WithLabelValues("lookup").Observe(0.001)

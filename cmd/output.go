@@ -6,7 +6,7 @@
 // script can rely on stdout being valid JSON whenever the exit code is 0.
 //
 // The JSON view types below are CLI-only. They are deliberately separate
-// from the pkg/service result structs, which are marshalled as-is by
+// from the core/service result structs, which are marshalled as-is by
 // the MCP server: tagging those would change the MCP output.
 
 package cmd
@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/ui"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/ui"
 )
 
 // jsonOutput is bound to the --json persistent flag on rootCmd.

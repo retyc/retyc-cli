@@ -9,7 +9,9 @@ ARG TARGETARCH
 ARG BUILD_TAGS=prod
 
 WORKDIR /src
+# Two modules: the CLI and the core (core/), which go.mod replaces with ./core.
 COPY go.mod go.sum ./
+COPY core/go.mod core/go.sum ./core/
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 

@@ -31,8 +31,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Two modules: the CLI (.) and the core (./core), which go.mod replaces
+      # with ./core. The core stands alone: that is how a module importing it
+      # (an rclone backend) builds it.
       - name: Verify dependencies
-        run: go mod verify
+        run: |
+          go mod verify && go mod tidy -diff
+          cd core && go mod verify && go mod tidy -diff
+
+      - name: Vet
+        run: |
+          go vet ./...
+          cd core && go vet ./...
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
@@ -41,6 +51,13 @@ jobs:
           # The action keys its cache without the Go version: after a Go
           # upgrade it served stale analysis facts (false SA5011). A cold
           # lint takes a few seconds; the Go build cache of setup-go stays.
+          skip-cache: true
+
+      - name: golangci-lint (core)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          working-directory: core
           skip-cache: true
 
       # The tests of pkg/retycfs mount a FUSE filesystem. They skip on a
@@ -52,18 +69,33 @@ jobs:
       - name: Test
         env:
           REDISSTORE_TEST_URL: redis://localhost:6379/15
-        run: go test -race -coverprofile=coverage.out ./...
+        run: |
+          go test -race -coverprofile=coverage.out ./...
+          cd core && go test -race -coverprofile=coverage.out ./...
 
       - name: Coverage summary
-        run: go tool cover -func=coverage.out | tail -1
+        run: |
+          go tool cover -func=coverage.out | tail -1
+          cd core && go tool cover -func=coverage.out | tail -1
 
       # Run directly rather than through govulncheck-action: the action sets
       # up a second toolchain ("stable", not the one from go.mod) with its own
       # module and build cache, and checks the repository out again.
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+          cd core && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
       # The tests already compiled the dev build; this one checks the files
       # behind the `prod` tag, without cgo as in the release.
       - name: Build (prod)
         run: CGO_ENABLED=0 go build -tags prod ./...
+
+      # The core alone, on the platforms rclone builds for that the CLI does
+      # not: its dependencies must hold there too.
+      - name: Build (core alone)
+        working-directory: core
+        run: |
+          for target in linux/amd64 linux/386 linux/arm windows/amd64 darwin/arm64 plan9/amd64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go build ./...
+          done

@@ -14,10 +14,10 @@ import (
 
 	"golang.org/x/net/webdav"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/diag"
-	"github.com/retyc/retyc-cli/pkg/ui"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/diag"
+	"github.com/retyc/retyc-cli/core/ui"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // lockMirror mirrors the WebDAV locks clients take on files onto the API's

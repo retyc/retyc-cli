@@ -15,13 +15,13 @@ import (
 const modulePath = "github.com/retyc/retyc-cli"
 
 // TestDependencyRule keeps the adapter importable by another module: it never
-// imports cobra, pflag, viper, pkg/config nor cmd itself, and never reaches
-// cobra or cmd through a dependency. viper and pkg/config still come in
-// through pkg/api and pkg/service, as for vfs.
+// imports cobra, pflag, viper, core/config nor cmd itself, and never reaches
+// cobra or cmd through a dependency. core/config still comes in through
+// core/api and core/service, as for vfs.
 func TestDependencyRule(t *testing.T) {
 	direct := []string{
 		"github.com/spf13/cobra", "github.com/spf13/pflag", "github.com/spf13/viper",
-		modulePath + "/pkg/config", modulePath + "/cmd",
+		modulePath + "/core/config", modulePath + "/cmd",
 	}
 	files, err := filepath.Glob("*.go")
 	if err != nil {

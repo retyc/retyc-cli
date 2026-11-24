@@ -10,7 +10,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // The inode numbers the driver assigns itself. Everything else comes from the

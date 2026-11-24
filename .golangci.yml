@@ -45,6 +45,9 @@ linters:
   settings:
     cyclop:
       max-complexity: 15
+    gomoddirectives:
+      # The CLI builds the core from the repository (go.mod: replace => ./core).
+      replace-local: true
     errcheck:
       exclude-functions:
         - fmt.Fprint

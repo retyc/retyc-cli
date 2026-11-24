@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/core/service"
 )
 
 // The owner and the default modes are those the mount is given; a mode the

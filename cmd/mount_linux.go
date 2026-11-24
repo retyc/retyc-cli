@@ -15,13 +15,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/telemetry"
+	"github.com/retyc/retyc-cli/core/ui"
+	"github.com/retyc/retyc-cli/core/vfs"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
+	"github.com/retyc/retyc-cli/pkg/otelexport"
 	"github.com/retyc/retyc-cli/pkg/retycfs"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/telemetry"
-	"github.com/retyc/retyc-cli/pkg/ui"
-	"github.com/retyc/retyc-cli/pkg/vfs"
 )
 
 // fuseDevice is what a FUSE mount is made through.
@@ -169,7 +170,7 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	// The mount is the only command that traces. Tracing is decided by the
 	// environment only; a bad OTEL_* value is reported under --debug and the
 	// mount runs untraced. Shutdown flushes the spans once it is unmounted.
-	tel, err := telemetry.Init(cmd.Context(), telemetry.Options{Version: Version, Debug: debug})
+	tel, err := otelexport.Init(cmd.Context(), otelexport.Options{Version: Version, Debug: debug})
 	if err != nil && debug {
 		fmt.Fprintln(os.Stderr, "Tracing disabled:", err)
 	}
@@ -178,7 +179,7 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	// The init span covers everything before the mount is in place, and is
 	// the only span parented to TRACEPARENT: a supervisor's trace closes once
 	// the filesystem is up. FUSE operations get their own roots.
-	initCtx, initSpan := telemetry.Tracer().Start(telemetry.ParentFromEnv(cmd.Context()), "retyc fs mount init")
+	initCtx, initSpan := telemetry.Tracer().Start(otelexport.ParentFromEnv(cmd.Context()), "retyc fs mount init")
 	initDone := false
 	defer func() {
 		if !initDone {
@@ -196,7 +197,7 @@ func runMount(cmd *cobra.Command, target mountTarget) (retErr error) {
 	}
 
 	resolveMountFlags(cmd.Flags())
-	cfg, err := config.Load()
+	cfg, err := cliconfig.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}

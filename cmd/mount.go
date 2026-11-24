@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/service"
 )
 
 // mountTarget is what `retyc fs mount` was asked to mount, and where.
@@ -153,7 +153,7 @@ var mountFlags = [][2]string{
 }
 
 // resolveMountFlags binds the flags of `fs mount` to their viper keys, so
-// that config.Load reads them with the usual precedence (flag > env > config
+// that cliconfig.Load reads them with the usual precedence (flag > env > config
 // file > default) and validates them like any other source. From RunE, never
 // from init(), like resolveCacheFlags.
 func resolveMountFlags(flags *pflag.FlagSet) {
@@ -166,7 +166,7 @@ func resolveMountFlags(flags *pflag.FlagSet) {
 }
 
 // mountSettings is the mount.* section as the mount takes it: validated by
-// config.Load, the modes parsed, the owner and the spool directory resolved.
+// cliconfig.Load, the modes parsed, the owner and the spool directory resolved.
 type mountSettings struct {
 	entryTTL, attrTTL time.Duration
 	kernelCache       bool

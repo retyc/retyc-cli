@@ -20,11 +20,11 @@ import (
 	"golang.org/x/net/webdav"
 	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/crypto"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/vfs"
-	"github.com/retyc/retyc-cli/pkg/vfs/metastore/memstore"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/crypto"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/vfs"
+	"github.com/retyc/retyc-cli/core/vfs/metastore/memstore"
 )
 
 // — webdavFileInfo ————————————————————————————————————————————————————————————

@@ -10,8 +10,8 @@ import (
 
 	"golang.org/x/net/webdav"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // executableProp is the property WebDAV carries a file's execute permission

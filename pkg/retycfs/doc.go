@@ -1,5 +1,5 @@
 // Package retycfs presents datarooms as a FUSE filesystem. It is a thin
-// adapter between go-fuse and pkg/vfs, which holds the caches, the path
+// adapter between go-fuse and core/vfs, which holds the caches, the path
 // resolution and the positioned reads; the WebDAV server is the other front
 // end of that layer.
 //
@@ -10,7 +10,7 @@
 // kernel refuse most writes itself; the handlers that could still be reached
 // answer EROFS.
 //
-// Dependency rule: the package imports pkg/vfs and go-fuse. It imports
-// pkg/api and pkg/auth for their error sentinels only (errno.go),
-// and never pkg/service.
+// Dependency rule: the package imports core/vfs and go-fuse. It imports
+// core/api and core/auth for their error sentinels only (errno.go),
+// and never core/service.
 package retycfs

@@ -13,10 +13,10 @@ import (
 	"golang.org/x/net/webdav"
 	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/vfs"
-	"github.com/retyc/retyc-cli/pkg/vfs/metastore"
-	"github.com/retyc/retyc-cli/pkg/vfs/metastore/memstore"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/vfs"
+	"github.com/retyc/retyc-cli/core/vfs/metastore"
+	"github.com/retyc/retyc-cli/core/vfs/metastore/memstore"
 )
 
 // countingStore counts the lookups of one name a store is asked for.

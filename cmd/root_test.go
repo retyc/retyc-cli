@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/retyc/retyc-cli/pkg/auth"
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/core/auth"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/service"
 )
 
 func TestRootPersistentPreRunE_FailsOnUnreadableCABundle(t *testing.T) {
@@ -59,7 +59,7 @@ func TestApplyServiceConfig_SetsConcurrency(t *testing.T) {
 }
 
 // A configuration that does not load must not stop the command here: each
-// command reports it through its own config.Load, and some deliberately
+// command reports it through its own cliconfig.Load, and some deliberately
 // tolerate it (auth logout). The service keeps its previous bounds.
 func TestApplyServiceConfig_IgnoresInvalidConfig(t *testing.T) {
 	isolateConfig(t)

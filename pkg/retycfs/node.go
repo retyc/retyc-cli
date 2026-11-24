@@ -15,7 +15,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"golang.org/x/sys/unix"
 
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // maxNameLen is the longest name the driver presents, and the one Statfs
@@ -305,7 +305,7 @@ func pathErrno(err error) syscall.Errno {
 // last found it at (see inodeState.at). It is false for a folder the table
 // holds no place for.
 //
-// The path is what pkg/vfs is addressed by. It never leaves the
+// The path is what core/vfs is addressed by. It never leaves the
 // process: neither the access log nor a span carries it.
 func (n *dirNode) path() (string, bool) {
 	var names []string
