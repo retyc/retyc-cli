@@ -240,7 +240,7 @@ func resolveDataroomSessionUncached(
 		return nil, fmt.Errorf("fetching encryption key: %w", kr.err)
 	}
 	if kr.v == nil {
-		return nil, errNoActiveKey()
+		return nil, errNoActiveKey(machineOf(cfg) != nil)
 	}
 
 	userIdentity, err := ResolveUserIdentity(ctx, cfg, kr.v, reader)
@@ -1509,11 +1509,11 @@ func CreateDataroom(
 	if err != nil {
 		return nil, fmt.Errorf("fetching encryption key: %w", err)
 	}
+	machine := machineOf(cfg) != nil
 	if userKey == nil {
-		return nil, errNoActiveKey()
+		return nil, errNoActiveKey(machine)
 	}
 
-	machine := config.MachineMode()
 	orgKey, err := organizationKey(ctx, client, machine)
 	if err != nil {
 		return nil, err
@@ -1603,8 +1603,8 @@ func organizationKey(ctx context.Context, client *api.Client, machine bool) (str
 // errNoActiveKey is the error of an account with no active encryption key.
 // For a machine account it is a configuration error (exit code 78): its key
 // is set at enrollment, not in the web interface.
-func errNoActiveKey() error {
-	if config.MachineMode() {
+func errNoActiveKey(machine bool) error {
+	if machine {
 		return fmt.Errorf("%w: the machine account has no active key", config.ErrMachineConfig)
 	}
 

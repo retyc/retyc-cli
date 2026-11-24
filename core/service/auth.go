@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/debug"
-	"strings"
 	"sync"
 	"time"
 
@@ -30,68 +29,32 @@ var ErrWrongKeyPassphrase = errors.New("wrong key passphrase")
 // half of the account's active key. It is wrapped with config.ErrMachineConfig.
 var ErrAgeKeyMismatch = errors.New("the AGE key does not match the machine account's key")
 
-// classicAgeKeyPrefix starts an X25519 identity, which this CLI never accepts.
-const classicAgeKeyPrefix = "AGE-SECRET-KEY-1"
-
-// MachineIdentity reads the machine's AGE identity from its key file and checks
-// that it is the private half of userKey. No passphrase, keyring or scrypt is
-// involved. Errors wrap config.ErrMachineConfig and never quote the file.
-func MachineIdentity(_ context.Context, userKey *api.UserKey) (*age.HybridIdentity, error) {
-	m, err := config.LoadMachine()
-	if err != nil {
-		return nil, err
-	}
-	if m == nil {
+// MachineIdentity returns the AGE identity of the machine account m after
+// checking that it is the private half of userKey, the account's active key.
+// No passphrase, keyring or scrypt is involved. Errors wrap
+// config.ErrMachineConfig.
+func MachineIdentity(_ context.Context, m *config.MachineIdentity, userKey *api.UserKey) (*age.HybridIdentity, error) {
+	if m == nil || m.AgeIdentity == nil {
 		return nil, fmt.Errorf("%w: not in machine mode", config.ErrMachineConfig)
 	}
 	if userKey == nil {
 		return nil, fmt.Errorf("%w: no active key", config.ErrMachineConfig)
 	}
-	data, err := config.ReadMachineFile(m.AgeKeyFile)
-	if err != nil {
-		return nil, err
-	}
-	identity, err := parseMachineAgeKey(data, m.AgeKeyFile)
-	if err != nil {
-		return nil, err
-	}
-	if identity.Recipient().String() != userKey.PublicKey {
+	if m.AgeIdentity.Recipient().String() != userKey.PublicKey {
 		return nil, fmt.Errorf("%w: %w", config.ErrMachineConfig, ErrAgeKeyMismatch)
 	}
 
-	return identity, nil
+	return m.AgeIdentity, nil
 }
 
-// parseMachineAgeKey parses the content of a machine age.key: comment lines
-// and blank lines are skipped, exactly one post-quantum identity must remain.
-// name is the file name used in errors, which wrap config.ErrMachineConfig and
-// never quote the content.
-func parseMachineAgeKey(data []byte, name string) (*age.HybridIdentity, error) {
-	// The standard age-keygen format puts comment lines before the key.
-	var keyLines []string
-	for line := range strings.SplitSeq(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		keyLines = append(keyLines, line)
-	}
-	if len(keyLines) != 1 {
-		return nil, fmt.Errorf("%w: %s must hold exactly one identity (expected one identity, found %d)",
-			config.ErrMachineConfig, name, len(keyLines))
-	}
-	content := keyLines[0]
-	if strings.HasPrefix(content, classicAgeKeyPrefix) {
-		return nil, fmt.Errorf("%w: %s holds a classic X25519 key, a post-quantum key is required",
-			config.ErrMachineConfig, name)
-	}
-	identity, err := crypto.ParseIdentity(content)
-	if err != nil {
-		// The parse error is dropped on purpose: it could quote the key.
-		return nil, fmt.Errorf("%w: %s is not a valid post-quantum AGE identity", config.ErrMachineConfig, name)
+// machineOf is the machine identity of cfg, nil for a user account (or a nil
+// cfg).
+func machineOf(cfg *config.Config) *config.MachineIdentity {
+	if cfg == nil {
+		return nil
 	}
 
-	return identity, nil
+	return cfg.Machine
 }
 
 // decryptKeyWithPassphrase runs the scrypt that unlocks a private key with a
@@ -168,8 +131,8 @@ func currentIdentityCache() IdentityCache {
 func ResolveUserIdentity(
 	ctx context.Context, cfg *config.Config, userKey *api.UserKey, reader PassphraseReader,
 ) (*age.HybridIdentity, error) {
-	if config.MachineMode() {
-		return MachineIdentity(ctx, userKey)
+	if m := machineOf(cfg); m != nil {
+		return MachineIdentity(ctx, m, userKey)
 	}
 
 	if cfg.Keyring.Enabled {
@@ -246,9 +209,9 @@ func ResolveActiveUserIdentity(
 	if err != nil {
 		return nil, fmt.Errorf("fetching user key: %w", err)
 	}
-	if userKey == nil && !config.MachineMode() {
+	if userKey == nil && machineOf(cfg) == nil {
 		// In machine mode a nil key is reported by MachineIdentity.
-		return nil, errNoActiveKey()
+		return nil, errNoActiveKey(false)
 	}
 
 	return ResolveUserIdentity(ctx, cfg, userKey, reader)
@@ -260,19 +223,21 @@ func ResolveActiveUserIdentity(
 // set in the environment, which must fail fast at startup when wrong rather
 // than be masked by a cached identity. The returned identity can then be reused for the life of the process
 // (see GetDataroomSessionWithIdentity), so the scrypt runs exactly once.
-func UnlockUserIdentity(ctx context.Context, client *api.Client, reader PassphraseReader) (
+// For a machine account (cfg.Machine), no passphrase is read: see
+// MachineIdentity.
+func UnlockUserIdentity(ctx context.Context, cfg *config.Config, client *api.Client, reader PassphraseReader) (
 	*age.HybridIdentity, error,
 ) {
 	userKey, err := client.GetActiveKey(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetching user key: %w", err)
 	}
-	if config.MachineMode() {
+	if m := machineOf(cfg); m != nil {
 		// A nil key is reported by MachineIdentity as a machine configuration error.
-		return MachineIdentity(ctx, userKey)
+		return MachineIdentity(ctx, m, userKey)
 	}
 	if userKey == nil {
-		return nil, errNoActiveKey()
+		return nil, errNoActiveKey(false)
 	}
 	passphrase, err := reader()
 	if err != nil {

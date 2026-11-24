@@ -128,9 +128,13 @@ behaviour must not depend on it being imported, nor the reverse.
 - No implicit environment: the API URL, the token store and the settings come from
   the caller. `cliconfig` (`Dir()`, `SetDefaults()`, `Load()`, the build defaults
   `paths_dev.go` / `paths_prod.go`) is for `cmd` only; nothing in the core reads the
-  config dir or the CWD. Logging in from the environment (`RETYC_TOKEN`, machine
-  account: `config.Token()`, `config.MachineMode()`, `config.LoadMachine()`) is off
-  until `config.SetEnvLogin(true)`, which `cmd/root.go` calls in `init()`; the tests of
+  config dir or the CWD. A machine account reaches the core as `cfg.Machine`
+  (`config.MachineIdentity`, built by `config.NewMachineIdentity` from bytes or
+  `config.LoadMachineIdentity` from files; nil = user account), one per `Config`, so
+  several can run in one process; the core never reads it from the environment.
+  `config.MachineMode()` / `config.LoadMachine()` are for `cmd` only (`mustGetToken`
+  sets `cfg.Machine`). `RETYC_TOKEN` (`config.Token()`) and those two are off until
+  `config.SetEnvLogin(true)`, which `cmd/root.go` calls in `init()`; the tests of
   `config`, `auth` and `service` opt in the same way (`envlogin_test.go`,
   `tokenstore_cli_test.go`).
 - The core never writes to `os.Stderr`: warnings, progress and the `--debug` trace go

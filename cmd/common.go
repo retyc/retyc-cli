@@ -69,8 +69,14 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, 
 	}
 	if m != nil {
 		// Machine mode: no OIDC discovery, nothing read from or written to
-		// token.json.
-		return machineTokenSource(m)
+		// token.json. The identity goes in cfg for the service calls.
+		id, src, err := machineTokenSource(m)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Machine = id
+
+		return src, nil
 	}
 
 	persist := config.Token() == ""
@@ -118,35 +124,38 @@ func mustGetToken(ctx context.Context, cfg *config.Config) (oauth2.TokenSource, 
 	return auth.NewRefreshingTokenSource(tok, *oidcCfg, httpClient, persist), nil
 }
 
-// machineSource is the token source of the machine account, shared by every
-// caller of the process (the MCP server asks for it once per tool call, and
-// the access token it caches must be reused).
+// machineSource is the identity of the machine account and its token source,
+// shared by every caller of the process (the MCP server asks for it once per
+// tool call, and the access token it caches must be reused). Its keys are
+// read once.
 var machineSource struct {
 	mu  sync.Mutex
+	id  *config.MachineIdentity
 	src *auth.MachineTokenSource
 }
 
-// machineTokenSource returns the process-wide machine token source, built on
-// first use.
-func machineTokenSource(m *config.Machine) (oauth2.TokenSource, error) {
+// machineTokenSource returns the process-wide machine identity, read from the
+// files of m on first use, and its token source.
+func machineTokenSource(m *config.Machine) (*config.MachineIdentity, oauth2.TokenSource, error) {
 	machineSource.mu.Lock()
 	defer machineSource.mu.Unlock()
 	if machineSource.src == nil {
-		src, err := auth.NewMachineTokenSource(m, newHTTPClient(insecure, debug))
+		id, err := config.LoadMachineIdentity(m)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		machineSource.src = src
+		machineSource.id = id
+		machineSource.src = auth.NewMachineTokenSource(id, newHTTPClient(insecure, debug))
 	}
 
-	return machineSource.src, nil
+	return machineSource.id, machineSource.src, nil
 }
 
 // resetMachineTokenSource forgets the memoized source (tests only).
 func resetMachineTokenSource() {
 	machineSource.mu.Lock()
 	defer machineSource.mu.Unlock()
-	machineSource.src = nil
+	machineSource.id, machineSource.src = nil, nil
 }
 
 // newAPIClient loads config, obtains a valid token, and returns both the config

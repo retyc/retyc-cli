@@ -40,7 +40,7 @@ func serveStartupCheck(
 	var identity *age.HybridIdentity
 	var err error
 	if config.MachineMode() || config.KeyPassphrase() != "" {
-		identity, err = service.UnlockUserIdentity(ctx, client, reader)
+		identity, err = service.UnlockUserIdentity(ctx, cfg, client, reader)
 	} else {
 		identity, err = service.ResolveActiveUserIdentity(ctx, cfg, client, reader)
 	}

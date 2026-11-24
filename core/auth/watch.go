@@ -63,7 +63,7 @@ type Watch struct {
 const machineRefusedChecks = 3
 
 // NewWatch returns the watch of the login src gives tokens for. machine is
-// set for a machine account (config.MachineMode in the CLI).
+// set for a machine account (config.Config.Machine set).
 func NewWatch(src oauth2.TokenSource, machine bool) *Watch {
 	return &Watch{
 		src: src, Interval: TokenKeepaliveInterval, asked: make(chan struct{}, 1), now: time.Now,
