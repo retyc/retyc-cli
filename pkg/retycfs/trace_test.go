@@ -14,9 +14,9 @@ import (
 
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/telemetry"
-	"github.com/retyc/retyc-cli/pkg/telemetry/telemetrytest"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/telemetry"
+	"github.com/retyc/retyc-cli/core/telemetry/telemetrytest"
 )
 
 // spanAttr returns the string value of an attribute of s.

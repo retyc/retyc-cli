@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 // insecure is not a setting of a prod binary: `config show` must not list it,
@@ -25,7 +25,7 @@ func TestConfigEntries_NoInsecureInProd(t *testing.T) {
 
 	t.Run("unset", func(t *testing.T) {
 		isolateConfig(t)
-		config.SetDefaults()
+		cliconfig.SetDefaults()
 		if hasInsecure() {
 			t.Error("configEntries() lists insecure, want it absent from a prod build")
 		}
@@ -34,7 +34,7 @@ func TestConfigEntries_NoInsecureInProd(t *testing.T) {
 	t.Run("environment", func(t *testing.T) {
 		isolateConfig(t)
 		t.Setenv("RETYC_INSECURE", "true")
-		config.SetDefaults()
+		cliconfig.SetDefaults()
 		if hasInsecure() {
 			t.Error("configEntries() lists insecure set from RETYC_INSECURE, want it absent")
 		}
@@ -42,7 +42,7 @@ func TestConfigEntries_NoInsecureInProd(t *testing.T) {
 
 	t.Run("config file", func(t *testing.T) {
 		isolateConfig(t)
-		config.SetDefaults()
+		cliconfig.SetDefaults()
 		viper.Set("insecure", true) // listed by AllKeys(), like a key read from config.yaml
 		if hasInsecure() {
 			t.Error("configEntries() lists insecure set in the configuration, want it absent")

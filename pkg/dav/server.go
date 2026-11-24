@@ -5,7 +5,7 @@
 // `retyc fs webdav serve` (cmd/webdav.go) wraps it in a cobra command; a
 // program that imports the core builds the same handler with New.
 //
-// Dependency rule (deps_test.go): no cobra, viper, pkg/config nor cmd.
+// Dependency rule (deps_test.go): no cobra, viper, core/config nor cmd.
 // Settings arrive in Options; messages that no request can be told go to
 // vfs.Options.Logf, or to the diag output.
 package dav
@@ -16,8 +16,8 @@ import (
 
 	"golang.org/x/net/webdav"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // Options are the settings of a Server.

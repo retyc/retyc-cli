@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // wrapSpools puts wrap between the driver and the spools opened from now on,

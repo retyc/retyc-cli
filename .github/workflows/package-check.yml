@@ -12,6 +12,7 @@ on:
       - 'scripts/manpages.sh'
       - 'scripts/genman/**'
       - 'go.mod'
+      - 'core/go.mod'
       - 'LICENSE'
       - 'packaging/**'
       - 'retyc.env.example'

@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 // secretKeys lists the configuration keys whose value must never be printed.
@@ -34,11 +34,11 @@ var configPathCmd = &cobra.Command{
 	Use:         "path",
 	Short:       "Print the configuration file locations",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dir, err := config.Dir()
+		dir, err := cliconfig.Dir()
 		if err != nil {
 			return fmt.Errorf("resolving config directory: %w", err)
 		}
-		tokenFile, err := config.TokenPath()
+		tokenFile, err := cliconfig.TokenPath()
 		if err != nil {
 			return fmt.Errorf("resolving token path: %w", err)
 		}
@@ -105,7 +105,7 @@ environment file (--env-file) count as environment.`,
 		// A value that viper can print but not unmarshal (keyring.ttl: abc)
 		// breaks every other command with an opaque error. Surface it here,
 		// on stderr, without hiding the listing someone came for.
-		if _, err := config.Load(); err != nil {
+		if _, err := cliconfig.Load(); err != nil {
 			fmt.Fprintln(os.Stderr, "warning: the configuration does not load:", err)
 		}
 

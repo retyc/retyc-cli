@@ -10,7 +10,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // allRoot is the root of the "all datarooms" mode: one folder per dataroom

@@ -1,0 +1,118 @@
+package config
+
+import (
+	"errors"
+	"os"
+	"strings"
+	"sync/atomic"
+)
+
+// Environment variables that are deliberately not viper keys.
+//
+// The secrets (token, key passphrase, WebDAV password) are kept out of viper
+// because routing them through AutomaticEnv would also make them settable from
+// config.yaml — viper cannot tell the two sources apart — and these values must
+// never be written to disk in clear text. RETYC_CONFIG_DIR is read before
+// viper is initialised, to locate the config file itself.
+//
+// Every RETYC_ variable read by the CLI is declared here; TestRetycEnvReadOnlyHere
+// fails on a direct os.Getenv elsewhere.
+const (
+	EnvTokenName          = "RETYC_TOKEN"
+	EnvKeyPassphraseName  = "RETYC_KEY_PASSPHRASE"  //nolint:gosec // G101: variable name, not a credential
+	EnvWebdavPasswordName = "RETYC_WEBDAV_PASSWORD" //nolint:gosec // G101: variable name, not a credential
+	EnvConfigDirName      = "RETYC_CONFIG_DIR"
+	// EnvFileName designates the environment file (see envfile.go). It is read
+	// before anything else: the file may carry RETYC_CONFIG_DIR itself.
+	EnvFileName = "RETYC_ENV_FILE"
+
+	// Machine account (see machine.go). Paths and identifiers, not secrets.
+
+	EnvMachineDirName    = "RETYC_MACHINE_DIR"
+	EnvClientIDName      = "RETYC_CLIENT_ID"
+	EnvClientKeyFileName = "RETYC_CLIENT_KEY_FILE"
+	EnvTokenEndpointName = "RETYC_TOKEN_ENDPOINT" //nolint:gosec // G101: variable name, not a credential
+	EnvAgeKeyFileName    = "RETYC_AGE_KEY_FILE"
+)
+
+// ErrNoKeyPassphrase is returned when the key passphrase is required but the
+// environment does not carry one and no interactive prompt is possible.
+var ErrNoKeyPassphrase = errors.New(EnvKeyPassphraseName + " environment variable is required")
+
+// mcpbPlaceholderPrefix starts an MCPB user_config placeholder. Older MCPB
+// clients inject the literal "${user_config.<name>}" when an optional
+// user_config value is left empty in the extension settings.
+//
+// The check is a prefix, not a substring: a passphrase is user-chosen text and
+// may legitimately contain "${".
+const mcpbPlaceholderPrefix = "${user_config."
+
+// fromEnv reads name and treats an unsubstituted MCPB placeholder as unset.
+func fromEnv(name string) string {
+	v := os.Getenv(name)
+	if strings.HasPrefix(v, mcpbPlaceholderPrefix) {
+		return ""
+	}
+
+	return v
+}
+
+// envFilePath returns the environment file designated by RETYC_ENV_FILE, or ""
+// when unset. The --env-file flag takes precedence (LoadEnvFile).
+func envFilePath() string {
+	return os.Getenv(EnvFileName)
+}
+
+// envLogin is set by SetEnvLogin.
+var envLogin atomic.Bool
+
+// SetEnvLogin lets the environment choose the login: RETYC_TOKEN (Token) and
+// the machine account variables (MachineMode, LoadMachine). It is off by
+// default, so that a program importing the core never logs in, nor enters
+// machine mode, because of variables it did not set; the CLI turns it on in
+// cmd's init().
+func SetEnvLogin(enabled bool) {
+	envLogin.Store(enabled)
+}
+
+// Token returns the offline refresh token from RETYC_TOKEN, or "" when unset
+// or when SetEnvLogin is off.
+func Token() string {
+	if !envLogin.Load() {
+		return ""
+	}
+
+	return fromEnv(EnvTokenName)
+}
+
+// KeyPassphrase returns the AGE key passphrase from RETYC_KEY_PASSPHRASE, or
+// "" when unset. Callers that can fall back to an interactive prompt use this;
+// callers that cannot use RequireKeyPassphrase.
+func KeyPassphrase() string {
+	return fromEnv(EnvKeyPassphraseName)
+}
+
+// RequireKeyPassphrase returns the AGE key passphrase, or ErrNoKeyPassphrase
+// when it is unset. It is the single entry point for the non-interactive
+// callers (MCP server, WebDAV server), which have no terminal to prompt on.
+func RequireKeyPassphrase() (string, error) {
+	if v := KeyPassphrase(); v != "" {
+		return v, nil
+	}
+
+	return "", ErrNoKeyPassphrase
+}
+
+// WebdavPassword returns the WebDAV Basic auth password from
+// RETYC_WEBDAV_PASSWORD, or "" when unset. It goes through fromEnv like the
+// others for consistency: the MCPB manifest does not inject this variable
+// today, but no deliberate password starts with "${user_config.".
+func WebdavPassword() string {
+	return fromEnv(EnvWebdavPasswordName)
+}
+
+// DirOverride returns RETYC_CONFIG_DIR, or "" when unset. The core never
+// reads the config directory; the CLI resolves it from this (cliconfig.Dir).
+func DirOverride() string {
+	return fromEnv(EnvConfigDirName)
+}

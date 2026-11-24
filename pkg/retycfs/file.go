@@ -14,10 +14,10 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/metrics"
-	"github.com/retyc/retyc-cli/pkg/telemetry"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/metrics"
+	"github.com/retyc/retyc-cli/core/telemetry"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // fileNode is a regular file.

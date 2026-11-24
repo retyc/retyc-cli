@@ -15,7 +15,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // editorFiles are the patterns `retyc fs mount` keeps local by default

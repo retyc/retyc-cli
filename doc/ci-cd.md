@@ -19,3 +19,11 @@ retyc transfer download -y <transfer-id>
 
 Pass `-y` to commands that ask for confirmation. The token is exchanged for a short-lived
 access token at each run; nothing is written to disk.
+
+## Releasing retyc-cli (maintainers)
+
+The repository holds two Go modules: the CLI and `github.com/retyc/retyc-cli/core`
+(`core/`, the library an rclone backend imports). The CLI's `go.mod` replaces the core
+with `./core`, so a release needs only the `vX.Y.Z` tag (`release.yml`). When the core's
+API changed, also tag `core/vX.Y.Z` on the same commit for its importers; `core/v*` tags
+start no workflow, and build versions only come from `v*` tags.

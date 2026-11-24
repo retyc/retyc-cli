@@ -22,11 +22,11 @@ import (
 	"filippo.io/age"
 	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/crypto"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/telemetry"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/crypto"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/telemetry"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // testChunkSize is the size the fake API cuts its files at, and the one the

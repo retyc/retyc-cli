@@ -1,6 +1,8 @@
 MODULE   := github.com/retyc/retyc-cli
+# The CLI (.) and the core module (core/), which go.mod replaces with ./core.
+MODULES  := . core
 BINARY   := retyc
-VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION  ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS  := -X $(MODULE)/cmd.Version=$(VERSION)
 
 .PHONY: all build build-prod test test-coverage vet lint lint-fix clean install goreleaser goreleaser-full goreleaser-quick mcpb
@@ -16,28 +18,30 @@ build:
 build-prod:
 	go build -tags prod -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
-## Run tests with race detector
+## Run tests with race detector, in both modules
 test:
-	go test -race ./...
+	@for m in $(MODULES); do (cd $$m && go test -race ./...) || exit 1; done
 
 ## Run tests with coverage report and generate HTML report
 test-coverage:
 	go test -race -coverprofile=coverage.out ./...
+	cd core && go test -race -coverprofile=../coverage-core.out ./...
+	tail -n +2 coverage-core.out >>coverage.out && rm -f coverage-core.out
 	go tool cover -func=coverage.out | tail -1
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
-## Run go vet
+## Run go vet, in both modules
 vet:
-	go vet ./...
+	@for m in $(MODULES); do (cd $$m && go vet ./...) || exit 1; done
 
-## Run golangci-lint
+## Run golangci-lint, in both modules
 lint:
-	golangci-lint run ./...
+	@for m in $(MODULES); do (cd $$m && golangci-lint run ./...) || exit 1; done
 
-## Run golangci-lint --fix
+## Run golangci-lint --fix, in both modules
 lint-fix:
-	golangci-lint run ./... --fix
+	@for m in $(MODULES); do (cd $$m && golangci-lint run ./... --fix) || exit 1; done
 
 ## Remove built binary
 clean:

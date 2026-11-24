@@ -9,11 +9,11 @@ import (
 
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/telemetry"
-	"github.com/retyc/retyc-cli/pkg/telemetry/telemetrytest"
-	"github.com/retyc/retyc-cli/pkg/vfs"
-	"github.com/retyc/retyc-cli/pkg/vfs/metastore/memstore"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/telemetry"
+	"github.com/retyc/retyc-cli/core/telemetry/telemetrytest"
+	"github.com/retyc/retyc-cli/core/vfs"
+	"github.com/retyc/retyc-cli/core/vfs/metastore/memstore"
 )
 
 const sentinel = "SENTINEL-do-not-export"

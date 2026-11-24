@@ -7,13 +7,14 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 func TestResolveWebdavAddr_FlagOverridesEnv(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv("RETYC_WEBDAV_ADDR", "0.0.0.0:9000")
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 
 	flags := pflag.NewFlagSet("serve", pflag.ContinueOnError)
 	flags.String("addr", "127.0.0.1:8888", "")
@@ -30,7 +31,7 @@ func TestResolveWebdavAddr_FlagOverridesEnv(t *testing.T) {
 
 func TestResolveWebdavAddr_Default(t *testing.T) {
 	isolateConfig(t)
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 	flags := pflag.NewFlagSet("serve", pflag.ContinueOnError)
 	flags.String("addr", "127.0.0.1:8888", "")
 	if got, err := resolveWebdavAddr(flags); err != nil || got != "127.0.0.1:8888" {
@@ -42,7 +43,7 @@ func TestResolveWebdavAddr_RejectsMissingPort(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0", "localhost", "127.0.0.1:", ""} {
 		t.Run(addr, func(t *testing.T) {
 			isolateConfig(t)
-			config.SetDefaults()
+			cliconfig.SetDefaults()
 			flags := pflag.NewFlagSet("serve", pflag.ContinueOnError)
 			flags.String("addr", "127.0.0.1:8888", "")
 			if err := flags.Set("addr", addr); err != nil {
@@ -72,7 +73,7 @@ func TestResolveUnsafeWrite(t *testing.T) {
 			if tc.env != "" {
 				t.Setenv("RETYC_API_UNSAFE_WRITE", tc.env)
 			}
-			config.SetDefaults()
+			cliconfig.SetDefaults()
 			flags := pflag.NewFlagSet("serve", pflag.ContinueOnError)
 			flags.Bool("unsafe-write", false, "")
 			if tc.flag != "" {
@@ -81,7 +82,7 @@ func TestResolveUnsafeWrite(t *testing.T) {
 				}
 			}
 			bindUnsafeWrite(flags)
-			cfg, err := config.Load()
+			cfg, err := cliconfig.Load()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -93,7 +94,7 @@ func TestResolveUnsafeWrite(t *testing.T) {
 }
 
 // The cache flags of the fs front ends land in the common cache section with
-// the usual precedence, and go through the validation of config.Load.
+// the usual precedence, and go through the validation of cliconfig.Load.
 func TestResolveCacheFlags(t *testing.T) {
 	cases := map[string]struct {
 		env, flags map[string]string
@@ -148,7 +149,7 @@ func TestResolveCacheFlags(t *testing.T) {
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}
-			config.SetDefaults()
+			cliconfig.SetDefaults()
 			cmd := &cobra.Command{Use: "serve"}
 			addCacheFlags(cmd, true)
 			for k, v := range tc.flags {
@@ -157,7 +158,7 @@ func TestResolveCacheFlags(t *testing.T) {
 				}
 			}
 			resolveCacheFlags(cmd.Flags())
-			cfg, err := config.Load()
+			cfg, err := cliconfig.Load()
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("Load() accepted %v", tc.flags)
@@ -178,14 +179,14 @@ func TestResolveCacheFlags(t *testing.T) {
 // A front end that declares no --cache-max-stale still binds the others.
 func TestResolveCacheFlags_WithoutMaxStale(t *testing.T) {
 	isolateConfig(t)
-	config.SetDefaults()
+	cliconfig.SetDefaults()
 	cmd := &cobra.Command{Use: "mount"}
 	addCacheFlags(cmd, false)
 	if err := cmd.Flags().Set("cache-ttl", "30s"); err != nil {
 		t.Fatal(err)
 	}
 	resolveCacheFlags(cmd.Flags())
-	cfg, err := config.Load()
+	cfg, err := cliconfig.Load()
 	if err != nil {
 		t.Fatal(err)
 	}

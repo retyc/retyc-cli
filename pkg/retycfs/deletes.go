@@ -7,8 +7,8 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/retyc/retyc-cli/pkg/metrics"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/metrics"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // DefaultDeleteConcurrency is the number of background deletes a mount built

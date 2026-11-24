@@ -6,7 +6,7 @@ import (
 	"context"
 	"syscall"
 
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // The extended attributes every inode of a dataroom carries, read only. They

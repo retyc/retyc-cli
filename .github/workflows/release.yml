@@ -48,6 +48,13 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v4.1.2
 
+      # The core module has its own tags (core/vX.Y.Z, see doc/ci-cd.md):
+      # goreleaser must not take one for the current or the previous release.
+      - name: Release tags
+        run: |
+          echo "GORELEASER_CURRENT_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          echo "GORELEASER_PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v*' "${GITHUB_REF_NAME}^")" >> "$GITHUB_ENV"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:

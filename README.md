@@ -57,18 +57,12 @@ sudo dnf install https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/ret
 sudo zypper install https://github.com/retyc/retyc-cli/releases/download/vX.Y.Z/retyc-X.Y.Z-1.x86_64.rpm
 ```
 
-### With `go install`
-
-```sh
-go install -tags prod github.com/retyc/retyc-cli@latest
-```
-
 ### From source
 
 ```sh
 git clone https://github.com/retyc/retyc-cli.git
 cd retyc-cli
-go build -tags prod -ldflags "-X github.com/retyc/retyc-cli/cmd.Version=$(git describe --tags --always)" -o retyc .
+go build -tags prod -ldflags "-X github.com/retyc/retyc-cli/cmd.Version=$(git describe --tags --match 'v*' --always)" -o retyc .
 ```
 
 ### With Docker

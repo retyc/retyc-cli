@@ -13,7 +13,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/retyc/retyc-cli/pkg/metrics"
+	"github.com/retyc/retyc-cli/pkg/prommetrics"
 )
 
 // lockingMount mounts the sample tree with Options.MirrorLocks.
@@ -33,7 +33,7 @@ func lockingMount(t *testing.T, mirror bool) (*mounted, *fakeDataroom) {
 func TestMirrorLocks_OneLockPerInode(t *testing.T) {
 	m, dr := lockingMount(t, true)
 	path := filepath.Join(m.dir, "hello.txt")
-	held := testutil.ToFloat64(metrics.LocksHeld)
+	held := testutil.ToFloat64(prommetrics.LocksHeld)
 
 	first, err := openFile(path, os.O_WRONLY)
 	if err != nil {
@@ -43,7 +43,7 @@ func TestMirrorLocks_OneLockPerInode(t *testing.T) {
 	if n, locks := m.api.count("lock"), m.tree.Locks().Held(); n != 1 || locks != 1 {
 		t.Fatalf("after the first open: %d lock requests, %d held; want 1 and 1", n, locks)
 	}
-	if got := testutil.ToFloat64(metrics.LocksHeld) - held; got != 1 {
+	if got := testutil.ToFloat64(prommetrics.LocksHeld) - held; got != 1 {
 		t.Errorf("retycfs_locks_held moved by %v, want 1", got)
 	}
 
@@ -85,7 +85,7 @@ func TestMirrorLocks_OneLockPerInode(t *testing.T) {
 	if n, locks := m.api.count("unlock"), m.tree.Locks().Held(); n != 1 || locks != 0 {
 		t.Errorf("after the last close: %d unlock requests, %d held; want 1 and 0", n, locks)
 	}
-	if got := testutil.ToFloat64(metrics.LocksHeld) - held; got != 0 {
+	if got := testutil.ToFloat64(prommetrics.LocksHeld) - held; got != 0 {
 		t.Errorf("retycfs_locks_held is off by %v once released", got)
 	}
 	m.wantFile(t, dr, "", "hello.txt", []byte("Jello"))
@@ -193,17 +193,17 @@ func TestMirrorLocks_ReleasedAtUnmount(t *testing.T) {
 func TestMetrics_FuseOperations(t *testing.T) {
 	m, _ := lockingMount(t, false)
 	path := filepath.Join(m.dir, "hello.txt")
-	opens := testutil.ToFloat64(metrics.Ops.WithLabelValues("open", "ok"))
-	missing := testutil.ToFloat64(metrics.Ops.WithLabelValues("lookup", "ENOENT"))
-	read := testutil.ToFloat64(metrics.Bytes.WithLabelValues("read"))
-	written := testutil.ToFloat64(metrics.Bytes.WithLabelValues("write"))
-	readers := testutil.ToFloat64(metrics.OpenHandles.WithLabelValues("read"))
-	writers := testutil.ToFloat64(metrics.OpenHandles.WithLabelValues("write"))
+	opens := testutil.ToFloat64(prommetrics.Ops.WithLabelValues("open", "ok"))
+	missing := testutil.ToFloat64(prommetrics.Ops.WithLabelValues("lookup", "ENOENT"))
+	read := testutil.ToFloat64(prommetrics.Bytes.WithLabelValues("read"))
+	written := testutil.ToFloat64(prommetrics.Bytes.WithLabelValues("write"))
+	readers := testutil.ToFloat64(prommetrics.OpenHandles.WithLabelValues("read"))
+	writers := testutil.ToFloat64(prommetrics.OpenHandles.WithLabelValues("write"))
 
 	if _, err := os.Stat(filepath.Join(m.dir, "nothing-here")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stat of a missing name = %v", err)
 	}
-	if got := testutil.ToFloat64(metrics.Ops.WithLabelValues("lookup", "ENOENT")) - missing; got < 1 {
+	if got := testutil.ToFloat64(prommetrics.Ops.WithLabelValues("lookup", "ENOENT")) - missing; got < 1 {
 		t.Errorf("lookup/ENOENT moved by %v, want at least 1", got)
 	}
 
@@ -215,10 +215,10 @@ func TestMetrics_FuseOperations(t *testing.T) {
 	if n, _ := r.Read(buf); n != 5 {
 		t.Fatalf("read %d bytes, want 5", n)
 	}
-	if got := testutil.ToFloat64(metrics.OpenHandles.WithLabelValues("read")) - readers; got != 1 {
+	if got := testutil.ToFloat64(prommetrics.OpenHandles.WithLabelValues("read")) - readers; got != 1 {
 		t.Errorf("open read handles moved by %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(metrics.Bytes.WithLabelValues("read")) - read; got != 5 {
+	if got := testutil.ToFloat64(prommetrics.Bytes.WithLabelValues("read")) - read; got != 5 {
 		t.Errorf("bytes read moved by %v, want 5", got)
 	}
 	_ = r.Close()
@@ -230,23 +230,23 @@ func TestMetrics_FuseOperations(t *testing.T) {
 	if _, err := w.WriteString("seven b"); err != nil {
 		t.Fatal(err)
 	}
-	if got := testutil.ToFloat64(metrics.OpenHandles.WithLabelValues("write")) - writers; got != 1 {
+	if got := testutil.ToFloat64(prommetrics.OpenHandles.WithLabelValues("write")) - writers; got != 1 {
 		t.Errorf("open write handles moved by %v, want 1", got)
 	}
 	_ = w.Close()
 	m.settle(t)
 
-	if got := testutil.ToFloat64(metrics.Bytes.WithLabelValues("write")) - written; got != 7 {
+	if got := testutil.ToFloat64(prommetrics.Bytes.WithLabelValues("write")) - written; got != 7 {
 		t.Errorf("bytes written moved by %v, want 7", got)
 	}
-	if got := testutil.ToFloat64(metrics.Ops.WithLabelValues("open", "ok")) - opens; got != 2 {
+	if got := testutil.ToFloat64(prommetrics.Ops.WithLabelValues("open", "ok")) - opens; got != 2 {
 		t.Errorf("open/ok moved by %v, want 2", got)
 	}
 	eventually(t, "the handles to be released", func() bool {
-		return testutil.ToFloat64(metrics.OpenHandles.WithLabelValues("read")) == readers &&
-			testutil.ToFloat64(metrics.OpenHandles.WithLabelValues("write")) == writers
+		return testutil.ToFloat64(prommetrics.OpenHandles.WithLabelValues("read")) == readers &&
+			testutil.ToFloat64(prommetrics.OpenHandles.WithLabelValues("write")) == writers
 	})
-	if n := testutil.CollectAndCount(metrics.OpDuration); n == 0 {
+	if n := testutil.CollectAndCount(prommetrics.OpDuration); n == 0 {
 		t.Error("no operation duration observed")
 	}
 }

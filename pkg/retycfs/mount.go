@@ -21,7 +21,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"golang.org/x/sys/unix"
 
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // FSType is the type the mount shows in /proc/self/mountinfo and df -T, after

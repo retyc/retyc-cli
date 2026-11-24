@@ -17,9 +17,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/retyc/retyc-cli/pkg/metrics"
-	"github.com/retyc/retyc-cli/pkg/telemetry"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/metrics"
+	"github.com/retyc/retyc-cli/core/telemetry"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // driver is what every inode of one mount shares.

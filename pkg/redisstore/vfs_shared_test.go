@@ -1,0 +1,663 @@
+package redisstore_test
+
+// The vfs tests of a store shared by two instances, on a real Redis: they
+// live here, outside the core module, which must not depend on go-redis.
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+	"golang.org/x/oauth2"
+
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/crypto"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/vfs"
+	"github.com/retyc/retyc-cli/core/vfs/metastore"
+	"github.com/retyc/retyc-cli/pkg/redisstore"
+)
+
+// redisTestURLEnv names the Redis these tests run against, the variable of
+// the redisstore tests: without it they are skipped, except on CI, where they
+// fail.
+const redisTestURLEnv = "REDISSTORE_TEST_URL"
+
+// — A fake API that holds a tree (a subset of the one of the vfs tests) ————————
+
+// fakeNode is a node of treeAPI.
+type fakeNode struct {
+	id     string
+	kind   string // api.NodeTypeFolder, api.NodeTypeFile or api.NodeTypeSymlink
+	target string // of a symlink
+}
+
+// treeAPI is a fake API holding the tree of dataroom "dr1": it answers the
+// lookup by name hash and the listing from it, and counts each. Mutations are
+// accepted without changing the tree.
+type treeAPI struct {
+	t         *testing.T
+	pub, salt string
+
+	mu       sync.Mutex
+	children map[string]map[string]fakeNode // parent ID ("" for the root) → name → node
+	lookups  int
+	listings int
+	// etag, when set, is the ETag of every listing: a listing asked with it
+	// in If-None-Match is answered 304, counted in notModified.
+	etag        string
+	notModified int
+}
+
+func newTreeAPI(t *testing.T) *treeAPI {
+	t.Helper()
+
+	return &treeAPI{t: t, children: make(map[string]map[string]fakeNode)}
+}
+
+// put adds or replaces the child name of parent.
+func (a *treeAPI) put(parent, name string, n fakeNode) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.children[parent] == nil {
+		a.children[parent] = make(map[string]fakeNode)
+	}
+	a.children[parent][name] = n
+}
+
+func (a *treeAPI) hash(name string) string {
+	h := sha256.Sum256([]byte(a.salt + name))
+
+	return hex.EncodeToString(h[:])
+}
+
+// item renders the node name of parent as the API lists it.
+func (a *treeAPI) item(parent, name string, n fakeNode) map[string]any {
+	nameEnc, err := crypto.EncryptStringForKeys(name, []string{a.pub})
+	if err != nil {
+		a.t.Errorf("EncryptStringForKeys: %v", err)
+	}
+	node := map[string]any{
+		"id": n.id, "type": n.kind, "name_enc": nameEnc, "name_hash": a.hash(name),
+		"type_enc": nil, "parent_id": nil, "created_at": "2026-10-01T10:00:00Z",
+	}
+	if parent != "" {
+		node["parent_id"] = parent
+	}
+	var version any
+	switch n.kind {
+	case api.NodeTypeSymlink:
+		targetEnc, err := crypto.EncryptStringForKeys(n.target, []string{a.pub})
+		if err != nil {
+			a.t.Errorf("EncryptStringForKeys: %v", err)
+		}
+		node["target_enc"] = targetEnc
+	case api.NodeTypeFile:
+		version = map[string]any{
+			"id": "v-" + n.id, "node_id": n.id, "original_size": 5, "chunk_count": 1,
+			"created_at": "2026-10-02T10:00:00Z",
+		}
+	}
+
+	return map[string]any{"node": node, "node_version": version}
+}
+
+func (a *treeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/mime-types":
+		fmt.Fprint(w, `[]`)
+	case r.Method == http.MethodGet && r.URL.Path == "/dataroom/dr1/nodes":
+		a.nodes(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/copy"):
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, `{"node":{"id":"f-copy","type":"file","name_enc":"x","type_enc":null,"mime_type_id":null,`+
+			`"access_mode":"0644","parent_id":null},"node_version":{"id":"v-copy","node_id":"f-copy",`+
+			`"original_size":9,"chunk_count":1,"chunk_count_expected":1,"version_number":1,`+
+			`"created_at":"2026-10-10T12:00:00Z"}}`)
+	case r.Method == http.MethodDelete, r.Method == http.MethodPut, r.Method == http.MethodPatch:
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusInternalServerError)
+	}
+}
+
+// nodes answers a lookup by name hash or a listing.
+func (a *treeAPI) nodes(w http.ResponseWriter, r *http.Request) {
+	parent := r.URL.Query().Get("parent_id")
+	hash := r.URL.Query().Get("name_hash")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	etag := ""
+	if hash != "" {
+		a.lookups++
+	} else {
+		a.listings++
+		etag = a.etag
+	}
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			a.notModified++
+			w.WriteHeader(http.StatusNotModified)
+
+			return
+		}
+	}
+	items := []any{}
+	names := make([]string, 0, len(a.children[parent]))
+	for name := range a.children[parent] {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		if hash == "" || a.hash(name) == hash {
+			items = append(items, a.item(parent, name, a.children[parent][name]))
+		}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": len(items), "pages": 1, "page": 1})
+}
+
+// counts returns the number of lookups by name and listings received.
+func (a *treeAPI) counts() (lookups, listings int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return a.lookups, a.listings
+}
+
+// deepTree fills a with /a/b/c/d (folders), a file /a/b/c/d/f.txt and a file
+// /a/x.txt.
+func deepTree(a *treeAPI) *treeAPI {
+	a.put("", "a", fakeNode{id: "d-a", kind: api.NodeTypeFolder})
+	a.put("d-a", "b", fakeNode{id: "d-b", kind: api.NodeTypeFolder})
+	a.put("d-b", "c", fakeNode{id: "d-c", kind: api.NodeTypeFolder})
+	a.put("d-c", "d", fakeNode{id: "d-d", kind: api.NodeTypeFolder})
+	a.put("d-d", "f.txt", fakeNode{id: "f-f", kind: api.NodeTypeFile})
+	a.put("d-a", "x.txt", fakeNode{id: "f-x", kind: api.NodeTypeFile})
+
+	return a
+}
+
+// mustLookup looks name up and fails the test unless it finds the node id.
+func mustLookup(t *testing.T, fs *vfs.FS, parentPath, name, id string) {
+	t.Helper()
+	n, err := fs.Lookup(context.Background(), "dr1", parentPath, name)
+	if err != nil || n.ID != id {
+		t.Fatalf("Lookup(%s, %s) = (%+v, %v), want node %s", parentPath, name, n, err, id)
+	}
+}
+
+// mustMiss looks name up and fails the test unless it does not exist.
+func mustMiss(t *testing.T, fs *vfs.FS, parentPath, name string) {
+	t.Helper()
+	if n, err := fs.Lookup(context.Background(), "dr1", parentPath, name); !errors.Is(err, vfs.ErrNotExist) {
+		t.Fatalf("Lookup(%s, %s) = (%+v, %v), want ErrNotExist", parentPath, name, n, err)
+	}
+}
+
+// names returns the names of nodes, sorted.
+func names(nodes []vfs.Node) []string {
+	out := make([]string, len(nodes))
+	for i, n := range nodes {
+		out[i] = n.Name
+	}
+	slices.Sort(out)
+
+	return out
+}
+
+// eventuallyTrue waits until cond holds.
+func eventuallyTrue(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// — Two instances on one Redis ———————————————————————————————————————————————
+
+// sharedRedis is two instances over one fake API and one Redis: what two
+// `retyc fs mount` of one dataroom are to each other.
+type sharedRedis struct {
+	t      *testing.T
+	api    *treeAPI
+	raw    *redis.Client
+	prefix string
+	// instanceWith builds one more FS on the shared Redis; high is its
+	// cache.redis.high_confidentiality, opts its test seams.
+	instanceWith func(high bool, opts vfs.Options) *vfs.FS
+	// stores holds the store of each instance.
+	stores map[*vfs.FS]metastore.MetaStore
+}
+
+// instance is instanceWith without test seams.
+func (s *sharedRedis) instance(high bool) *vfs.FS {
+	s.t.Helper()
+
+	return s.instanceWith(high, vfs.Options{})
+}
+
+// newSharedRedis returns the pair's corner of the Redis: a random prefix,
+// removed at the end (never a FLUSHDB: the database may be someone's).
+func newSharedRedis(t *testing.T, a *treeAPI) *sharedRedis {
+	t.Helper()
+	url := os.Getenv(redisTestURLEnv)
+	if url == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("%s is not set: the shared cache tests need a Redis", redisTestURLEnv)
+		}
+		t.Skipf("%s is not set", redisTestURLEnv)
+	}
+	ropts, err := redis.ParseURL(url)
+	if err != nil {
+		t.Fatalf("%s is not a Redis URL", redisTestURLEnv)
+	}
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	s := &sharedRedis{
+		t: t, api: a, raw: redis.NewClient(ropts), prefix: "retyc-test-" + hex.EncodeToString(b[:]),
+		stores: make(map[*vfs.FS]metastore.MetaStore),
+	}
+	t.Cleanup(func() {
+		if keys := s.keys(); len(keys) > 0 {
+			_ = s.raw.Unlink(context.Background(), keys...).Err()
+		}
+		_ = s.raw.Close()
+	})
+
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	a.pub, a.salt = identity.Recipient().String(), "salt"
+	srv := httptest.NewServer(a)
+	t.Cleanup(srv.Close)
+	client := api.New(srv.URL, "retyc-test/1.0",
+		oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test", TokenType: "Bearer"}), false, false)
+	s.instanceWith = func(high bool, opts vfs.Options) *vfs.FS {
+		t.Helper()
+		const ttl = 30 * time.Second
+		store, err := redisstore.New(context.Background(), redisstore.Options{
+			URL: url, HighConfidentiality: high, Prefix: s.prefix,
+			ListingLife: vfs.ListingRetention(ttl, 0), EntryLife: ttl, NegativeEntryLife: time.Second,
+		})
+		if err != nil {
+			t.Fatalf("redisstore.New: %v", err)
+		}
+		opts.TTL, opts.Store, opts.KeepSealed = ttl, store, high
+		fs := vfs.New(client, opts)
+		t.Cleanup(func() { _ = fs.Close() })
+		fs.SeedSession("dr1", &service.DataroomSession{Identity: identity, PublicKey: a.pub, NameSalt: a.salt})
+		s.stores[fs] = store
+
+		return fs
+	}
+
+	return s
+}
+
+// keys lists the keys of the test's prefix.
+func (s *sharedRedis) keys() []string {
+	s.t.Helper()
+	var keys []string
+	iter := s.raw.Scan(context.Background(), 0, s.prefix+":*", 1000).Iterator()
+	for iter.Next(context.Background()) {
+		keys = append(keys, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		s.t.Fatalf("SCAN: %v", err)
+	}
+
+	return keys
+}
+
+// dump is everything Redis holds under the prefix: key names and contents.
+func (s *sharedRedis) dump() string {
+	s.t.Helper()
+	ctx := context.Background()
+	var sb strings.Builder
+	for _, k := range s.keys() {
+		sb.WriteString(k + "\n")
+		switch s.raw.Type(ctx, k).Val() {
+		case "hash":
+			for f, v := range s.raw.HGetAll(ctx, k).Val() {
+				sb.WriteString("  " + f + " = " + v + "\n")
+			}
+		case "set":
+			sb.WriteString("  " + strings.Join(s.raw.SMembers(ctx, k).Val(), " ") + "\n")
+		default:
+			sb.WriteString("  " + s.raw.Get(ctx, k).Val() + "\n")
+		}
+	}
+
+	return sb.String()
+}
+
+// asked returns the listings and the lookups by name the API received.
+func (s *sharedRedis) asked() (listings, lookups int) {
+	lookups, listings = s.api.counts()
+
+	return listings, lookups
+}
+
+// ageListing makes the listing of the folder at path of "dr1", as fs reads it
+// from Redis, look fetched age ago.
+func (s *sharedRedis) ageListing(fs *vfs.FS, path string, age time.Duration) {
+	s.t.Helper()
+	ctx, key := context.Background(), metastore.ListingKey{DataroomID: "dr1", Path: path}
+	l, ok, err := s.stores[fs].GetListing(ctx, key)
+	if err != nil || !ok {
+		s.t.Fatalf("no cached listing of %s to age (%v)", path, err)
+	}
+	aged := *l
+	aged.FetchedAt = time.Now().Add(-age)
+	if err := s.stores[fs].PutListing(ctx, key, &aged); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+// listingAge returns the age of the listing of path, as fs reads it from Redis.
+func (s *sharedRedis) listingAge(fs *vfs.FS, path string) time.Duration {
+	s.t.Helper()
+	l, ok, err := s.stores[fs].GetListing(context.Background(), metastore.ListingKey{DataroomID: "dr1", Path: path})
+	if err != nil || !ok {
+		s.t.Fatalf("no cached listing of %s (%v)", path, err)
+	}
+
+	return time.Since(l.FetchedAt)
+}
+
+// A listing one instance fetched is served to the other from Redis: the API
+// is not asked again, for the listing nor for a name in it.
+func TestSharedRedis_ListingOfOneInstanceServesTheOther(t *testing.T) {
+	a := deepTree(newTreeAPI(t))
+	shared := newSharedRedis(t, a)
+	one, two := shared.instance(false), shared.instance(false)
+	ctx := context.Background()
+
+	first, err := one.ReadDir(ctx, "dr1", "/")
+	if err != nil {
+		t.Fatalf("instance 1: ReadDir(/): %v", err)
+	}
+	if listings, _ := shared.asked(); listings != 1 {
+		t.Fatalf("instance 1 made %d listings, want 1", listings)
+	}
+
+	second, err := two.ReadDir(ctx, "dr1", "/")
+	if err != nil {
+		t.Fatalf("instance 2: ReadDir(/): %v", err)
+	}
+	if got, want := names(second), names(first); !slices.Equal(got, want) || len(got) != 1 || got[0] != "a" {
+		t.Errorf("instance 2 lists %v, instance 1 listed %v, want [a]", got, want)
+	}
+	mustLookup(t, two, "/", "a", "d-a")
+	if listings, lookups := shared.asked(); listings != 1 || lookups != 0 {
+		t.Errorf("after instance 2 read the folder: %d listings and %d lookups, want 1 and 0", listings, lookups)
+	}
+}
+
+// What one instance creates or removes is what the other finds, without a
+// request: the edit is made to the listing both read.
+func TestSharedRedis_MutationOfOneInstanceIsSeenByTheOther(t *testing.T) {
+	a := deepTree(newTreeAPI(t))
+	shared := newSharedRedis(t, a)
+	one, two := shared.instance(false), shared.instance(false)
+	ctx := context.Background()
+
+	// Both know /a: instance 1 lists it, instance 2 reads that listing.
+	if _, err := one.ReadDir(ctx, "dr1", "/a"); err != nil {
+		t.Fatalf("instance 1: ReadDir(/a): %v", err)
+	}
+	mustLookup(t, two, "/a", "x.txt", "f-x")
+	mustMiss(t, two, "/a", "copy.txt")
+	listings, lookups := shared.asked()
+
+	// A file created by instance 1 (a server-side copy answers the node).
+	if _, _, err := one.Copy(ctx, "dr1", "/a/x.txt", "/a/copy.txt", false); err != nil {
+		t.Fatalf("instance 1: Copy: %v", err)
+	}
+	mustLookup(t, two, "/a", "copy.txt", "f-copy")
+
+	// A file removed by instance 1.
+	if err := one.Remove(ctx, "dr1", "/a/x.txt", false); err != nil {
+		t.Fatalf("instance 1: Remove: %v", err)
+	}
+	mustMiss(t, two, "/a", "x.txt")
+	nodes, err := two.ReadDir(ctx, "dr1", "/a")
+	if err != nil {
+		t.Fatalf("instance 2: ReadDir(/a): %v", err)
+	}
+	if got := names(nodes); !slices.Equal(got, []string{"b", "copy.txt"}) {
+		t.Errorf("instance 2 lists %v, want [b copy.txt]", got)
+	}
+
+	if l, k := shared.asked(); l != listings || k != lookups {
+		t.Errorf("the mutations cost %d listings and %d lookups, want none", l-listings, k-lookups)
+	}
+}
+
+// With high confidentiality nothing an instance writes to Redis holds a name
+// or a link target in clear, and an instance configured otherwise still reads
+// it: what is read depends on the value alone.
+func TestSharedRedis_HighConfidentialityStoresNoName(t *testing.T) {
+	a := newTreeAPI(t)
+	a.put("", "contracts-2026", fakeNode{id: "d-contracts", kind: api.NodeTypeFolder})
+	a.put("d-contracts", "merger-draft.docx", fakeNode{id: "f-merger", kind: api.NodeTypeFile})
+	a.put("d-contracts", "latest-offer",
+		fakeNode{id: "l-offer", kind: api.NodeTypeSymlink, target: "offers/final-bid.pdf"})
+	shared := newSharedRedis(t, a)
+	sealed, inClear := shared.instance(true), shared.instance(false)
+	ctx := context.Background()
+
+	for _, p := range []string{"/", "/contracts-2026"} {
+		if _, err := sealed.ReadDir(ctx, "dr1", p); err != nil {
+			t.Fatalf("sealed instance: ReadDir: %v", err)
+		}
+	}
+	// A name looked up on its own is stored too, as an entry.
+	if _, err := sealed.Lookup(ctx, "dr1", "/contracts-2026", "absent-memo.txt"); !errors.Is(err, vfs.ErrNotExist) {
+		t.Fatalf("sealed instance: Lookup of a missing name: %v", err)
+	}
+	listings, lookups := shared.asked()
+
+	dump := shared.dump()
+	if !strings.Contains(dump, ":ls:") {
+		t.Fatalf("Redis holds no listing:\n%s", dump)
+	}
+	for _, secret := range []string{
+		"contracts-2026", "merger-draft", "docx", "latest-offer", "final-bid", "offers", "absent-memo",
+	} {
+		if strings.Contains(dump, secret) {
+			t.Errorf("Redis holds %q in clear", secret)
+		}
+	}
+
+	nodes, err := inClear.ReadDir(ctx, "dr1", "/contracts-2026")
+	if err != nil {
+		t.Fatalf("clear instance: ReadDir: %v", err)
+	}
+	if got := names(nodes); !slices.Equal(got, []string{"latest-offer", "merger-draft.docx"}) {
+		t.Errorf("clear instance lists %v, want [latest-offer merger-draft.docx]", got)
+	}
+	for _, n := range nodes {
+		if n.Type == vfs.TypeSymlink && n.Target != "offers/final-bid.pdf" {
+			t.Errorf("clear instance reads the target %q", n.Target)
+		}
+	}
+	mustLookup(t, inClear, "/", "contracts-2026", "d-contracts")
+	if l, k := shared.asked(); l != listings || k != lookups {
+		t.Errorf("reading the sealed listings cost %d listings and %d lookups, want none", l-listings, k-lookups)
+	}
+}
+
+// The sealed nodes read from the store are opened once FS.mu is let go: a
+// decryption that takes its time holds the request that waits for it, not
+// the other operations of the filesystem.
+func TestSharedRedis_SealedNodesAreOpenedOutsideTheMutex(t *testing.T) {
+	a := newTreeAPI(t)
+	a.put("", "x", fakeNode{id: "d-x", kind: api.NodeTypeFolder})
+	a.put("", "y", fakeNode{id: "d-y", kind: api.NodeTypeFolder})
+	for _, name := range []string{"c.txt", "a.txt", "b.txt"} {
+		a.put("d-x", name, fakeNode{id: "f-x-" + name, kind: api.NodeTypeFile})
+		a.put("d-y", name, fakeNode{id: "f-y-" + name, kind: api.NodeTypeFile})
+	}
+	shared := newSharedRedis(t, a)
+	ctx := context.Background()
+	writer := shared.instance(true)
+	for _, p := range []string{"/", "/x", "/y"} {
+		if _, err := writer.ReadDir(ctx, "dr1", p); err != nil {
+			t.Fatalf("writer: ReadDir(%s): %v", p, err)
+		}
+	}
+
+	// A second instance has never decrypted these names: it reads them sealed.
+	blocked, release := make(chan struct{}), make(chan struct{})
+	// The first decryption only waits (not sync.Once: the others would wait
+	// for it too).
+	var first atomic.Bool
+	reader := shared.instanceWith(true, vfs.Options{OpenHook: func() error {
+		if first.CompareAndSwap(false, true) {
+			close(blocked)
+			<-release
+		}
+
+		return nil
+	}})
+	listings, lookups := shared.asked()
+	done := make(chan []vfs.Node, 1)
+	go func() {
+		nodes, err := reader.ReadDir(ctx, "dr1", "/x")
+		if err != nil {
+			t.Errorf("reader: ReadDir(/x): %v", err)
+		}
+		done <- nodes
+	}()
+	select {
+	case <-blocked:
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("ReadDir(/x) opened no sealed node")
+	}
+
+	// While a name of /x is being decrypted, the other folder is served.
+	other := make(chan error, 1)
+	go func() {
+		nodes, err := reader.ReadDir(ctx, "dr1", "/y")
+		if err == nil && !slices.Equal(names(nodes), []string{"a.txt", "b.txt", "c.txt"}) {
+			err = errors.New("ReadDir(/y) lists " + strings.Join(names(nodes), ","))
+		}
+		if err == nil {
+			_, err = reader.Lookup(ctx, "dr1", "/y", "b.txt")
+		}
+		other <- err
+	}()
+	select {
+	case err := <-other:
+		if err != nil {
+			t.Errorf("reader: /y while /x is opened: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("reader: /y waited for the decryption of a name of /x: FS.mu is held across it")
+	}
+	close(release)
+
+	select {
+	case nodes := <-done:
+		if got := names(nodes); !slices.Equal(got, []string{"a.txt", "b.txt", "c.txt"}) {
+			t.Errorf("reader: ReadDir(/x) = %v, want [a.txt b.txt c.txt]", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("reader: ReadDir(/x) did not return")
+	}
+	mustLookup(t, reader, "/x", "c.txt", "f-x-c.txt")
+	if l, k := shared.asked(); l != listings || k != lookups {
+		t.Errorf("the reader cost %d listings and %d lookups, want none: it reads the store", l-listings, k-lookups)
+	}
+}
+
+// A sealed node that does not open, now opened by the FS rather than by the
+// store, still makes what holds it absent: the listing is fetched again, the
+// name looked up at the API.
+func TestSharedRedis_SealedNodeThatDoesNotOpenIsAbsent(t *testing.T) {
+	a := newTreeAPI(t)
+	a.put("", "x", fakeNode{id: "d-x", kind: api.NodeTypeFolder})
+	a.put("d-x", "a.txt", fakeNode{id: "f-a", kind: api.NodeTypeFile})
+	shared := newSharedRedis(t, a)
+	ctx := context.Background()
+	writer := shared.instance(true)
+	for _, p := range []string{"/", "/x"} {
+		if _, err := writer.ReadDir(ctx, "dr1", p); err != nil {
+			t.Fatalf("writer: ReadDir(%s): %v", p, err)
+		}
+	}
+
+	reader := shared.instanceWith(true, vfs.Options{OpenHook: func() error { return errors.New("does not open") }})
+	listings, lookups := shared.asked()
+	nodes, err := reader.ReadDir(ctx, "dr1", "/x")
+	if err != nil || !slices.Equal(names(nodes), []string{"a.txt"}) {
+		t.Fatalf("reader: ReadDir(/x) = %v, %v, want [a.txt]", names(nodes), err)
+	}
+	if l, _ := shared.asked(); l != listings+1 {
+		t.Errorf("reader: ReadDir(/x) made %d listings, want 1: the stored one does not open", l-listings)
+	}
+	mustLookup(t, reader, "/x", "a.txt", "f-a")
+	if _, k := shared.asked(); k == lookups {
+		t.Error("reader: Lookup made no lookup by name: the stored listing does not open")
+	}
+}
+
+// Two instances keep a folder in use warm through Redis: the one whose
+// threshold comes first revalidates the listing (a 304 renews it in Redis),
+// the other reads it young again and asks nothing.
+func TestSharedRedis_ListingInUseIsRenewedOnce(t *testing.T) {
+	a := deepTree(newTreeAPI(t))
+	a.etag = `W/"r1"`
+	shared := newSharedRedis(t, a)
+	// The instance's TTL is 30s: one reaches its threshold at 9s, two at 14s.
+	one := shared.instanceWith(false, vfs.Options{RevalidateAfter: 9 * time.Second})
+	two := shared.instanceWith(false, vfs.Options{RevalidateAfter: 14 * time.Second})
+	ctx := context.Background()
+
+	if _, err := one.ReadDir(ctx, "dr1", "/a"); err != nil {
+		t.Fatal(err)
+	}
+	_, lookups0 := shared.asked() // the name a, looked up to reach /a
+	shared.ageListing(one, "/a", 20*time.Second)
+
+	if _, err := one.ReadDir(ctx, "dr1", "/a"); err != nil {
+		t.Fatal(err)
+	}
+	eventuallyTrue(t, "the listing renewed in Redis", func() bool { return shared.listingAge(two, "/a") < 5*time.Second })
+	a.mu.Lock()
+	notModified := a.notModified
+	a.mu.Unlock()
+	if listings, _ := shared.asked(); listings != 2 || notModified != 1 {
+		t.Fatalf("%d listings (%d not modified), want 2 (1)", listings, notModified)
+	}
+
+	if _, err := two.ReadDir(ctx, "dr1", "/a"); err != nil {
+		t.Fatal(err)
+	}
+	mustLookup(t, two, "/a", "x.txt", "f-x")
+	if listings, lookups := shared.asked(); listings != 2 || lookups != lookups0 {
+		t.Errorf("instance 2: %d listings, %d lookups; want 2, 0", listings, lookups-lookups0)
+	}
+}

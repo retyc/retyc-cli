@@ -10,7 +10,8 @@ import (
 
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 func writeTestEnvFile(t *testing.T, content string) string {
@@ -47,8 +48,8 @@ func TestEnvFile_FlagFeedsAccessorsViperAndConfigDir(t *testing.T) {
 	if got := viper.GetString("api.base_url"); got != "https://api.file.example" {
 		t.Errorf("api.base_url = %q, want the value of the file: the file must be loaded before viper", got)
 	}
-	if dir, err := config.Dir(); err != nil || dir != cfgDir {
-		t.Errorf("config.Dir() = %q, %v, want %q from the file", dir, err, cfgDir)
+	if dir, err := cliconfig.Dir(); err != nil || dir != cfgDir {
+		t.Errorf("cliconfig.Dir() = %q, %v, want %q from the file", dir, err, cfgDir)
 	}
 	if envFileLoaded == nil || envFileLoaded.Path != path || len(envFileLoaded.Applied) != 4 {
 		t.Errorf("envFileLoaded = %+v, want %s with 4 variables applied", envFileLoaded, path)

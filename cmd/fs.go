@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/core/config"
 )
 
 // fsCmd groups the commands that expose datarooms as a filesystem. It must
@@ -54,7 +54,7 @@ func addCacheFlags(cmd *cobra.Command, maxStale bool) {
 }
 
 // resolveCacheFlags binds the cache flags the command declares to their
-// viper keys, so that config.Load reads them with the usual precedence
+// viper keys, so that cliconfig.Load reads them with the usual precedence
 // (flag > env > config file > default) and validates them like any other
 // source. Bound from RunE, never from
 // init(), to survive the viper.Reset() of the config tests.

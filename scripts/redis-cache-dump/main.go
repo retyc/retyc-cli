@@ -1,6 +1,6 @@
 // Command redis-cache-dump prints, as JSON, what the shared metadata cache
 // of `retyc fs mount` / `retyc fs webdav serve` (cache.store: redis) holds in
-// a Redis. The values are binary (pkg/vfs/metastore/redisstore/wire.go)
+// a Redis. The values are binary (pkg/redisstore/wire.go)
 // and redis-cli shows them as escaped bytes: this decodes them with the
 // decoder of the store itself (redisstore.Describe).
 //
@@ -28,7 +28,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/retyc/retyc-cli/pkg/vfs/metastore/redisstore"
+	"github.com/retyc/retyc-cli/pkg/redisstore"
 )
 
 const (

@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/crypto"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/crypto"
 )
 
 // The write routes of fakeAPI. What is uploaded is decrypted with the key of

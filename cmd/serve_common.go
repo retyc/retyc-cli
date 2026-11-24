@@ -8,13 +8,13 @@ import (
 	"filippo.io/age"
 	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/auth"
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/keyring"
-	"github.com/retyc/retyc-cli/pkg/metrics"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/telemetry"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/auth"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/keyring"
+	"github.com/retyc/retyc-cli/core/metrics"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/telemetry"
 )
 
 // What the long-running commands that serve datarooms share (`fs webdav

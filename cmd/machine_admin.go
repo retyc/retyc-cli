@@ -14,9 +14,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/ui"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/ui"
 )
 
 // errMachineAdminInMachineMode refuses the management commands in machine

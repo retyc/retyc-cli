@@ -1,6 +1,8 @@
 # CLAUDE.md — retyc-cli
 
-Go CLI for the RETYC platform. Module: `github.com/retyc/retyc-cli`. Go 1.26.
+Go CLI for the RETYC platform. Modules: `github.com/retyc/retyc-cli` (the CLI, `.`) and
+`github.com/retyc/retyc-cli/core` (`core/`, `replace`d by `./core` in the root `go.mod`).
+Go 1.26.
 
 This file is a map and a list of rules. Behaviour is documented for users in `doc/`
 (`commands.md`, `configuration.md`, `webdav.md`, `retycfs.md`, `mcp.md`, `mcpb.md`,
@@ -20,24 +22,36 @@ cmd/                     # cobra commands, flag/viper binding, output; thin adap
   webdav.go              #   `fs webdav serve` command over pkg/dav
   mount*.go              #   fs mount (mount_linux.go: runMount / serveMount)
   serve_common.go metastore.go observability.go   # shared by webdav serve and fs mount
-pkg/                     # the core, importable by another module (desktop client); no
-                         #   stability promise (v0). Nothing in pkg/ imports cmd or cobra
+core/                    # module github.com/retyc/retyc-cli/core: the core, imported by
+                         #   other modules (desktop client, rclone backend); no stability
+                         #   promise (v0). Own go.mod, see "Core module"
   api/                   # REST client: transport.go (only http.Transport), retry.go (429),
                          #   errorcodes.go, one file per API area
   auth/                  # OIDC device flow, refresh, GetValidToken, TokenStore,
                          #   Watch (login keepalive of the long-running servers)
-  config/                # viper defaults, Config structs, env.go (env-only settings), envfile.go
-  crypto/                # AGE helpers (PQ only)
-  dav/                   # WebDAV adapter over pkg/vfs (dav.New), no cobra/viper/config
+  config/                # Config structs + defaults/bounds, env.go (env-only settings), envfile.go,
+                         #   machine.go, TokenFileStore; no viper, no config dir
+  crypto/                # AGE helpers (PQ only); cryptotest/ (weak scrypt, tests only)
   diag/                  # where the core writes warnings, progress, --debug (stderr default)
   keyring/               # Linux session keyring cache of the decrypted identity
   service/               # business logic shared by commands and MCP (sessions, uploads, …),
                          #   IdentityCache (keyring by default)
   vfs/                   # file-tree service shared by WebDAV and FUSE (caches, mutations, I/O)
-    metastore/           #   MetaStore interface; memstore/ (default), redisstore/ (shared)
+    metastore/           #   MetaStore interface; memstore/ (default)
+  metrics/               # measurement points of the core (stdlib interfaces, no-op until Install);
+                         #   metricstest/ (in-memory, for core tests)
+  telemetry/             # tracing instrumentation, OTel API only (Tracer, attrs, used spans);
+                         #   telemetrytest/ (in-memory tracer, tests only)
+  machinekey/ ui/        # machine account key, terminal spinner/prompts
+pkg/                     # the CLI's own packages (module github.com/retyc/retyc-cli)
+  cliconfig/             # viper binding (SetDefaults, Load + validation), config dir,
+                         #   build defaults (paths_dev.go / paths_prod.go), token.json (TokenFile)
+  dav/                   # WebDAV adapter over core/vfs (dav.New), no cobra/viper/config
+  redisstore/            # shared MetaStore on Redis (cache.store: redis); vfs_shared_test.go
+                         #   holds the vfs tests over it (two instances, one Redis)
   retycfs/               # FUSE driver (linux build tag), go-fuse v2 `fs` API
-  metrics/               # Prometheus collectors of `fs mount`, all retycfs_*
-  telemetry/             # OpenTelemetry tracing of `fs mount`; env.go is the only reader of OTEL_*
+  prommetrics/           # Prometheus collectors behind core/metrics, all retycfs_*
+  otelexport/            # OTel SDK + OTLP exporter of `fs mount`; env.go reads OTEL_*
 packaging/               # files shipped as is in the .deb / .rpm (example systemd units)
 scripts/                 # build-mcpb.sh, completions.sh + manpages.sh/genman (packages), benches,
                          #   start-jaeger.sh, start-redis.sh,
@@ -51,7 +65,7 @@ scripts/                 # build-mcpb.sh, completions.sh + manpages.sh/genman (p
 | `go build .` | `!prod` | `.retyc/` (CWD, gitignored) | `https://api.triplesfer.traefik.me` |
 | `go build -tags prod .` | `prod` | `~/.config/retyc/` | `https://api.retyc.com` |
 
-- `paths_dev.go` / `paths_prod.go` hold `configDir()`, `defaultAPIBaseURL` and the
+- `pkg/cliconfig/paths_dev.go` / `paths_prod.go` hold `configDir()`, `defaultAPIBaseURL` and the
   build-specific defaults. `RETYC_CONFIG_DIR` overrides the config dir.
 - Version: `-ldflags "-X github.com/retyc/retyc-cli/cmd.Version=v1.2.3"` (default
   `dev`). The API answers **426** to a CLI below its minimum version, `dev` included:
@@ -87,17 +101,33 @@ scripts/                 # build-mcpb.sh, completions.sh + manpages.sh/genman (p
   WebDAV root folder is `/spaces` (no `/dataroom` alias).
 - Say "organization key", never "master key".
 
-## Importable core (`pkg/`)
+## Core module (`core/`)
 
-`pkg/` is imported by the desktop client (another module); the CLI's behaviour must
-not depend on it being imported, nor the reverse.
+`core/` is imported by other modules (desktop client, rclone backend); the CLI's
+behaviour must not depend on it being imported, nor the reverse.
 
-- No package of `pkg/` imports `cmd` or cobra. `pkg/dav`, like `vfs`, imports neither
-  viper, pflag nor `pkg/config` (`pkg/dav/deps_test.go`).
+- Own `go.mod` (`github.com/retyc/retyc-cli/core`, `go 1.26.0`, no toolchain line).
+  Requirements are the **lowest versions that work, never above rclone's** (its
+  `go.mod` on master: x/*, otel, testify…): an importer's MVS must not move. No
+  requirement, even for tests, on viper / pflag / cobra / afero / fsnotify, prometheus,
+  OTel exporters, grpc, go-fuse, go-redis, mcp-go nor the CLI's module
+  (`TestCoreModuleRequirements`, `core/vfs/deps_test.go`); the OTel SDK is tolerated for
+  `telemetrytest`. Tidy with `cd core && go mod tidy`.
+- The core's packages never reach the CLI's (`cmd`, `pkg/…`). `vfs` is also checked
+  transitively (`TestDependencyRule`). The core builds for plan9, linux/386 and
+  linux/arm (`cd core && GOOS=plan9 GOARCH=amd64 go build ./...`).
+- No `go.work`. The root `go.mod` requires the core at
+  `v0.0.0-00010101000000-000000000000` with `replace … => ./core`: the CLI always builds
+  from the repository with the core beside it (so `go install …@latest` is not
+  supported). `core/vX.Y.Z` tags serve importers only: set one on the commit of `vX.Y.Z`
+  when the core's API changed (`doc/ci-cd.md`). Build versions come from `v*` tags only.
+- No package of the core or of `pkg/` imports `cmd` or cobra. `pkg/dav`, like `vfs`,
+  imports neither viper, pflag nor `core/config` (`pkg/dav/deps_test.go`).
+  `cliconfig`, `prommetrics`, `otelexport` are the CLI's side, imported by `cmd` only.
 - No implicit environment: the API URL, the token store and the settings come from
-  the caller. `config.Dir()`, `config.SetDefaults()` and the build defaults
-  (`paths_dev.go` / `paths_prod.go`) are for `cmd` only; nothing else in `pkg/` reads
-  the config dir or the CWD. Logging in from the environment (`RETYC_TOKEN`, machine
+  the caller. `cliconfig` (`Dir()`, `SetDefaults()`, `Load()`, the build defaults
+  `paths_dev.go` / `paths_prod.go`) is for `cmd` only; nothing in the core reads the
+  config dir or the CWD. Logging in from the environment (`RETYC_TOKEN`, machine
   account: `config.Token()`, `config.MachineMode()`, `config.LoadMachine()`) is off
   until `config.SetEnvLogin(true)`, which `cmd/root.go` calls in `init()`; the tests of
   `config`, `auth` and `service` opt in the same way (`envlogin_test.go`,
@@ -106,16 +136,19 @@ not depend on it being imported, nor the reverse.
   through `diag.Writer()` / `diag.Printf` (stderr unless an importer calls
   `diag.SetOutput`); `vfs` keeps `Options.Logf`.
 - Login token: read and written through `auth.Tokens()` only (`auth.TokenStore`). There
-  is no store by default: `cmd/root.go` sets `config.TokenFile{}` (token.json) in
-  `init()`; the tests of `auth` and `service` do the same (`tokenstore_cli_test.go`).
+  is no store by default: `cmd/root.go` sets `cliconfig.TokenFile{}` (token.json) in
+  `init()`; the tests of `auth` and `service` set an equivalent over
+  `config.TokenFileStore` (`tokenstore_cli_test.go`).
 - Decrypted identity: `service.SetIdentityCache` (`IdentityCache`); default
   `service.KeyringCache` (Linux session keyring).
 - Builds without cgo for linux, windows and darwin (amd64/arm64). Cross-check with
-  `GOOS=windows GOARCH=amd64 go vet ./...` (and darwin) when touching platform code.
+  `GOOS=windows GOARCH=amd64 go vet ./...` (and darwin), in both modules, when touching
+  platform code. `make test` / `vet` / `lint` / `lint-fix` run in both.
 
 ## Configuration — the single rule
 
-`config.SetDefaults()` owns the binding. Every viper key `a.b` is settable from
+`cliconfig.SetDefaults()` owns the binding; `core/config` holds only the structs,
+defaults and env-only settings, without viper. Every viper key `a.b` is settable from
 `RETYC_A_B` (prefix mandatory: security). Precedence: flag > env > env file > config
 file > default.
 
@@ -124,15 +157,15 @@ file > default.
   `Config`, a row in `doc/configuration.md`. Flags are bound to their key in a
   `resolve…` function called from `RunE`, never in `init()`.
 - Secrets and pre-viper settings are **not** viper keys: they live in
-  `pkg/config/env.go` (`RETYC_TOKEN`, `RETYC_KEY_PASSPHRASE`,
+  `core/config/env.go` (`RETYC_TOKEN`, `RETYC_KEY_PASSPHRASE`,
   `RETYC_WEBDAV_PASSWORD`, `RETYC_CONFIG_DIR`, `RETYC_ENV_FILE`), read through its
   accessors only. A new one needs its `Env…Name` constant there and a doc row.
 - Enforced by tests: `TestRetycEnvReadOnlyHere` (no `os.Getenv("RETYC_…")` outside
-  `pkg/config`), `TestEnvVarsDocumented` (every key and env var in
-  `doc/configuration.md`).
-- `OTEL_*` / `TRACEPARENT` / `TRACESTATE` are read only in `pkg/telemetry/env.go`.
-- Tests touching viper isolate themselves: `resetViper` (config), `isolateConfig` (cmd).
-- `config.Load` validates ranges and refuses removed keys (`removedKeys`, e.g. the
+  `core/config` and `pkg/cliconfig`), `TestEnvVarsDocumented` (every key — cliconfig —
+  and env var — config — in `doc/configuration.md`).
+- `OTEL_*` / `TRACEPARENT` / `TRACESTATE` are read only in `pkg/otelexport/env.go`.
+- Tests touching viper isolate themselves: `resetViper` (cliconfig), `isolateConfig` (cmd).
+- `cliconfig.Load` validates ranges and refuses removed keys (`removedKeys`, e.g. the
   former `webdav.cache.*`).
 - Env file (`--env-file` / `RETYC_ENV_FILE`, `envfile.go`): `RETYC_*` names only, mode
   0600 required, real env wins, applied in `cobra.OnInitialize` before viper. Errors
@@ -144,7 +177,7 @@ file > default.
 stdout = results only, stderr = everything else (prompts, progress, warnings).
 
 - Branch `if jsonOutput { return printJSON(v) }` where human formatting starts.
-- Reuse tagged `api.*` structs; **never add `json` tags to `pkg/service` result
+- Reuse tagged `api.*` structs; **never add `json` tags to `core/service` result
   structs** (the MCP server marshals them as they are): add a view type in
   `cmd/output.go`.
 - Prompts go through `confirm()` (with `--json` and no `--yes`: `errJSONNeedsYes`).
@@ -154,7 +187,7 @@ stdout = results only, stderr = everything else (prompts, progress, warnings).
 
 ## HTTP
 
-- `api.BaseTransport(insecure)` (`pkg/api/transport.go`) is the **only** place an
+- `api.BaseTransport(insecure)` (`core/api/transport.go`) is the **only** place an
   `http.Transport` is built (proxy from env, `SSL_CERT_FILE` / `SSL_CERT_DIR` added to
   the system pool, TLS ≥ 1.2). The OIDC client (`newHTTPClient`) and `api.New` both use
   it; an importer may replace it with `api.WithBaseTransport`. HTTP/2 only, one multiplexed connection: concurrency settings bound backend load.
@@ -163,7 +196,7 @@ stdout = results only, stderr = everything else (prompts, progress, warnings).
   run it instead of the root's).
 - `--debug` prints every request and response body to stderr; proxy credentials are
   redacted.
-- Rate limit (`pkg/api/retry.go`): 429 is replayed (ingress limit, safe for every
+- Rate limit (`core/api/retry.go`): 429 is replayed (ingress limit, safe for every
   method) with a per-client `throttleGate`, bounded by `api.retry.max_wait` /
   `max_attempts`, then `*api.RateLimitError`. Request bodies must be rebuildable
   (`bytes.Reader`, `strings.Reader`…), never a stream. Tests never sleep (`fakeClock`).
@@ -231,15 +264,16 @@ Behaviour in `doc/commands.md`. Notes for code:
 - Admin commands: organization API (`<api.base_url>/v1`), scopes
   `organization|dataroom|transfer` × `read|write`.
 
-## pkg/vfs
+## core/vfs
 
 Service layer behind `webdav serve` and `fs mount`, addressed by dataroom ID and
 absolute path. Package comments and `doc/webdav.md` / `doc/retycfs.md` describe the
 behaviour; the rules:
 
 - **Dependency rule** (`TestDependencyRule`, `deps_test.go`): no `net/http`,
-  `x/net/webdav`, go-fuse, cobra, viper, `pkg/config` nor `cmd` imported by
-  `vfs` or its sub-packages. Settings arrive as plain values in `vfs.Options`; `vfs`
+  `x/net/webdav`, go-fuse, `spf13/*`, prometheus, the OTel SDK/exporters, grpc,
+  go-redis, `core/config`, `cmd` nor `pkg/…` imported by `vfs` or its sub-packages.
+  Settings arrive as plain values in `vfs.Options`; `vfs`
   never reads `service.Concurrency()`. `vfs.Default*` constants mirror `config`
   defaults (`TestVFSDefault…MatchesConfig`).
 - Paths are cleaned by `listingKey` only.
@@ -257,12 +291,14 @@ behaviour; the rules:
 - `FS.Create` reads its `io.Reader` only once the upload is accepted (WebDAV relies on
   it). Uploads take a slot of `UploadConcurrency` across files.
 - Test seams: `Options.List`, `Session`, `ListDatarooms`, `ReadChunk`, `ChunkSizeOf`,
-  `ChunkSize`, `MaxChunkSize`; `SeedSession`, `SeedDatarooms`. Production sets none.
+  `ChunkSize`, `MaxChunkSize`, `OpenHook`, `RevalidateAfter` (the last two for
+  `pkg/redisstore/vfs_shared_test.go`, outside the module); `SeedSession`,
+  `SeedDatarooms`. Production sets none.
 
 ### metastore / Redis (`cache.store: redis`)
 
-- `vfs` imports `metastore`, never the reverse; `cmd` (`newMetaStore`) is the only
-  caller of `redisstore.New`. `metastore` imports the standard library only.
+- `vfs` imports `metastore`, never the reverse; `pkg/redisstore` (CLI module) imports
+  `core/vfs/metastore`; `cmd` (`newMetaStore`) is the only caller of `redisstore.New`. `metastore` imports the standard library only.
 - The Redis URL carries the password: never in an error, log, span or metric
   (`Store.fail` strips it).
 - An absent key always means "invalid" (eviction-safe): values carry the tokens of
@@ -314,12 +350,18 @@ User doc: `doc/retycfs.md`. Rules:
 probes or traces. Shared code (`vfs`, `service`, `api`) still observes and opens
 spans: unregistered collectors and the no-op tracer cost nothing elsewhere.
 
-- Metrics (`pkg/metrics`): one prefix, `retycfs_`. Declare in `metrics.go`, add
-  to `all`, observe at the event, document in `doc/retycfs.md`. Labels stay bounded
-  (routes through `metrics.NormalizeRoute`, never an ID or path). Registered only by
-  the observability listener of the mount (`--metrics-addr`, `cmd/observability.go`).
-- Tracing (`pkg/telemetry`): `telemetry.Init` is called by `runMount` only; off
-  unless an OTLP endpoint is set. Attribute keys live in `attrs.go`, never spelled at
+- Metrics: one prefix, `retycfs_`. The core observes `core/metrics` points (small
+  interfaces, no-op until `metrics.Install(Set)`); `pkg/prommetrics` holds the
+  collectors and is installed in `cmd/root.go` `init()` (every command observes).
+  Adding one: a `Set` field + variable in `core/metrics`, a collector in
+  `pkg/prommetrics` (+ `all` and `Install`), a `metricstest` entry, observe at the
+  event, document in `doc/retycfs.md`. Labels stay bounded (routes through
+  `metrics.NormalizeRoute`, never an ID or path). Registered only by the observability
+  listener of the mount (`--metrics-addr`, `cmd/observability.go`). Core tests read
+  values through `metricstest` (`metricstest.Install()` in a test `init()`), CLI-side
+  tests through the `prommetrics` collectors.
+- Tracing: `core/telemetry` uses the OTel API only; `otelexport.Init` (SDK, exporter)
+  is called by `runMount` only; off unless an OTLP endpoint is set. Attribute keys live in `attrs.go`, never spelled at
   call sites. One root span per FUSE operation that reaches the API
   (`StartUsedRoot`).
 - **Privacy rule** (`cmd/tracing_privacy_test.go`, `telemetrytest.AssertNoLeak`): no
@@ -330,9 +372,11 @@ spans: unregistered collectors and the no-op tracer cost nothing elsewhere.
 
 ## CI
 
-`main.yml` → `_ci.yml` (vet, race tests with `fuse3` installed and a `redis:8.10.2`
-service, dev + prod builds) → `_docker.yml`. `_package.yml` (goreleaser snapshot
+`main.yml` → `_ci.yml` (lint and race tests of both modules with `fuse3` installed and
+a `redis:8.10.2` service, dev + prod builds, tidy and vet of both, the core's
+cross builds incl. plan9/386/arm) → `_docker.yml`. `_package.yml` (goreleaser snapshot
 linux/amd64, lintian, `.deb` / `.rpm` install) runs from `package-check.yml` when the
 packaging files change, and before goreleaser in `release.yml`. `release.yml` on `v*`
-tags: goreleaser (binaries, `.deb`, `.rpm`), MCPB bundle, GitHub release. Keyless cosign (`sigstore/cosign-installer`): pushed images except
+tags (never `core/v*`, see "Core module"): goreleaser (binaries, `.deb`, `.rpm`), MCPB
+bundle, GitHub release. Keyless cosign (`sigstore/cosign-installer`): pushed images except
 the dev one, checksum file (goreleaser `signs:`), MCPB bundle. See `doc/ci-cd.md`.

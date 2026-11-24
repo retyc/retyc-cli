@@ -11,9 +11,10 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/config"
-	"github.com/retyc/retyc-cli/pkg/service"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
 
 var adminCmd = &cobra.Command{
@@ -30,7 +31,7 @@ decrypt content additionally need the organization private key file
 // newAdminClient loads the config and returns an API client authenticated
 // with the organization API key.
 func newAdminClient() (*config.Config, *api.Client, error) {
-	cfg, err := config.Load()
+	cfg, err := cliconfig.Load()
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}

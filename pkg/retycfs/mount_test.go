@@ -23,7 +23,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/core/api"
 )
 
 // sampleTree fills a dataroom with:

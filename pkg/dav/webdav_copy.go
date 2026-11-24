@@ -14,10 +14,10 @@ import (
 
 	"golang.org/x/net/webdav"
 
-	"github.com/retyc/retyc-cli/pkg/api"
-	"github.com/retyc/retyc-cli/pkg/service"
-	"github.com/retyc/retyc-cli/pkg/ui"
-	"github.com/retyc/retyc-cli/pkg/vfs"
+	"github.com/retyc/retyc-cli/core/api"
+	"github.com/retyc/retyc-cli/core/service"
+	"github.com/retyc/retyc-cli/core/ui"
+	"github.com/retyc/retyc-cli/core/vfs"
 )
 
 // — COPY ————————————————————————————————————————————————————————————————————————

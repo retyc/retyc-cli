@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/net/webdav"
 
-	"github.com/retyc/retyc-cli/pkg/api"
+	"github.com/retyc/retyc-cli/core/api"
 )
 
 // — API rate limit (429) ————————————————————————————————————————————————————————

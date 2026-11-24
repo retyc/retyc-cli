@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/retyc/retyc-cli/pkg/config"
+	"github.com/retyc/retyc-cli/core/config"
 )
 
 // The memory store is vfs's own: nothing is built, and nothing is dialed.
