@@ -25,6 +25,28 @@ jobs:
       contents: read
     uses: ./.github/workflows/_package.yml
 
+  # The core module (core/) follows the CLI's version: every vX.Y.Z gets
+  # core/vX.Y.Z on the same commit, so that a program importing the core and
+  # running the CLI can match the two. A core/v* tag starts no workflow.
+  core-tag:
+    name: Core tag
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Tag core/${{ github.ref_name }}
+        run: |
+          tag="core/${GITHUB_REF_NAME}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+            echo "${tag} already exists"
+            exit 0
+          fi
+          git tag "${tag}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${tag}"
+
   goreleaser:
     name: GoReleaser
     needs: [ci, package]

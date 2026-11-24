@@ -119,8 +119,9 @@ behaviour must not depend on it being imported, nor the reverse.
 - No `go.work`. The root `go.mod` requires the core at
   `v0.0.0-00010101000000-000000000000` with `replace … => ./core`: the CLI always builds
   from the repository with the core beside it (so `go install …@latest` is not
-  supported). `core/vX.Y.Z` tags serve importers only: set one on the commit of `vX.Y.Z`
-  when the core's API changed (`doc/ci-cd.md`). Build versions come from `v*` tags only.
+  supported). The core follows the CLI's version: `release.yml` (job `core-tag`) tags
+  every `vX.Y.Z` commit `core/vX.Y.Z` too; never tag `core/v*` by hand. Build versions
+  come from `v*` tags only. A v2 of the CLI means a `/v2` core module path.
 - No package of the core or of `pkg/` imports `cmd` or cobra. `pkg/dav`, like `vfs`,
   imports neither viper, pflag nor `core/config` (`pkg/dav/deps_test.go`).
   `cliconfig`, `prommetrics`, `otelexport` are the CLI's side, imported by `cmd` only.
@@ -377,6 +378,6 @@ a `redis:8.10.2` service, dev + prod builds, tidy and vet of both, the core's
 cross builds incl. plan9/386/arm) → `_docker.yml`. `_package.yml` (goreleaser snapshot
 linux/amd64, lintian, `.deb` / `.rpm` install) runs from `package-check.yml` when the
 packaging files change, and before goreleaser in `release.yml`. `release.yml` on `v*`
-tags (never `core/v*`, see "Core module"): goreleaser (binaries, `.deb`, `.rpm`), MCPB
+tags (never `core/v*`, see "Core module"): `core/vX.Y.Z` tag, goreleaser (binaries, `.deb`, `.rpm`), MCPB
 bundle, GitHub release. Keyless cosign (`sigstore/cosign-installer`): pushed images except
 the dev one, checksum file (goreleaser `signs:`), MCPB bundle. See `doc/ci-cd.md`.

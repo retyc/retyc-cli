@@ -24,6 +24,7 @@ access token at each run; nothing is written to disk.
 
 The repository holds two Go modules: the CLI and `github.com/retyc/retyc-cli/core`
 (`core/`, the library an rclone backend imports). The CLI's `go.mod` replaces the core
-with `./core`, so a release needs only the `vX.Y.Z` tag (`release.yml`). When the core's
-API changed, also tag `core/vX.Y.Z` on the same commit for its importers; `core/v*` tags
-start no workflow, and build versions only come from `v*` tags.
+with `./core`. A release needs only the `vX.Y.Z` tag: `release.yml` tags the same commit
+`core/vX.Y.Z` (the core always follows the CLI's version). `core/v*` tags start no workflow,
+and build versions only come from `v*` tags. From v2 on, Go requires the core's module path
+to end in `/v2` (`core/go.mod` and every import).
