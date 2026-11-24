@@ -878,13 +878,13 @@ func TestEntries_DroppedByEveryLocalMutation(t *testing.T) {
 			apply: func(a *treeAPI) { a.put("d-a", "elsewhere", fakeNode{id: "f-e", kind: api.NodeTypeFile}) },
 			after: func(t *testing.T, fs *FS) { mustLookup(t, fs, "/a", "elsewhere", "f-e") },
 		},
-		"invalidateSubtree, the folder and below": {
+		"InvalidateSubtree, the folder and below": {
 			before: func(t *testing.T, fs *FS) {
 				mustMiss(t, fs, "/a", "elsewhere")
 				mustMiss(t, fs, "/a/b/c", "deep")
 			},
 			mutate: func(fs *FS) error {
-				fs.invalidateSubtree("dr1", "/a")
+				fs.InvalidateSubtree("dr1", "/a")
 
 				return nil
 			},
@@ -923,7 +923,7 @@ func TestEntries_SubtreeDropStopsAtTheFolder(t *testing.T) {
 	mustMiss(t, fs, "/ab", "n")
 	mustMiss(t, fs, "/a", "n")
 
-	fs.invalidateSubtree("dr1", "/a")
+	fs.InvalidateSubtree("dr1", "/a")
 	if _, ok := cachedEntry(fs, "/ab", "n"); !ok {
 		t.Error("the entries of /ab went with the subtree of /a")
 	}
@@ -952,8 +952,8 @@ func TestLookup_AnswerOlderThanAMutationIsNotKept(t *testing.T) {
 
 			return nil
 		},
-		"invalidateSubtree above": func(fs *FS) error {
-			fs.invalidateSubtree("dr1", "/")
+		"InvalidateSubtree above": func(fs *FS) error {
+			fs.InvalidateSubtree("dr1", "/")
 
 			return nil
 		},
@@ -1024,7 +1024,7 @@ func TestLookup_ConcurrentWithMutations(t *testing.T) {
 				case 0:
 					fs.upsert("dr1", "/a", Node{ID: "f-" + name, Name: name, Type: TypeFile})
 				case 1:
-					fs.invalidateSubtree("dr1", "/a/b")
+					fs.InvalidateSubtree("dr1", "/a/b")
 				case 2:
 					_, _ = fs.ReadDir(ctx, "dr1", "/a")
 				case 3:

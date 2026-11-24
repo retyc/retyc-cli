@@ -69,7 +69,7 @@ func (fs *FS) Mkdir(ctx context.Context, dataroomID, path string) (Node, error) 
 		// The cached listing named a parent deleted elsewhere since.
 		grandParent, _ := SplitPath(parentPath)
 		fs.InvalidateListing(dataroomID, grandParent)
-		fs.invalidateSubtree(dataroomID, parentPath)
+		fs.InvalidateSubtree(dataroomID, parentPath)
 
 		return Node{}, as(ErrNotExist, err)
 	case errors.Is(err, api.ErrConflict):
@@ -122,11 +122,11 @@ func (fs *FS) parentAfterConflict(
 	freshID, err := fs.resolveFolderID(ctx, dataroomID, parentPath)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		fs.invalidateSubtree(dataroomID, parentPath)
+		fs.InvalidateSubtree(dataroomID, parentPath)
 
 		return nil, ErrNotExist
 	case errors.Is(err, os.ErrInvalid):
-		fs.invalidateSubtree(dataroomID, parentPath)
+		fs.InvalidateSubtree(dataroomID, parentPath)
 
 		return nil, as(ErrNotDir, err)
 	case err != nil:
@@ -135,7 +135,7 @@ func (fs *FS) parentAfterConflict(
 		return nil, conflict
 	}
 	// The listings cached under the path belong to the deleted folder.
-	fs.invalidateSubtree(dataroomID, parentPath)
+	fs.InvalidateSubtree(dataroomID, parentPath)
 
 	return freshID, nil
 }
@@ -182,7 +182,7 @@ func (fs *FS) Symlink(ctx context.Context, dataroomID, path, target string) (Nod
 		// The cached listing named a parent deleted elsewhere since.
 		grandParent, _ := SplitPath(parentPath)
 		fs.InvalidateListing(dataroomID, grandParent)
-		fs.invalidateSubtree(dataroomID, parentPath)
+		fs.InvalidateSubtree(dataroomID, parentPath)
 
 		return Node{}, as(ErrNotExist, err)
 	case errors.Is(err, api.ErrConflict):
@@ -267,7 +267,7 @@ func (fs *FS) Remove(ctx context.Context, dataroomID, path string, recursive boo
 	}
 	if err == nil {
 		fs.forget(dataroomID, parentPath, name)
-		fs.invalidateSubtree(dataroomID, path)
+		fs.InvalidateSubtree(dataroomID, path)
 	}
 
 	return err
@@ -371,8 +371,8 @@ func (fs *FS) Rename(ctx context.Context, dataroomID, oldPath, newPath string, r
 		return renameError(err)
 	}
 	fs.move(dataroomID, oldParent, oldName, newParent, newName, idOrRoot(dstParentID))
-	fs.invalidateSubtree(dataroomID, oldPath)
-	fs.invalidateSubtree(dataroomID, newPath)
+	fs.InvalidateSubtree(dataroomID, oldPath)
+	fs.InvalidateSubtree(dataroomID, newPath)
 
 	return nil
 }

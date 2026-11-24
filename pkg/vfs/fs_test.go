@@ -400,7 +400,7 @@ func TestFS_PathsAreNormalised(t *testing.T) {
 	}
 }
 
-// invalidateSubtree drops the folder and what is below it whatever the
+// InvalidateSubtree drops the folder and what is below it whatever the
 // spelling of its path, and nothing beside it.
 func TestFS_InvalidateSubtreeNormalisesItsPath(t *testing.T) {
 	for _, p := range []string{"/a", "/a/", "/a//", "//a", "a"} {
@@ -410,21 +410,21 @@ func TestFS_InvalidateSubtreeNormalisesItsPath(t *testing.T) {
 			"/a/b": {fetchedAt: time.Now()},
 			"/ab":  {fetchedAt: time.Now()},
 		})
-		fs.invalidateSubtree("dr1", p)
+		fs.InvalidateSubtree("dr1", p)
 		if nodeCacheHas(fs, "dr1", "/a") || nodeCacheHas(fs, "dr1", "/a/b") {
-			t.Errorf("invalidateSubtree(%q) left /a or /a/b cached", p)
+			t.Errorf("InvalidateSubtree(%q) left /a or /a/b cached", p)
 		}
 		if !nodeCacheHas(fs, "dr1", "/") || !nodeCacheHas(fs, "dr1", "/ab") {
-			t.Errorf("invalidateSubtree(%q) dropped a listing outside /a", p)
+			t.Errorf("InvalidateSubtree(%q) dropped a listing outside /a", p)
 		}
 	}
 
 	// The root, however it is spelled, is the whole dataroom.
 	for _, p := range []string{"/", "", "//", "."} {
 		fs := seeded(map[string]*nodeCacheEntry{"/": {fetchedAt: time.Now()}, "/a/b": {fetchedAt: time.Now()}})
-		fs.invalidateSubtree("dr1", p)
+		fs.InvalidateSubtree("dr1", p)
 		if nodeCacheHas(fs, "dr1", "/") || nodeCacheHas(fs, "dr1", "/a/b") {
-			t.Errorf("invalidateSubtree(%q) left a listing of the dataroom cached", p)
+			t.Errorf("InvalidateSubtree(%q) left a listing of the dataroom cached", p)
 		}
 	}
 }
@@ -442,7 +442,7 @@ func TestFS_InvalidateSubtreeDiscardsFetchesBelowAnySpelling(t *testing.T) {
 		done <- err
 	}()
 	<-started
-	fs.invalidateSubtree("dr1", "/a/")
+	fs.InvalidateSubtree("dr1", "/a/")
 	close(gate)
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -467,7 +467,7 @@ func TestFS_FailedStoreWriteIsReportedOnce(t *testing.T) {
 	}
 	// The replacement store is in memory and does not fail.
 	fs.InvalidateListing("dr1", "/")
-	fs.invalidateSubtree("dr1", "/a")
+	fs.InvalidateSubtree("dr1", "/a")
 	if got := logs.list(); len(got) != 1 {
 		t.Errorf("logs after more writes = %v, want the first report only", got)
 	}

@@ -631,19 +631,72 @@ func (fs *FS) invalidateLocked(key ListingKey) {
 	fs.bumpGenLocked(key)
 }
 
-// invalidateSubtree drops the cached listing of the folder at path and of
-// every folder below it, with what single lookups learnt about their names.
-// Deleting or renaming a folder must not leave its own
-// listing and its sub-listings cached: a folder re-created under the same name
-// within the TTL would otherwise serve the ghost children of the deleted tree.
-// Harmless for a file (nothing is cached below it).
-func (fs *FS) invalidateSubtree(dataroomID, path string) {
+// InvalidateSubtree drops the cached listing of the folder at path and of
+// every folder below it, with what single lookups learnt about their names
+// (positive and negative entries alike); "/" is the whole dataroom. Deleting
+// or renaming a folder must not leave its own listing and its sub-listings
+// cached: a folder re-created under the same name within the TTL would
+// otherwise serve the ghost children of the deleted tree. Harmless for a file
+// (nothing is cached below it).
+//
+// The listings are dropped from Options.Store, a shared one included, and
+// their generations bumped: a fetch or a lookup in flight in the subtree,
+// answered before the call, stores nothing on completion (see
+// InvalidateListing). What is not cached metadata stays: the dataroom
+// sessions (keys), the list of datarooms (see InvalidateAll), the quotas,
+// the chunk sizes of versions read, the nodes hidden by HideNode. The API is
+// not called: the next access to each folder dropped lists it again.
+func (fs *FS) InvalidateSubtree(dataroomID, path string) {
 	fs.mu.Lock()
 	defer fs.unlock()
 	fs.invalidateSubtreeLocked(dataroomID, path)
 }
 
-// invalidateSubtreeLocked is invalidateSubtree for a caller that holds mu.
+// InvalidateAll drops every cached listing and lookup of every dataroom the
+// FS knows of, as InvalidateSubtree(id, "/") would, and makes the next
+// access to the list of datarooms fetch it again (see
+// DataroomCache.Invalidate).
+//
+// The datarooms known are those of the list held, and those with a listing
+// generation held or a fetch or lookup in flight. A shared store may hold
+// listings of other datarooms, written by other processes: it cannot be
+// enumerated, and InvalidateSubtree(id, "/") drops those of one dataroom.
+//
+// The dataroom sessions are kept: they are key material, resolved once per
+// process, not metadata that goes stale. The API is not called: the next
+// access to the list and to each folder fetches them again.
+func (fs *FS) InvalidateAll() {
+	fs.mu.Lock()
+	ids := make(map[string]struct{})
+	list, ok, err := fs.store.GetDatarooms(storeCtx())
+	fs.readLocked(storeCtx(), err)
+	if err == nil && ok && list != nil {
+		for _, item := range list.Items {
+			ids[item.ID] = struct{}{}
+		}
+	}
+	for key := range fs.gen {
+		ids[key.DataroomID] = struct{}{}
+	}
+	for key := range fs.inflight {
+		ids[key.DataroomID] = struct{}{}
+	}
+	for ek := range fs.lookups {
+		ids[ek.DataroomID] = struct{}{}
+	}
+	for key := range fs.nameLookups {
+		ids[key.DataroomID] = struct{}{}
+	}
+	for id := range ids {
+		fs.invalidateSubtreeLocked(id, "/")
+	}
+	fs.unlock()
+	// After mu is let go: the cache takes its own mutex, then mu (see
+	// fsDataroomStore).
+	fs.datarooms.Invalidate()
+}
+
+// invalidateSubtreeLocked is InvalidateSubtree for a caller that holds mu.
 //
 // Only the fetches in flight need their generation bumped: a listing that is
 // cached and not being fetched has no answer on its way to discard. The same

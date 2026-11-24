@@ -284,7 +284,7 @@ func (fs *FS) uploadFailed(dataroomID, parentPath, name string, err error) error
 	case errors.Is(err, api.ErrNotFound):
 		grandParent, _ := SplitPath(parentPath)
 		fs.InvalidateListing(dataroomID, grandParent)
-		fs.invalidateSubtree(dataroomID, parentPath)
+		fs.InvalidateSubtree(dataroomID, parentPath)
 
 		return as(ErrNotExist, err)
 	case isStorageExceeded(err):

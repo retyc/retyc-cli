@@ -153,8 +153,13 @@ type DataroomCache struct {
 	store    dataroomStore
 	index    *dataroomCacheEntry
 	incoming *dataroomFetch // fetch in flight, nil when idle
-	fetchFn  ListDataroomsFunc
-	opts     Options
+	// notBefore is when the list was last invalidated (see Invalidate): a
+	// list fetched before is neither fresh nor servable. gen counts the
+	// invalidations: a fetch started under another gen stores nothing.
+	notBefore time.Time
+	gen       uint64
+	fetchFn   ListDataroomsFunc
+	opts      Options
 }
 
 // dataroomFetch is a fetch of the list shared by every caller that needs it
@@ -207,14 +212,34 @@ func (c *DataroomCache) seed(items []Dataroom) {
 	c.store.putDatarooms(newDataroomList(items))
 }
 
-// fresh reports whether e is younger than the TTL.
-func (c *DataroomCache) fresh(e *dataroomCacheEntry) bool {
-	return e != nil && time.Since(e.fetchedAt) < c.opts.ttl()
+// Invalidate forgets the list: the next request waits for a fetch of its
+// own, as the very first one does, and is not served the list held while it
+// runs. A fetch in flight, which the API may have answered before the call,
+// still answers those already waiting for it but stores nothing. The API is
+// not called here.
+func (c *DataroomCache) Invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.notBefore = time.Now()
+	c.gen++
+	c.incoming = nil
 }
 
-// servable reports whether e may still be served while a refresh runs.
+// valid reports whether e was fetched since the last invalidation. The
+// caller holds c.mu.
+func (c *DataroomCache) valid(e *dataroomCacheEntry) bool {
+	return e != nil && !e.fetchedAt.Before(c.notBefore)
+}
+
+// fresh reports whether e is younger than the TTL. The caller holds c.mu.
+func (c *DataroomCache) fresh(e *dataroomCacheEntry) bool {
+	return c.valid(e) && time.Since(e.fetchedAt) < c.opts.ttl()
+}
+
+// servable reports whether e may still be served while a refresh runs. The
+// caller holds c.mu.
 func (c *DataroomCache) servable(e *dataroomCacheEntry) bool {
-	return e != nil && time.Since(e.fetchedAt) < c.opts.ttl()+c.opts.MaxStale
+	return c.valid(e) && time.Since(e.fetchedAt) < c.opts.ttl()+c.opts.MaxStale
 }
 
 // resolve returns the cached list and starts a refresh when it is expired. It
@@ -274,6 +299,7 @@ func (c *DataroomCache) fetchLocked(ctx context.Context, background bool) *datar
 	}
 	f := &dataroomFetch{done: make(chan struct{})}
 	c.incoming = f
+	gen := c.gen
 	link := trace.LinkFromContext(ctx)
 	go func() {
 		fctx := context.WithoutCancel(ctx)
@@ -298,11 +324,16 @@ func (c *DataroomCache) fetchLocked(ctx context.Context, background bool) *datar
 		c.mu.Lock()
 		if err == nil {
 			list := newDataroomList(items)
-			c.store.putDatarooms(list)
 			e = indexDatarooms(list)
-			c.index = e
+			// An answer that may predate an invalidation is not stored.
+			if c.gen == gen {
+				c.store.putDatarooms(list)
+				c.index = e
+			}
 		}
-		c.incoming = nil
+		if c.incoming == f {
+			c.incoming = nil
+		}
 		c.mu.Unlock()
 		f.entry, f.err = e, err
 		close(f.done)
@@ -373,7 +404,10 @@ func (c *DataroomCache) IDForName(ctx context.Context, name string) (string, err
 		return "", err
 	}
 	id, ok := e.byName[name]
-	if !ok && !c.fresh(e) {
+	c.mu.Lock()
+	stale := !c.fresh(e)
+	c.mu.Unlock()
+	if !ok && stale {
 		if e, err = c.refreshed(ctx); err != nil {
 			return "", err
 		}
