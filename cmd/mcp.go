@@ -221,7 +221,8 @@ func refuseInMachineModeTool() error {
 }
 
 // machineAuthStatusTool is the cheap auth_status of a machine account: a token
-// must be obtainable, the age.key is not checked here.
+// must be obtainable (which parses both keys); the age.key is not checked
+// against the active key here.
 func machineAuthStatusTool(ctx context.Context, cfg *config.Config) (*mcp.CallToolResult, error) {
 	m, err := config.LoadMachine()
 	if err != nil {
@@ -740,8 +741,10 @@ func registerDataroomTools(srv *server.MCPServer) {
 			if err != nil {
 				return toolErr(err)
 			}
+			printWarnings(result.Warnings)
 
-			return mcp.NewToolResultText(toJSON(result)), nil
+			// The tool's answer keeps its shape: the warnings went to stderr.
+			return mcp.NewToolResultText(toJSON(struct{ ID, Title string }{result.ID, result.Title})), nil
 		},
 	)
 

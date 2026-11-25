@@ -6,14 +6,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/crypto"
 	"github.com/retyc/retyc-cli/core/machinekey"
 )
 
@@ -34,17 +33,16 @@ func newTestMachineSource(t *testing.T, handler http.HandlerFunc) (*MachineToken
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "client.key")
-	if err := os.WriteFile(path, pemData, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	src, err := NewMachineTokenSource(&config.Machine{
-		ClientID: testClientID, TokenEndpoint: srv.URL, ClientKeyFile: path,
-	}, srv.Client())
+	ageKey, err := crypto.GenerateKeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
+	id, err := config.NewMachineIdentity(testClientID, srv.URL, pemData, []byte(ageKey.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	src := NewMachineTokenSource(id, srv.Client())
 	clock := time.Unix(1_800_000_000, 0)
 	src.now = func() time.Time { return clock }
 
@@ -193,17 +191,6 @@ func TestMachineTokenNoSecretInError(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), assertion) || strings.Contains(err.Error(), "PRIVATE KEY") {
 		t.Errorf("error leaks a secret: %v", err)
-	}
-}
-
-func TestNewMachineTokenSourceBadKey(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "client.key")
-	if err := os.WriteFile(path, []byte("not a key"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := NewMachineTokenSource(&config.Machine{ClientID: "c", TokenEndpoint: "http://x", ClientKeyFile: path}, nil)
-	if !errors.Is(err, config.ErrMachineConfig) {
-		t.Errorf("err = %v, want ErrMachineConfig", err)
 	}
 }
 

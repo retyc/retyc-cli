@@ -249,6 +249,11 @@ type Config struct {
 	Cache   CacheConfig   `yaml:"cache" mapstructure:"cache"`
 	Webdav  WebdavConfig  `yaml:"webdav" mapstructure:"webdav"`
 	Mount   MountConfig   `yaml:"mount" mapstructure:"mount"`
+
+	// Machine is the identity of a machine account, nil for a user account.
+	// It is not a setting: the caller sets it (the CLI from the environment,
+	// see LoadMachine and LoadMachineIdentity).
+	Machine *MachineIdentity `yaml:"-" mapstructure:"-"`
 }
 
 // Defaults of the tree caches (see CacheConfig).

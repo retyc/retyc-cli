@@ -16,6 +16,7 @@ import (
 	"github.com/retyc/retyc-cli/core/api"
 	"github.com/retyc/retyc-cli/core/auth"
 	"github.com/retyc/retyc-cli/core/config"
+	"github.com/retyc/retyc-cli/core/crypto"
 	"github.com/retyc/retyc-cli/core/machinekey"
 	"github.com/retyc/retyc-cli/pkg/cliconfig"
 )
@@ -42,7 +43,11 @@ func setupMachine(t *testing.T, tokenURL string) {
 	if err := os.WriteFile(clientKey, pemData, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ageKey, []byte("x"), 0o600); err != nil {
+	identity, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ageKey, []byte(identity.String()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(config.EnvClientIDName, "machine-abc")
@@ -103,6 +108,9 @@ func TestMustGetTokenMachineMemoized(t *testing.T) {
 	}
 	if a != b {
 		t.Error("two calls returned different sources")
+	}
+	if cfg.Machine == nil || cfg.Machine.ClientID != "machine-abc" || cfg.Machine.AgeIdentity == nil {
+		t.Errorf("cfg.Machine = %+v, want the identity of the environment", cfg.Machine)
 	}
 }
 

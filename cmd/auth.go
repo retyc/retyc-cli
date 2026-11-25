@@ -239,14 +239,11 @@ func machineRevokedStatus() error {
 }
 
 func machineAuthStatus(ctx context.Context, cfg *config.Config) error {
-	m, err := config.LoadMachine()
-	if err != nil {
-		return err
-	}
 	src, err := mustGetToken(ctx, cfg)
 	if err != nil {
 		return err
 	}
+	m := cfg.Machine
 	tok, err := src.Token()
 	if err != nil {
 		if errors.Is(err, auth.ErrMachineRevoked) {
@@ -267,7 +264,7 @@ func machineAuthStatus(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("fetching active key: %w", err)
 	}
-	if _, err := service.MachineIdentity(ctx, userKey); err != nil {
+	if _, err := service.MachineIdentity(ctx, m, userKey); err != nil {
 		return err
 	}
 

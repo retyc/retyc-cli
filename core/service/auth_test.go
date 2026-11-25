@@ -352,7 +352,7 @@ func TestResolveActiveUserIdentity(t *testing.T) {
 func TestUnlockUserIdentity_Correct(t *testing.T) {
 	srv, userKey := keyPassphraseTestServer(t, "good-pw")
 
-	identity, err := UnlockUserIdentity(context.Background(), newKeyTestClient(srv), func() (string, error) {
+	identity, err := UnlockUserIdentity(context.Background(), nil, newKeyTestClient(srv), func() (string, error) {
 		return "good-pw", nil
 	})
 	if err != nil {
@@ -366,7 +366,7 @@ func TestUnlockUserIdentity_Correct(t *testing.T) {
 func TestUnlockUserIdentity_Wrong(t *testing.T) {
 	srv, _ := keyPassphraseTestServer(t, "good-pw")
 
-	_, err := UnlockUserIdentity(context.Background(), newKeyTestClient(srv), func() (string, error) {
+	_, err := UnlockUserIdentity(context.Background(), nil, newKeyTestClient(srv), func() (string, error) {
 		return "bad-pw", nil
 	})
 	if err == nil {
@@ -381,7 +381,7 @@ func TestUnlockUserIdentity_ReaderError(t *testing.T) {
 	srv, _ := keyPassphraseTestServer(t, "good-pw")
 
 	want := errors.New("no passphrase")
-	_, err := UnlockUserIdentity(context.Background(), newKeyTestClient(srv), func() (string, error) {
+	_, err := UnlockUserIdentity(context.Background(), nil, newKeyTestClient(srv), func() (string, error) {
 		return "", want
 	})
 	if !errors.Is(err, want) {
@@ -432,7 +432,7 @@ func TestUnlockUserIdentity_UnlockKeySpan(t *testing.T) {
 	srv, _ := keyPassphraseTestServer(t, "SENTINEL-pw")
 	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
 	reader := func() (string, error) { return "SENTINEL-pw", nil }
-	if _, err := UnlockUserIdentity(ctx, newKeyTestClient(srv), reader); err != nil {
+	if _, err := UnlockUserIdentity(ctx, nil, newKeyTestClient(srv), reader); err != nil {
 		t.Fatal(err)
 	}
 	parent.End()

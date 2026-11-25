@@ -47,27 +47,18 @@ type MachineTokenSource struct {
 	now        func() time.Time
 }
 
-// NewMachineTokenSource reads the signing key of m and returns its token
-// source. httpClient must be built on api.BaseTransport. A key that cannot be
-// read or parsed wraps config.ErrMachineConfig.
-func NewMachineTokenSource(m *config.Machine, httpClient *http.Client) (*MachineTokenSource, error) {
-	data, err := config.ReadMachineFile(m.ClientKeyFile)
-	if err != nil {
-		return nil, err
-	}
-	key, err := machinekey.ParseSigningKey(data)
-	if err != nil {
-		return nil, fmt.Errorf("%w: reading %s: %w", config.ErrMachineConfig, m.ClientKeyFile, err)
-	}
-
+// NewMachineTokenSource returns the token source of the machine identity id
+// (see config.NewMachineIdentity and config.LoadMachineIdentity); nothing is
+// read from disk. httpClient must be built on api.BaseTransport.
+func NewMachineTokenSource(id *config.MachineIdentity, httpClient *http.Client) *MachineTokenSource {
 	return &MachineTokenSource{
-		key:        key,
-		kid:        machinekey.Thumbprint(&key.PublicKey),
-		clientID:   m.ClientID,
-		endpoint:   m.TokenEndpoint,
+		key:        id.SigningKey,
+		kid:        id.KeyID,
+		clientID:   id.ClientID,
+		endpoint:   id.TokenEndpoint,
 		httpClient: httpClient,
 		now:        time.Now,
-	}, nil
+	}
 }
 
 // Token returns a valid access token, requesting a new one when fewer than 30

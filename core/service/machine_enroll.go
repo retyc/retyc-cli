@@ -362,7 +362,7 @@ func loadOrCreateMachineKeys(dir string) (*ecdsa.PrivateKey, string, bool, error
 	if err != nil {
 		return nil, "", false, err
 	}
-	identity, err := parseMachineAgeKey(ageData, agePath)
+	identity, err := config.ParseMachineAgeKey(ageData, agePath)
 	if err != nil {
 		return nil, "", false, err
 	}

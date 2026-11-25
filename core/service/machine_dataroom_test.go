@@ -78,8 +78,9 @@ func (s *createServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// create runs CreateDataroom against s and returns what it wrote as warnings.
-func (s *createServer) create(t *testing.T) (string, error) {
+// create runs CreateDataroom against s with cfg and returns the warnings of
+// its result. Nothing must be written on diag.
+func (s *createServer) create(t *testing.T, cfg *config.Config) ([]string, error) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(s.handler))
 	t.Cleanup(srv.Close)
@@ -89,20 +90,22 @@ func (s *createServer) create(t *testing.T) (string, error) {
 	var buf bytes.Buffer
 	diag.SetOutput(&buf)
 	t.Cleanup(func() { diag.SetOutput(nil) })
-	_, err := CreateDataroom(context.Background(), nil, client, "T", api.DataroomOptions{}, nil)
+	res, err := CreateDataroom(context.Background(), cfg, client, "T", api.DataroomOptions{}, nil)
+	if buf.Len() != 0 {
+		t.Errorf("CreateDataroom wrote on diag: %q", buf.String())
+	}
+	if err != nil {
+		return nil, err
+	}
 
-	return buf.String(), err
+	return res.Warnings, nil
 }
 
-func machineModeEnv(t *testing.T) {
+// machineCfg is the configuration of the machine account of s.
+func (s *createServer) machineCfg(t *testing.T) *config.Config {
 	t.Helper()
-	t.Setenv(config.EnvClientIDName, "client-1")
-}
 
-func userModeEnv(t *testing.T) {
-	t.Helper()
-	t.Setenv(config.EnvClientIDName, "")
-	t.Setenv(config.EnvMachineDirName, "")
+	return machineConfig(t, "client-1", "https://idp.example/token", s.userKey)
 }
 
 func assertCannotOpen(t *testing.T, body map[string]any, id *age.HybridIdentity) {
@@ -116,11 +119,10 @@ func assertCannotOpen(t *testing.T, body map[string]any, id *age.HybridIdentity)
 // A machine encrypts for itself and the organization key, and sends no
 // recovery key (removed from the API).
 func TestCreateDataroomMachineRecipients(t *testing.T) {
-	machineModeEnv(t)
 	machine, org, other := mustKeyPair(t), mustKeyPair(t), mustKeyPair(t)
 	s := &createServer{t: t, userKey: machine, orgKey: org}
 
-	warn, err := s.create(t)
+	warn, err := s.create(t, s.machineCfg(t))
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
 	}
@@ -137,18 +139,17 @@ func TestCreateDataroomMachineRecipients(t *testing.T) {
 	assertOpens(t, body, machine, "machine")
 	assertOpens(t, body, org, "organization")
 	assertCannotOpen(t, body, other)
-	if warn != "" {
-		t.Errorf("warning = %q, want none", warn)
+	if len(warn) != 0 {
+		t.Errorf("warnings = %q, want none", warn)
 	}
 }
 
 // A machine account does not create a dataroom without the organization key
 // because the key could not be read.
 func TestCreateDataroomMachineUnreadableOrgKeyFails(t *testing.T) {
-	machineModeEnv(t)
 	s := &createServer{t: t, userKey: mustKeyPair(t), orgKey: mustKeyPair(t), saStatus: http.StatusInternalServerError}
 
-	_, err := s.create(t)
+	_, err := s.create(t, s.machineCfg(t))
 	if err == nil || !strings.Contains(err.Error(), "reading the organization key") {
 		t.Fatalf("CreateDataroom() error = %v, want reading the organization key", err)
 	}
@@ -161,45 +162,44 @@ func TestCreateDataroomMachineUnreadableOrgKeyFails(t *testing.T) {
 // machine account still creates the dataroom, and warns that it alone can
 // decrypt it.
 func TestCreateDataroomMachineNoOrganizationKey(t *testing.T) {
-	machineModeEnv(t)
 	s := &createServer{t: t, userKey: mustKeyPair(t), saStatus: http.StatusNotFound}
 
-	warn, err := s.create(t)
+	warn, err := s.create(t, s.machineCfg(t))
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
 	}
 	if _, ok := s.creates[0]["master_public_key"]; ok {
 		t.Error("master_public_key sent without a service account")
 	}
-	const want = "warning: the organization has no organization key: only this machine can decrypt the " +
-		"storage space; add members with `retyc space user add`\n"
-	if warn != want {
-		t.Errorf("warning = %q, want %q", warn, want)
+	const want = "the organization has no organization key: only this machine can decrypt the " +
+		"storage space; add members with `retyc space user add`"
+	if len(warn) != 1 || warn[0] != want {
+		t.Errorf("warnings = %q, want [%q]", warn, want)
 	}
 }
 
 // A user creates the dataroom without the organization key when it cannot be
 // read, and gets no machine warning.
 func TestCreateDataroomUserUnreadableOrgKeyContinues(t *testing.T) {
-	userModeEnv(t)
 	s := &createServer{t: t, userKey: mustKeyPair(t), orgKey: mustKeyPair(t), saStatus: http.StatusInternalServerError}
 
-	warn, err := s.create(t)
+	warn, err := s.create(t, nil)
 	if err != nil {
 		t.Fatalf("CreateDataroom() error = %v", err)
 	}
-	// The unreadable key is reported (diag output), the machine warning is not.
-	if len(s.creates) != 1 || strings.Contains(warn, "only this machine") {
-		t.Errorf("POST /dataroom calls = %d, warning = %q, want 1 and no machine warning", len(s.creates), warn)
+	// The unreadable key is reported in the result, the machine warning is not.
+	if len(s.creates) != 1 || len(warn) != 1 ||
+		!strings.HasPrefix(warn[0], "could not read the organization key (") ||
+		!strings.HasSuffix(warn[0], "); the storage space is created without it") {
+		t.Errorf("POST /dataroom calls = %d, warnings = %q, want 1 and the unreadable key warning", len(s.creates), warn)
 	}
 }
 
 // A machine account with no active key is a configuration error (exit 78).
 func TestCreateDataroomMachineNoActiveKey(t *testing.T) {
-	machineModeEnv(t)
 	s := &createServer{t: t, userKey: mustKeyPair(t), noActiveKey: true}
 
-	_, err := s.create(t)
+	_, err := s.create(t, s.machineCfg(t))
 	if !errors.Is(err, config.ErrMachineConfig) || !strings.Contains(err.Error(), "no active key") {
 		t.Fatalf("CreateDataroom() error = %v, want ErrMachineConfig", err)
 	}
@@ -210,10 +210,9 @@ func TestCreateDataroomMachineNoActiveKey(t *testing.T) {
 
 // A user with no active key keeps the error that sends to the web interface.
 func TestCreateDataroomUserNoActiveKey(t *testing.T) {
-	userModeEnv(t)
 	s := &createServer{t: t, userKey: mustKeyPair(t), noActiveKey: true}
 
-	_, err := s.create(t)
+	_, err := s.create(t, nil)
 	if err == nil || errors.Is(err, config.ErrMachineConfig) || !strings.Contains(err.Error(), "web interface") {
 		t.Fatalf("CreateDataroom() error = %v, want the web interface hint", err)
 	}
@@ -221,13 +220,12 @@ func TestCreateDataroomUserNoActiveKey(t *testing.T) {
 
 // A machine retries MASTER_KEY_MISMATCH once, as a user does.
 func TestCreateDataroomMachineRetryBudget(t *testing.T) {
-	machineModeEnv(t)
 	s := &createServer{
 		t: t, userKey: mustKeyPair(t), orgKey: mustKeyPair(t),
 		createCodes: []string{api.CodeMasterKeyMismatch, api.CodeMasterKeyMismatch, ""},
 	}
 
-	_, err := s.create(t)
+	_, err := s.create(t, s.machineCfg(t))
 	const want = "the organization key changed during the creation, retry"
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("CreateDataroom() error = %v, want %q", err, want)
